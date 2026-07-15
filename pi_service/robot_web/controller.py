@@ -58,6 +58,28 @@ class RobotController:
     def stop_now(self) -> None:
         with self.lock: self.action = "STOP"
         self._write("STOP")
+    def reconnect(self) -> dict:
+        """Drop the current USB serial session and open it again.
+
+        Opening an Arduino serial port may reset the board, so the method also
+        puts the controller in STOP and waits in _connect for boot to finish.
+        """
+        with self.lock:
+            self.action, self.last_client_seen = "STOP", 0.0
+            previous, self.serial = self.serial, None
+            self.error = ""
+        if previous:
+            try:
+                if previous.is_open:
+                    previous.write(b"STOP\n")
+                    previous.flush()
+                    previous.close()
+            except Exception:
+                # The point of reconnect is recovery, so a failed close is safe
+                # to ignore before opening a new port session.
+                pass
+        self._connect()
+        return self.status()
     @staticmethod
     def _raw(action: str, cfg: Config) -> tuple[int, int, int, int]:
         s, p, outer, inner = cfg.straight_pwm, cfg.pivot_pwm, cfg.curve_outer_pwm, cfg.curve_inner_pwm
