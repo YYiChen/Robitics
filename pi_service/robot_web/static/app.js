@@ -6,6 +6,11 @@ const actionKeys = {FL:"q", F:"w", FR:"e", PL:"a", PR:"d", BL:"z", B:"s", BR:"c"
 const keyboardKeys = {w:"w", a:"a", s:"s", d:"d", q:"q", e:"e", z:"z", c:"c", ArrowUp:"w", ArrowDown:"s", ArrowLeft:"a", ArrowRight:"d"};
 const heldKeys = new Set();
 
+async function requestJson(url, options = {}, timeoutMs = 500) {
+  const abort = new AbortController(), timer = setTimeout(() => abort.abort(), timeoutMs);
+  try { return await fetch(url, {...options, signal:abort.signal}); } finally { clearTimeout(timer); }
+}
+
 const note = text => { save.textContent = text; };
 const fileName = () => `robot_${new Date().toISOString().replace(/[:.]/g, "-")}_${++count}.jpg`;
 async function chooseFolder() {
@@ -38,7 +43,7 @@ function editing(event) { return ["INPUT", "TEXTAREA", "SELECT"].includes(event.
 async function sendKeys() {
   if (keysSending) { keysQueued = true; return; }
   keysSending = true;
-  do { keysQueued = false; try { const response = await fetch("/api/keys", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({keys:[...heldKeys]}), keepalive:true});
+  do { keysQueued = false; try { const response = await requestJson("/api/keys", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({keys:[...heldKeys]}), keepalive:true});
       const data = await response.json(); if (!response.ok) throw Error(data.error || "动作发送失败"); $("#action").textContent = data.action;
     } catch (error) { note(error.message); }
   } while (keysQueued);
@@ -57,6 +62,8 @@ addEventListener("keydown", event => { if (editing(event) || event.repeat) retur
 });
 addEventListener("keyup", event => { if (editing(event)) return; const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, false); } });
 addEventListener("blur", releaseKeys); addEventListener("beforeunload", () => navigator.sendBeacon("/api/stop")); setInterval(sendKeys, 180);
+async function sendHeartbeat() { try { await requestJson("/api/heartbeat", {method:"POST", keepalive:true}, 500); } catch (_) {} }
+setInterval(sendHeartbeat, 180);
 $("#stopButton").onclick = releaseKeys;
 
 function profileFor(action) { return profiles[action] || {rf:0, lf:0, lr:0, rr:0}; }

@@ -65,8 +65,11 @@ class RobotController:
             config.profiles = normalize_profiles(data.get("profiles")); return config
         except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError, OSError): return Config()
 
-    def _save_config(self) -> None:
-        self.config_path.write_text(json.dumps(asdict(self.config), ensure_ascii=False, indent=2), encoding="utf-8")
+    def _save_config(self, snapshot: dict | None = None) -> None:
+        data = snapshot if snapshot is not None else asdict(self.config)
+        temporary = self.config_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(self.config_path)
 
     def start(self) -> None: threading.Thread(target=self._run, daemon=True, name="robot-control").start()
     def _connect(self) -> None:
@@ -121,8 +124,10 @@ class RobotController:
             self.config.target_speed = max(0.0, min(200.0, self.config.target_speed))
             for key in ("straight_pwm", "pivot_pwm", "curve_outer_pwm", "curve_inner_pwm"):
                 setattr(self.config, key, max(0, min(255, getattr(self.config, key))))
-            self._save_config()
-            return asdict(self.config)
+            result = asdict(self.config)
+        # SD-card I/O must not hold the control/heartbeat lock.
+        self._save_config(result)
+        return result
     def stop_now(self) -> None:
         with self.lock: self.held_keys.clear(); self.action = "STOP"
         self._write("STOP")
