@@ -26,7 +26,15 @@ class CameraStreamer:
             from picamera2 import Picamera2
             self._cv2 = cv2
             self._picam2 = Picamera2()
-            self._picam2.configure(self._picam2.create_video_configuration(main={"size": (self.width, self.height)}))
+            self._picam2.configure(
+                self._picam2.create_video_configuration(
+                    main={"size": (self.width, self.height)},
+                    controls={"FrameDurationLimits": (33333, 33333)},
+                )
+            )
+            # Apply controls after configure.  A 5 ms exposure reduces motion
+            # blur while automatic analogue gain compensates for low light.
+            self._picam2.set_controls({"ExposureTime": 5000, "AnalogueGain": 0.0})
             self._picam2.start()
             self.status = "运行中"
             threading.Thread(target=self._capture, name="camera-capture", daemon=True).start()
