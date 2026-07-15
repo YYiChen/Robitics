@@ -13,8 +13,12 @@ def create_app(controller: RobotController, camera: CameraStreamer) -> Flask:
     def video_feed():
         if not camera.online: return jsonify(error=camera.error or camera.status), 503
         return Response(camera.iter_mjpeg(), mimetype="multipart/x-mixed-replace; boundary=frame")
-    @app.post("/api/keys")
-    def keys(): controller.update_keys(request.get_json(silent=True) or {}); return jsonify(ok=True)
+    @app.post("/api/action")
+    def action():
+        try: return jsonify(ok=True, action=controller.select_action((request.get_json(silent=True) or {}).get("action", "STOP")))
+        except ValueError as exc: return jsonify(ok=False, error=str(exc)), 400
+    @app.post("/api/heartbeat")
+    def heartbeat(): controller.heartbeat(); return jsonify(ok=True)
     @app.post("/api/stop")
     def stop(): controller.stop_now(); return jsonify(ok=True)
     @app.post("/api/config")
