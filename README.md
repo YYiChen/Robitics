@@ -8,7 +8,7 @@
 
 ## 部署
 
-1. 用 Arduino IDE 将 `firmware/motor_bridge/motor_bridge_1_.ino` 烧录到 Mega。
+1. 用 Arduino IDE 打开并烧录 `firmware/motor_bridge/motor_bridge_1_/motor_bridge_1_.ino`。该目录中的两个 `.h` 文件必须与草图保留在同一目录。
 2. 将 `pi_service/` 复制到树莓派，执行 `./install_dependencies.sh` 一次。
 3. 执行 `./start_robot.sh`，随后打开输出的网址。
 
