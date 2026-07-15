@@ -39,6 +39,14 @@ def create_app(controller: RobotController, camera: CameraStreamer) -> Flask:
             return jsonify(ok=False, error=str(exc)), 400
         except RuntimeError as exc:
             return jsonify(ok=False, error=str(exc), camera=camera.status_dict()), 503
+    @app.post("/api/camera/exposure")
+    def camera_exposure():
+        try:
+            return jsonify(ok=True, camera=camera.set_exposure(request.get_json(silent=True) or {}))
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        except RuntimeError as exc:
+            return jsonify(ok=False, error=str(exc), camera=camera.status_dict()), 503
     @app.get("/api/status")
     def status(): return jsonify(robot=controller.status(), camera=camera.status_dict())
     return app

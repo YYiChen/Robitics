@@ -29,6 +29,19 @@
         <button class="primary" id="applyCameraMode">应用分辨率</button>
         <span class="hint">切换会短暂重启视频流；实际 FPS 以状态数据为准。</span>
       </div>
+      <div class="camera-exposure-bar">
+        <label for="exposureMode">曝光模式</label>
+        <select id="exposureMode">
+          <option value="auto">自动曝光（调 EV）</option>
+          <option value="manual">固定快门</option>
+        </select>
+        <label for="cameraEv">EV</label>
+        <input id="cameraEv" type="number" min="-8" max="8" step="0.1" value="0">
+        <label for="shutterDenominator">快门</label>
+        <span class="fraction">1 / <input id="shutterDenominator" type="number" min="30" max="10000" step="1" value="200"> 秒</span>
+        <button class="primary" id="applyExposure">应用曝光</button>
+        <span class="hint" id="exposureHint">自动模式下 EV 生效；固定快门时 EV 不参与自动曝光。</span>
+      </div>
       <img id="video" src="/video_feed" alt="CSI 视频">
       <div class="auxiliary-preview">
         <div class="card-heading"><h3>电脑端辅助画面</h3><span>本地 Canvas，不增加树莓派带宽</span></div>

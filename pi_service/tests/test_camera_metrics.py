@@ -28,10 +28,24 @@ class CameraMetricsTests(unittest.TestCase):
             config_path = Path(directory) / "camera_config.json"
             first = CameraStreamer(config_path=config_path)
             first.mode_key = "full_3280"
-            first._save_mode()
+            first.auto_exposure = False
+            first.exposure_ev = 1.2
+            first.shutter_denominator = 250
+            first._save_settings()
             second = CameraStreamer(config_path=config_path)
             self.assertEqual(second.mode_key, "full_3280")
             self.assertEqual(second.status_dict()["resolution"], "3280x2464")
+            self.assertFalse(second.auto_exposure)
+            self.assertEqual(second.exposure_ev, 1.2)
+            self.assertEqual(second.shutter_denominator, 250)
+
+    def test_exposure_uses_one_over_n_shutter_unit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            camera = CameraStreamer(config_path=Path(directory) / "camera_config.json")
+            status = camera.set_exposure({"auto": False, "ev": -0.5, "shutter_denominator": 200})
+            self.assertFalse(status["exposure"]["auto"])
+            self.assertEqual(status["exposure"]["shutter_denominator"], 200)
+            self.assertEqual(status["exposure"]["shutter_us"], 5000)
 
 
 if __name__ == "__main__":

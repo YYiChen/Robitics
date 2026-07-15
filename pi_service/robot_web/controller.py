@@ -50,11 +50,21 @@ class Config:
     profiles: dict[str, dict[str, int]] = field(default_factory=default_profiles)
 
 class RobotController:
-    def __init__(self, port: str, config_path: Path | None = None) -> None:
-        self.port, self.config_path, self.lock = port, config_path or Path(__file__).with_name("robot_config.json"), threading.RLock()
-        self.config_path = Path(self.config_path).expanduser()
+    def __init__(self, port: str, config_path: Path | None = None, legacy_config_path: Path | None = None) -> None:
+        default_path = Path(__file__).with_name("drive_config.json")
+        self.port, self.config_path, self.lock = port, Path(config_path or default_path).expanduser(), threading.RLock()
+        self.legacy_config_path = (
+            Path(legacy_config_path).expanduser()
+            if legacy_config_path is not None
+            else Path(__file__).with_name("robot_config.json") if config_path is None else None
+        )
         self.config_io_lock = threading.Lock()
-        self.config = self._load_config()
+        self.config, migrated_legacy = self._load_config()
+        # Existing users already have their tuned values in robot_config.json.
+        # Copy them once to the dedicated drive file; never overwrite the old
+        # file, and never let ordinary source edits replace the tuned values.
+        if migrated_legacy:
+            self._save_config()
         self.serial_lock = threading.RLock()
         self.serial = None; self.action = "STOP"; self.held_keys: set[str] = set(); self.last_client_seen = 0.0
         self.imu = self.speed = self.ultrasonic = None; self.reply = self.error = ""; self.last_rx = 0.0
@@ -63,13 +73,24 @@ class RobotController:
         self._shutdown_lock = threading.Lock()
         self._stopped = False
 
-    def _load_config(self) -> Config:
+    @staticmethod
+    def _read_config(path: Path) -> Config | None:
         try:
-            data = json.loads(self.config_path.read_text(encoding="utf-8")); config = Config()
+            data = json.loads(path.read_text(encoding="utf-8")); config = Config()
             for key in ("speed_mode", "target_speed", "kp", "ki", "kd", "straight_pwm", "pivot_pwm", "curve_outer_pwm", "curve_inner_pwm"):
                 if key in data: setattr(config, key, type(getattr(config, key))(data[key]))
             config.profiles = normalize_profiles(data.get("profiles")); return config
-        except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError, OSError): return Config()
+        except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError, OSError): return None
+
+    def _load_config(self) -> tuple[Config, bool]:
+        config = self._read_config(self.config_path)
+        if config is not None:
+            return config, False
+        if self.legacy_config_path is not None:
+            legacy = self._read_config(self.legacy_config_path)
+            if legacy is not None:
+                return legacy, True
+        return Config(), False
 
     def _save_config(self, snapshot: dict | None = None) -> None:
         data = snapshot if snapshot is not None else asdict(self.config)

@@ -26,6 +26,7 @@ CAMERA_MODES = {
     },
 }
 DEFAULT_CAMERA_MODE = "fast_1640"
+DEFAULT_EXPOSURE = {"auto": True, "ev": 0.0, "shutter_denominator": 200}
 
 
 class CameraStreamer:
@@ -39,7 +40,8 @@ class CameraStreamer:
         config_path: Path | None = None,
     ) -> None:
         self.config_path = Path(config_path or Path(__file__).with_name("camera_config.json")).expanduser()
-        saved_mode = self._load_saved_mode()
+        saved = self._load_saved_settings()
+        saved_mode = saved["mode"]
         self.mode_key = mode_key if mode_key in CAMERA_MODES else saved_mode
         if self.mode_key not in CAMERA_MODES:
             self.mode_key = DEFAULT_CAMERA_MODE
@@ -49,6 +51,9 @@ class CameraStreamer:
         self.quality = int(quality)
         self.sensor_fps = float(mode["sensor_fps"])
         self.fps = max(1.0, float(fps if fps is not None else mode["stream_fps"]))
+        self.auto_exposure = bool(saved["exposure"]["auto"])
+        self.exposure_ev = float(saved["exposure"]["ev"])
+        self.shutter_denominator = int(saved["exposure"]["shutter_denominator"])
         self._condition = threading.Condition()
         self._jpeg: bytes | None = None
         self._sequence = 0
@@ -68,17 +73,34 @@ class CameraStreamer:
         self._last_encode_ms = 0.0
         self._active_clients = 0
 
-    def _load_saved_mode(self) -> str:
+    def _load_saved_settings(self) -> dict:
+        defaults = {"mode": DEFAULT_CAMERA_MODE, "exposure": dict(DEFAULT_EXPOSURE)}
         try:
-            value = json.loads(self.config_path.read_text(encoding="utf-8")).get("mode")
-            return value if value in CAMERA_MODES else DEFAULT_CAMERA_MODE
-        except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError):
-            return DEFAULT_CAMERA_MODE
+            data = json.loads(self.config_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict): return defaults
+            mode = data.get("mode")
+            if mode in CAMERA_MODES: defaults["mode"] = mode
+            exposure = data.get("exposure", {})
+            if isinstance(exposure, dict):
+                defaults["exposure"]["auto"] = bool(exposure.get("auto", defaults["exposure"]["auto"]))
+                defaults["exposure"]["ev"] = max(-8.0, min(8.0, float(exposure.get("ev", defaults["exposure"]["ev"]))))
+                defaults["exposure"]["shutter_denominator"] = max(1, int(exposure.get("shutter_denominator", defaults["exposure"]["shutter_denominator"])))
+        except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError, ValueError):
+            pass
+        return defaults
 
-    def _save_mode(self) -> None:
+    def _save_settings(self) -> None:
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.config_path.with_name(f".{self.config_path.name}.tmp")
-        temporary.write_text(json.dumps({"mode": self.mode_key}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        payload = {
+            "mode": self.mode_key,
+            "exposure": {
+                "auto": self.auto_exposure,
+                "ev": self.exposure_ev,
+                "shutter_denominator": self.shutter_denominator,
+            },
+        }
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         temporary.replace(self.config_path)
 
     def _mode_status(self) -> dict:
@@ -135,6 +157,59 @@ class CameraStreamer:
         with self._metrics_lock:
             self._active_clients = max(0, self._active_clients - 1)
 
+    @property
+    def shutter_us(self) -> int:
+        return max(1, int(round(1_000_000 / self.shutter_denominator)))
+
+    def _shutter_denominator_limits(self) -> tuple[int, int]:
+        # At 30 FPS, an exposure longer than a frame is not meaningful.  The
+        # camera may impose tighter limits, which are queried when available.
+        min_us, max_us = 100, int(round(1_000_000 / self.sensor_fps))
+        try:
+            minimum, maximum, _ = self._picam2.camera_controls["ExposureTime"]
+            min_us = max(1, int(minimum))
+            max_us = min(max_us, int(maximum))
+        except (AttributeError, KeyError, TypeError, ValueError):
+            pass
+        min_denominator = max(1, (1_000_000 + max_us - 1) // max_us)
+        max_denominator = max(min_denominator, 1_000_000 // min_us)
+        return min_denominator, max_denominator
+
+    def _apply_exposure_controls(self) -> None:
+        if self.auto_exposure:
+            self._picam2.set_controls({"AeEnable": True, "ExposureValue": self.exposure_ev})
+        else:
+            self._picam2.set_controls({"AeEnable": False, "ExposureTime": self.shutter_us})
+
+    def set_exposure(self, payload: dict) -> dict:
+        """Apply EV in auto mode, or lock a shutter expressed as 1/N seconds."""
+        if not isinstance(payload, dict):
+            raise ValueError("曝光参数格式错误")
+        try:
+            auto = payload.get("auto", self.auto_exposure)
+            if not isinstance(auto, bool): raise ValueError
+            ev = max(-8.0, min(8.0, float(payload.get("ev", self.exposure_ev))))
+            requested_denominator = int(round(float(payload.get("shutter_denominator", self.shutter_denominator))))
+        except (TypeError, ValueError):
+            raise ValueError("EV 或快门值无效") from None
+        with self._lifecycle_lock:
+            with self._camera_lock:
+                minimum, maximum = self._shutter_denominator_limits()
+                denominator = max(minimum, min(maximum, requested_denominator))
+                previous = (self.auto_exposure, self.exposure_ev, self.shutter_denominator)
+                self.auto_exposure, self.exposure_ev, self.shutter_denominator = auto, ev, denominator
+                try:
+                    if self._picam2 is not None: self._apply_exposure_controls()
+                except Exception as exc:
+                    self.auto_exposure, self.exposure_ev, self.shutter_denominator = previous
+                    try:
+                        if self._picam2 is not None: self._apply_exposure_controls()
+                    except Exception:
+                        pass
+                    raise RuntimeError(f"应用曝光设置失败：{exc}") from exc
+            self._save_settings()
+        return self.status_dict()
+
     def status_dict(self) -> dict:
         now = time.monotonic()
         with self._metrics_lock:
@@ -155,6 +230,12 @@ class CameraStreamer:
             "error": self.error,
             "mode": self.mode_key,
             "mode_label": CAMERA_MODES[self.mode_key]["label"],
+            "exposure": {
+                "auto": self.auto_exposure,
+                "ev": self.exposure_ev,
+                "shutter_denominator": self.shutter_denominator,
+                "shutter_us": self.shutter_us,
+            },
             "available_modes": [self._mode_status_for(key) for key in CAMERA_MODES],
             "width": self.width,
             "height": self.height,
@@ -205,9 +286,9 @@ class CameraStreamer:
                 buffer_count=4,
             )
         )
-        # Keep the existing motion-blur-oriented exposure baseline.  The
-        # sensor readout rate is controlled independently by FrameDurationLimits.
-        self._picam2.set_controls({"ExposureTime": 5000, "AnalogueGain": 0.0})
+        # Exposure settings are reapplied after every resolution switch.
+        # In auto mode we leave gain/exposure to AEC/AGC and adjust only EV.
+        self._apply_exposure_controls()
 
     def start(self) -> None:
         with self._lifecycle_lock:
@@ -279,7 +360,7 @@ class CameraStreamer:
             self._capture_thread.start()
             self._running = True
             self.status, self.error = "运行中", ""
-            self._save_mode()
+            self._save_settings()
             return self.status_dict()
 
     def _capture(self) -> None:

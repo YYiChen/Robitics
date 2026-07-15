@@ -2,7 +2,7 @@ const $ = selector => document.querySelector(selector);
 const video = $("#video"), save = $("#save");
 const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:false});
 let folder, aborter, count = 0, profiles = {}, activeMode = "all", configLoaded = false, keysSending = false, keysQueued = false;
-let cameraModeDirty = false, cameraModeBusy = false, videoRetryTimer;
+let cameraModeDirty = false, cameraModeBusy = false, exposureDirty = false, exposureBusy = false, videoRetryTimer;
 const wheelNames = ["rf", "lf", "lr", "rr"];
 const actionKeys = {FL:"q", F:"w", FR:"e", PL:"a", PR:"d", BL:"z", B:"s", BR:"c"};
 const keyboardKeys = {w:"w", a:"a", s:"s", d:"d", q:"q", e:"e", z:"z", c:"c", ArrowUp:"w", ArrowDown:"s", ArrowLeft:"a", ArrowRight:"d"};
@@ -82,6 +82,36 @@ $("#applyCameraMode").onclick = async () => {
   finally { cameraModeBusy = false; button.disabled = false; select.disabled = false; }
 };
 
+function updateExposureUi() {
+  const automatic = $("#exposureMode").value === "auto";
+  $("#cameraEv").disabled = !automatic;
+  $("#shutterDenominator").disabled = automatic;
+  $("#exposureHint").textContent = automatic
+    ? "自动模式下 EV 调整亮度；快门由相机自动决定。"
+    : "固定快门使用 1/xx 秒；此时自动 EV 不参与曝光。";
+}
+for (const input of [$("#exposureMode"), $("#cameraEv"), $("#shutterDenominator")]) {
+  input.addEventListener("input", () => { exposureDirty = true; updateExposureUi(); });
+  input.addEventListener("change", () => { exposureDirty = true; updateExposureUi(); });
+}
+updateExposureUi();
+$("#applyExposure").onclick = async () => {
+  if (exposureBusy) return;
+  exposureBusy = true;
+  const button = $("#applyExposure"), mode = $("#exposureMode"), ev = $("#cameraEv"), shutter = $("#shutterDenominator");
+  button.disabled = true; mode.disabled = true; ev.disabled = true; shutter.disabled = true;
+  try {
+    const response = await fetch("/api/camera/exposure", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({
+      auto: mode.value === "auto", ev:Number(ev.value), shutter_denominator:Number(shutter.value),
+    })});
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw Error(data.error || "曝光设置失败");
+    exposureDirty = false;
+    note(data.camera.exposure.auto ? `已应用自动曝光：EV ${fixed(data.camera.exposure.ev)}` : `已固定快门：1/${data.camera.exposure.shutter_denominator} 秒`);
+  } catch (error) { note(error.message); }
+  finally { exposureBusy = false; button.disabled = false; mode.disabled = false; updateExposureUi(); }
+};
+
 function editing(event) { return ["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName); }
 async function sendKeys() {
   if (keysSending) { keysQueued = true; return; }
@@ -150,6 +180,12 @@ async function refreshStatus() { try { const response = await fetch("/api/status
     const resolution = camera.resolution || (camera.width && camera.height ? `${camera.width}×${camera.height}` : "—");
     if (!cameraModeDirty && !cameraModeBusy && camera.mode) $("#cameraMode").value = camera.mode;
     if (camera.width && camera.height) { $("#auxCropWidth").max = camera.width; $("#auxCropHeight").max = camera.height; }
+    if (!exposureDirty && !exposureBusy && camera.exposure) {
+      $("#exposureMode").value = camera.exposure.auto ? "auto" : "manual";
+      $("#cameraEv").value = camera.exposure.ev;
+      $("#shutterDenominator").value = camera.exposure.shutter_denominator;
+      updateExposureUi();
+    }
     $("#cameraMeta").textContent = `${resolution} · 传感器目标 ${fixed(camera.sensor_target_fps)} FPS · 实际编码 ${fixed(camera.capture_fps)} FPS`;
     $("#cameraResolution").textContent = resolution;
     $("#cameraFps").textContent = `${fixed(camera.capture_fps)} / ${fixed(camera.stream_fps)} FPS`;

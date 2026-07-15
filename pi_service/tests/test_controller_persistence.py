@@ -38,6 +38,19 @@ class ControllerPersistenceTests(unittest.TestCase):
             reloaded = RobotController("unused", config_path)
             self.assertEqual(reloaded.config.profiles["PR"]["rf"], 211)
 
+    def test_legacy_robot_config_is_copied_to_drive_config_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            legacy_path = Path(directory) / "robot_config.json"
+            drive_path = Path(directory) / "drive_config.json"
+            legacy_path.write_text('{"target_speed": 57, "profiles": {"F": {"rf": 101, "lf": 102, "lr": 103, "rr": 104}}}', encoding="utf-8")
+
+            controller = RobotController("unused", drive_path, legacy_path)
+            self.assertEqual(controller.config.target_speed, 57.0)
+            self.assertEqual(controller.config.profiles["F"], {"rf": 101, "lf": 102, "lr": 103, "rr": 104})
+            self.assertTrue(drive_path.exists())
+            self.assertIn('"target_speed": 57.0', drive_path.read_text(encoding="utf-8"))
+            self.assertIn('"target_speed": 57', legacy_path.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()
