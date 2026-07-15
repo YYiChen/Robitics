@@ -1,5 +1,6 @@
 const $ = selector => document.querySelector(selector);
 const video = $("#video"), save = $("#save");
+const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:false});
 let folder, aborter, count = 0, profiles = {}, activeMode = "all", configLoaded = false, keysSending = false, keysQueued = false;
 let cameraModeDirty = false, cameraModeBusy = false, videoRetryTimer;
 const wheelNames = ["rf", "lf", "lr", "rr"];
@@ -14,6 +15,27 @@ async function requestJson(url, options = {}, timeoutMs = 500) {
 
 const note = text => { save.textContent = text; };
 const fileName = () => `robot_${new Date().toISOString().replace(/[:.]/g, "-")}_${++count}.jpg`;
+function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+function drawAuxiliaryFrame() {
+  const sourceWidth = video.naturalWidth, sourceHeight = video.naturalHeight;
+  if (sourceWidth && sourceHeight && video.complete) {
+    let sx = 0, sy = 0, cropWidth = sourceWidth, cropHeight = sourceHeight;
+    if ($("#auxCropMode").value === "center") {
+      cropWidth = clamp(Number($("#auxCropWidth").value) || 640, 1, sourceWidth);
+      cropHeight = clamp(Number($("#auxCropHeight").value) || 480, 1, sourceHeight);
+      sx = (sourceWidth - cropWidth) / 2;
+      sy = (sourceHeight - cropHeight) / 2;
+    }
+    auxContext.drawImage(video, sx, sy, cropWidth, cropHeight, 0, 0, auxVideo.width, auxVideo.height);
+  }
+  requestAnimationFrame(drawAuxiliaryFrame);
+}
+$("#auxCropMode").onchange = () => {
+  const enabled = $("#auxCropMode").value === "center";
+  $("#auxCropWidth").disabled = !enabled; $("#auxCropHeight").disabled = !enabled;
+};
+$("#auxCropMode").dispatchEvent(new Event("change"));
+drawAuxiliaryFrame();
 async function chooseFolder() {
   if (!isSecureContext || !window.showDirectoryPicker) throw Error("请用 Chrome/Edge 通过 HTTPS 或 localhost 打开。");
   folder = await window.showDirectoryPicker({mode:"readwrite"});
@@ -127,6 +149,7 @@ async function refreshStatus() { try { const response = await fetch("/api/status
     $("#cameraState").innerHTML = dot(camera.online, camera.online ? "在线" : camera.status); $("#arduinoState").innerHTML = dot(robot.arduino_online, robot.arduino_online ? "在线" : robot.serial ? "无响应" : "离线", robot.serial);
     const resolution = camera.resolution || (camera.width && camera.height ? `${camera.width}×${camera.height}` : "—");
     if (!cameraModeDirty && !cameraModeBusy && camera.mode) $("#cameraMode").value = camera.mode;
+    if (camera.width && camera.height) { $("#auxCropWidth").max = camera.width; $("#auxCropHeight").max = camera.height; }
     $("#cameraMeta").textContent = `${resolution} · 传感器目标 ${fixed(camera.sensor_target_fps)} FPS · 实际编码 ${fixed(camera.capture_fps)} FPS`;
     $("#cameraResolution").textContent = resolution;
     $("#cameraFps").textContent = `${fixed(camera.capture_fps)} / ${fixed(camera.stream_fps)} FPS`;
