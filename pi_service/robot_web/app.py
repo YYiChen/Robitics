@@ -36,6 +36,15 @@ def create_app(controller: RobotController, camera: CameraStreamer) -> Flask:
 
 def main() -> None:
     parser=argparse.ArgumentParser(); parser.add_argument("--port",default="/dev/ttyACM0"); parser.add_argument("--web-port",type=int,default=5000); args=parser.parse_args()
-    camera=CameraStreamer(); camera.start(); controller=RobotController(args.port); controller.start(); atexit.register(camera.stop)
-    create_app(controller,camera).run(host="0.0.0.0",port=args.web_port,threaded=True,use_reloader=False)
+    camera=CameraStreamer(); camera.start(); controller=RobotController(args.port); controller.start()
+    # Persist the current wheel profiles on normal process exit as well as
+    # when the browser clicks the save button.  This covers Ctrl+C and service
+    # shutdown, while RobotController.stop() remains idempotent.
+    atexit.register(controller.stop)
+    atexit.register(camera.stop)
+    try:
+        create_app(controller,camera).run(host="0.0.0.0",port=args.web_port,threaded=True,use_reloader=False)
+    finally:
+        controller.stop()
+        camera.stop()
 if __name__ == "__main__": main()

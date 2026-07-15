@@ -5,6 +5,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass, field
 import json
+import os
 from pathlib import Path
 
 import serial
@@ -51,11 +52,16 @@ class Config:
 class RobotController:
     def __init__(self, port: str, config_path: Path | None = None) -> None:
         self.port, self.config_path, self.lock = port, config_path or Path(__file__).with_name("robot_config.json"), threading.RLock()
+        self.config_path = Path(self.config_path).expanduser()
+        self.config_io_lock = threading.Lock()
         self.config = self._load_config()
         self.serial_lock = threading.RLock()
         self.serial = None; self.action = "STOP"; self.held_keys: set[str] = set(); self.last_client_seen = 0.0
         self.imu = self.speed = self.ultrasonic = None; self.reply = self.error = ""; self.last_rx = 0.0
         self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._shutdown_lock = threading.Lock()
+        self._stopped = False
 
     def _load_config(self) -> Config:
         try:
@@ -67,11 +73,45 @@ class RobotController:
 
     def _save_config(self, snapshot: dict | None = None) -> None:
         data = snapshot if snapshot is not None else asdict(self.config)
-        temporary = self.config_path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(self.config_path)
+        payload = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        # Serialize writes and flush the file before replacing the live copy.
+        # This prevents a Ctrl+C or concurrent request from leaving a partial
+        # JSON file that makes the next process fall back to defaults.
+        with self.config_io_lock:
+            temporary = self.config_path.with_name(f".{self.config_path.name}.{os.getpid()}.tmp")
+            with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary.replace(self.config_path)
 
-    def start(self) -> None: threading.Thread(target=self._run, daemon=True, name="robot-control").start()
+    def start(self) -> None:
+        with self._shutdown_lock:
+            if self._thread and self._thread.is_alive(): return
+            self._stopped = False
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._run, daemon=True, name="robot-control")
+            self._thread.start()
+
+    def stop(self) -> None:
+        """Stop the control loop while preserving the latest configuration."""
+        with self._shutdown_lock:
+            if self._stopped: return
+            self._stopped = True
+            thread = self._thread
+        self._stop.set()
+        with self.lock:
+            self.held_keys.clear()
+            self.action = "STOP"
+            snapshot = asdict(self.config)
+        try:
+            self._save_config(snapshot)
+        except Exception as exc:
+            self.error = f"配置保存失败: {exc}"
+        if thread and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+        self._close_serial(send_stop=True)
     def _connect(self) -> None:
         with self.serial_lock:
             if self.serial and self.serial.is_open: return
