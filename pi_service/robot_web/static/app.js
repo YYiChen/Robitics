@@ -1,16 +1,106 @@
-const $=s=>document.querySelector(s),video=$('#video'),save=$('#save');let folder,aborter,count=0;
-const note=x=>save.textContent=x,name=()=>`robot_${new Date().toISOString().replace(/[:.]/g,'-')}_${++count}.jpg`;
-async function choose(){if(!isSecureContext||!showDirectoryPicker)throw Error('请用 Chrome/Edge 通过 HTTPS 或 localhost 打开。');folder=await showDirectoryPicker({mode:'readwrite'});if(await folder.requestPermission({mode:'readwrite'})!=='granted')throw Error('未获得文件夹权限');note(`保存目标：${folder.name}`)}
-async function write(blob){if(!folder)await choose();const h=await folder.getFileHandle(name(),{create:true}),w=await h.createWritable();await w.write(blob);await w.close()}
-async function image(){const c=document.createElement('canvas');c.width=video.naturalWidth;c.height=video.naturalHeight;c.getContext('2d').drawImage(video,0,0);const b=await new Promise(r=>c.toBlob(r,'image/jpeg',.9));if(!b)throw Error('视频未就绪');await write(b);note(`已保存 ${count} 张到电脑`)}
-$('#choose').onclick=()=>choose().catch(e=>note(e.message));$('#snapshot').onclick=()=>image().catch(e=>note(e.message));$('#record').onclick=async()=>{try{if(!folder)await choose();aborter=new AbortController();$('#record').disabled=true;$('#stopRecord').disabled=false;while(!aborter.signal.aborted){await image();await new Promise(r=>setTimeout(r,200))}}catch(e){note(e.message)}finally{$('#record').disabled=false;$('#stopRecord').disabled=true}};$('#stopRecord').onclick=()=>aborter?.abort();
-const heldKeys=new Set(),actionKeys={FL:'q',F:'w',FR:'e',PL:'a',PR:'d',BL:'z',B:'s',BR:'c'},keyboardKeys={w:'w',a:'a',s:'s',d:'d',q:'q',e:'e',z:'z',c:'c',ArrowUp:'w',ArrowDown:'s',ArrowLeft:'a',ArrowRight:'d'};let keysSending=false,keysQueued=false;
-const editing=event=>['INPUT','TEXTAREA','SELECT'].includes(event.target?.tagName);
-async function sendKeys(){if(keysSending){keysQueued=true;return}keysSending=true;do{keysQueued=false;try{const r=await fetch('/api/keys',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keys:[...heldKeys]}),keepalive:true}),d=await r.json();if(!r.ok)throw Error(d.error||'动作发送失败');$('#action').textContent=d.action}catch(e){note(e.message)}}while(keysQueued);keysSending=false}
-function setKey(key,down){if(!key)return;if(down)heldKeys.add(key);else heldKeys.delete(key);sendKeys()}
-function releaseKeys(){heldKeys.clear();sendKeys()}
-document.querySelectorAll('[data-action]').forEach(button=>{const key=actionKeys[button.dataset.action];if(!key){button.onclick=releaseKeys;return}button.addEventListener('pointerdown',event=>{event.preventDefault();button.setPointerCapture(event.pointerId);setKey(key,true)});for(const eventName of ['pointerup','pointercancel','lostpointercapture'])button.addEventListener(eventName,event=>{event.preventDefault();setKey(key,false)})});
-$('#reconnect').onclick=async()=>{const b=$('#reconnect');b.disabled=true;note('正在重新连接 Arduino…');try{const r=await fetch('/api/reconnect',{method:'POST'}),d=await r.json();if(!d.ok)throw Error(d.robot?.error||'串口未连接');note('Arduino 已重新连接，可继续控制')}catch(e){note(`重新连接失败：${e.message}`)}finally{b.disabled=false}};
-addEventListener('keydown',e=>{if(editing(e)||e.repeat)return;if(e.code==='Space'){e.preventDefault();releaseKeys();return}const key=keyboardKeys[e.key]||keyboardKeys[e.key.toLowerCase()];if(key){e.preventDefault();setKey(key,true)}});addEventListener('keyup',e=>{if(editing(e))return;const key=keyboardKeys[e.key]||keyboardKeys[e.key.toLowerCase()];if(key){e.preventDefault();setKey(key,false)}});addEventListener('blur',releaseKeys);addEventListener('beforeunload',()=>navigator.sendBeacon('/api/stop'));setInterval(sendKeys,180);
-$('#apply').onclick=async()=>{const p={speed_mode:$('#speedMode').checked,straight_pwm:Number($('#straightPwm').value),target_speed:Number($('#target').value),kp:Number($('#kp').value),ki:Number($('#ki').value),kd:Number($('#kd').value)};const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});note(r.ok?'PID 参数已发送至 Arduino':'参数提交失败')};
-const distance=us=>!us?'等待传感器数据…':us[1]===-1?'无有效回波（-1）':`${us[1].toFixed(1)} cm`;setInterval(async()=>{try{const r=(await (await fetch('/api/status',{cache:'no-store'})).json()).robot;$('#action').textContent=r.action;$('#client').textContent=r.client_online?'在线':'已超时停车';$('#distance').textContent=distance(r.ultrasonic);$('#status').textContent=JSON.stringify({serial:r.serial,reply:r.reply,error:r.error,imu:r.imu,speed:r.speed},null,2)}catch(e){$('#status').textContent=String(e)}},300);
+const $ = selector => document.querySelector(selector);
+const video = $("#video"), save = $("#save");
+let folder, aborter, count = 0, profiles = {}, activeMode = "all", configLoaded = false, keysSending = false, keysQueued = false;
+const wheelNames = ["rf", "lf", "lr", "rr"];
+const actionKeys = {FL:"q", F:"w", FR:"e", PL:"a", PR:"d", BL:"z", B:"s", BR:"c"};
+const keyboardKeys = {w:"w", a:"a", s:"s", d:"d", q:"q", e:"e", z:"z", c:"c", ArrowUp:"w", ArrowDown:"s", ArrowLeft:"a", ArrowRight:"d"};
+const heldKeys = new Set();
+
+const note = text => { save.textContent = text; };
+const fileName = () => `robot_${new Date().toISOString().replace(/[:.]/g, "-")}_${++count}.jpg`;
+async function chooseFolder() {
+  if (!isSecureContext || !window.showDirectoryPicker) throw Error("请用 Chrome/Edge 通过 HTTPS 或 localhost 打开。");
+  folder = await window.showDirectoryPicker({mode:"readwrite"});
+  if (await folder.requestPermission({mode:"readwrite"}) !== "granted") throw Error("未获得文件夹权限");
+  note(`保存目标：${folder.name}`);
+}
+async function saveBlob(blob) {
+  if (!folder) await chooseFolder();
+  const handle = await folder.getFileHandle(fileName(), {create:true});
+  const writer = await handle.createWritable(); await writer.write(blob); await writer.close();
+}
+async function saveFrame() {
+  const canvas = document.createElement("canvas"); canvas.width = video.naturalWidth; canvas.height = video.naturalHeight;
+  canvas.getContext("2d").drawImage(video, 0, 0);
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", .9));
+  if (!blob) throw Error("视频尚未就绪"); await saveBlob(blob); note(`已保存 ${count} 张到电脑`);
+}
+$("#choose").onclick = () => chooseFolder().catch(error => note(error.message));
+$("#snapshot").onclick = () => saveFrame().catch(error => note(error.message));
+$("#record").onclick = async () => {
+  try { if (!folder) await chooseFolder(); aborter = new AbortController(); $("#record").disabled = true; $("#stopRecord").disabled = false;
+    while (!aborter.signal.aborted) { await saveFrame(); await new Promise(resolve => setTimeout(resolve, 200)); }
+  } catch (error) { note(error.message); } finally { $("#record").disabled = false; $("#stopRecord").disabled = true; }
+};
+$("#stopRecord").onclick = () => aborter?.abort();
+
+function editing(event) { return ["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName); }
+async function sendKeys() {
+  if (keysSending) { keysQueued = true; return; }
+  keysSending = true;
+  do { keysQueued = false; try { const response = await fetch("/api/keys", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({keys:[...heldKeys]}), keepalive:true});
+      const data = await response.json(); if (!response.ok) throw Error(data.error || "动作发送失败"); $("#action").textContent = data.action;
+    } catch (error) { note(error.message); }
+  } while (keysQueued);
+  keysSending = false;
+}
+function setKey(key, pressed) { if (pressed) heldKeys.add(key); else heldKeys.delete(key); sendKeys(); }
+function releaseKeys() { heldKeys.clear(); sendKeys(); }
+for (const button of document.querySelectorAll("[data-action]")) {
+  const key = actionKeys[button.dataset.action];
+  if (!key) { button.onclick = releaseKeys; continue; }
+  button.addEventListener("pointerdown", event => { event.preventDefault(); button.setPointerCapture(event.pointerId); setKey(key, true); });
+  for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) button.addEventListener(name, event => { event.preventDefault(); setKey(key, false); });
+}
+addEventListener("keydown", event => { if (editing(event) || event.repeat) return; if (event.code === "Space") { event.preventDefault(); releaseKeys(); return; }
+  const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, true); }
+});
+addEventListener("keyup", event => { if (editing(event)) return; const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, false); } });
+addEventListener("blur", releaseKeys); addEventListener("beforeunload", () => navigator.sendBeacon("/api/stop")); setInterval(sendKeys, 180);
+$("#stopButton").onclick = releaseKeys;
+
+function profileFor(action) { return profiles[action] || {rf:0, lf:0, lr:0, rr:0}; }
+function signedMagnitude(value, sign) { return Math.round(Math.abs(Number(value) || 0)) * (sign < 0 ? -1 : 1); }
+function fillProfileEditor() {
+  const p = profileFor($("#profileAction").value), abs = wheel => Math.abs(Number(p[wheel]) || 0);
+  $("#allValue").value = Math.max(...wheelNames.map(abs));
+  $("#leftValue").value = Math.round((abs("lf") + abs("lr")) / 2); $("#rightValue").value = Math.round((abs("rf") + abs("rr")) / 2);
+  for (const wheel of wheelNames) $(`#${wheel}Value`).value = p[wheel]; updateProfilePreview(p);
+}
+function updateProfilePreview(p = profileFor($("#profileAction").value)) { $("#profilePreview").textContent = `M1 ${p.rf} · M2 ${p.lf} · M3 ${p.lr} · M4 ${p.rr}`; }
+function profileFromEditor() {
+  const p = {...profileFor($("#profileAction").value)};
+  if (activeMode === "all") for (const wheel of wheelNames) p[wheel] = signedMagnitude($("#allValue").value, p[wheel] || 1);
+  if (activeMode === "sides") { for (const wheel of ["lf", "lr"]) p[wheel] = signedMagnitude($("#leftValue").value, p[wheel] || 1); for (const wheel of ["rf", "rr"]) p[wheel] = signedMagnitude($("#rightValue").value, p[wheel] || 1); }
+  if (activeMode === "wheels") for (const wheel of wheelNames) p[wheel] = Math.max(-255, Math.min(255, Number($(`#${wheel}Value`).value) || 0));
+  return p;
+}
+function refreshProfilePreview() { updateProfilePreview(profileFromEditor()); }
+for (const input of document.querySelectorAll("#allValue,#leftValue,#rightValue,#rfValue,#lfValue,#lrValue,#rrValue")) input.addEventListener("input", refreshProfilePreview);
+$("#profileAction").onchange = fillProfileEditor;
+for (const tab of document.querySelectorAll(".mode")) tab.onclick = () => { activeMode = tab.dataset.mode; document.querySelectorAll(".mode").forEach(item => item.classList.toggle("active", item === tab)); $("#allEditor").classList.toggle("hidden", activeMode !== "all"); $("#sidesEditor").classList.toggle("hidden", activeMode !== "sides"); $("#wheelsEditor").classList.toggle("hidden", activeMode !== "wheels"); refreshProfilePreview(); };
+$("#applyProfile").onclick = async () => { profiles[$("#profileAction").value] = profileFromEditor();
+  try { const response = await fetch("/api/config", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({profiles})}); const data = await response.json(); if (!response.ok) throw Error(data.error || "轮速配置失败"); profiles = data.config.profiles; fillProfileEditor(); note("轮速配置已应用并保存"); } catch (error) { note(error.message); }
+};
+
+function fillConfig(config) {
+  profiles = config.profiles || profiles; $("#speedMode").checked = !!config.speed_mode; $("#targetSpeed").value = config.target_speed; $("#kp").value = config.kp; $("#ki").value = config.ki; $("#kd").value = config.kd; fillProfileEditor();
+}
+$("#applyPid").onclick = async () => { const payload = {speed_mode:$("#speedMode").checked, target_speed:Number($("#targetSpeed").value), kp:Number($("#kp").value), ki:Number($("#ki").value), kd:Number($("#kd").value)};
+  try { const response = await fetch("/api/config", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)}); if (!response.ok) throw Error("PID 参数提交失败"); note("PID 参数已应用并保存"); } catch (error) { note(error.message); }
+};
+$("#reconnect").onclick = async () => { const button = $("#reconnect"); button.disabled = true; note("正在重新连接 Arduino……"); try { const response = await fetch("/api/reconnect", {method:"POST"}), data = await response.json(); if (!data.ok) throw Error(data.robot?.error || "Arduino 未连接"); note("Arduino 已重新连接"); } catch (error) { note(`重新连接失败：${error.message}`); } finally { button.disabled = false; } };
+
+function dot(online, text, warning = false) { return `<i class="dot ${online ? "online" : warning ? "warn" : "offline"}"></i>${text}`; }
+function distance(value) { if (!value) return "等待传感器数据…"; if (value[1] === -1) return "无有效回波（-1）"; return `${value[1].toFixed(1)} cm`; }
+async function refreshStatus() { try { const response = await fetch("/api/status", {cache:"no-store"}), data = await response.json(), robot = data.robot;
+    $("#cameraState").innerHTML = dot(data.camera.online, data.camera.online ? "在线" : data.camera.status); $("#arduinoState").innerHTML = dot(robot.arduino_online, robot.arduino_online ? "在线" : robot.serial ? "无响应" : "离线", robot.serial);
+    $("#controlState").innerHTML = dot(robot.client_online, robot.client_online ? "在线" : "已超时停车"); $("#action").textContent = robot.action; $("#keys").textContent = robot.keys?.join("+") || "—"; $("#distance").textContent = distance(robot.ultrasonic); $("#lastReply").textContent = robot.reply || "等待 Arduino 回包";
+    if (robot.imu) { $("#roll").textContent = `${robot.imu[0].toFixed(2)}°`; $("#pitch").textContent = `${robot.imu[1].toFixed(2)}°`; $("#yaw").textContent = `${robot.imu[2].toFixed(2)}°`; }
+    if (robot.speed) { $("#wheelSpeed").textContent = `${robot.speed[0].toFixed(1)} / ${robot.speed[1].toFixed(1)} pps`; $("#targetWheelSpeed").textContent = `${robot.speed[2].toFixed(1)} / ${robot.speed[3].toFixed(1)} pps`; }
+    if (!configLoaded) { fillConfig(robot.config); configLoaded = true; }
+    const age = robot.last_rx_age == null ? "—" : `${robot.last_rx_age.toFixed(2)} s`;
+    $("#status").textContent = [`Arduino: ${robot.arduino_online ? "在线" : robot.serial ? "无响应" : "离线"}`, `串口: ${robot.serial ? "已打开" : "未打开"}`, `最近回包: ${age}`, `动作: ${robot.action}`, `按键: ${robot.keys?.join("+") || "—"}`, `回复: ${robot.reply || "—"}`, `错误: ${robot.error || "—"}`].join("\n");
+  } catch (error) { $("#status").textContent = `网页后端连接失败：${error}`; $("#arduinoState").innerHTML = dot(false, "网页服务异常"); }
+}
+refreshStatus(); setInterval(refreshStatus, 500);

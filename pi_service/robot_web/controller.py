@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+import json
+from pathlib import Path
 
 import serial
 
@@ -11,6 +13,27 @@ HEARTBEAT_SECONDS = 0.20
 CLIENT_TIMEOUT_SECONDS = 0.80
 ACTIONS = {"STOP", "F", "B", "PL", "PR", "FL", "FR", "BL", "BR"}
 KEY_ACTIONS = {"q": "FL", "w": "F", "e": "FR", "a": "PL", "d": "PR", "z": "BL", "s": "B", "c": "BR"}
+PROFILE_ACTIONS = ("F", "B", "PL", "PR", "FL", "FR", "BL", "BR")
+WHEELS = ("rf", "lf", "lr", "rr")
+
+def default_profiles() -> dict[str, dict[str, int]]:
+    return {
+        "F": {"rf": 80, "lf": 80, "lr": 80, "rr": 80}, "B": {"rf": -80, "lf": -80, "lr": -80, "rr": -80},
+        "PL": {"rf": 150, "lf": -150, "lr": -150, "rr": 150}, "PR": {"rf": -150, "lf": 150, "lr": 150, "rr": -150},
+        "FL": {"rf": 160, "lf": 60, "lr": 60, "rr": 160}, "FR": {"rf": 60, "lf": 160, "lr": 160, "rr": 60},
+        "BL": {"rf": -60, "lf": -160, "lr": -160, "rr": -60}, "BR": {"rf": -160, "lf": -60, "lr": -60, "rr": -160},
+    }
+
+def normalize_profiles(raw: object) -> dict[str, dict[str, int]]:
+    profiles = default_profiles()
+    if not isinstance(raw, dict): return profiles
+    for action in PROFILE_ACTIONS:
+        values = raw.get(action)
+        if not isinstance(values, dict): continue
+        for wheel in WHEELS:
+            try: profiles[action][wheel] = max(-255, min(255, int(values.get(wheel, profiles[action][wheel]))))
+            except (TypeError, ValueError): pass
+    return profiles
 
 @dataclass
 class Config:
@@ -23,13 +46,26 @@ class Config:
     pivot_pwm: int = 150
     curve_outer_pwm: int = 160
     curve_inner_pwm: int = 60
+    profiles: dict[str, dict[str, int]] = field(default_factory=default_profiles)
 
 class RobotController:
-    def __init__(self, port: str) -> None:
-        self.port, self.config, self.lock = port, Config(), threading.RLock()
+    def __init__(self, port: str, config_path: Path | None = None) -> None:
+        self.port, self.config_path, self.lock = port, config_path or Path(__file__).with_name("robot_config.json"), threading.RLock()
+        self.config = self._load_config()
         self.serial = None; self.action = "STOP"; self.held_keys: set[str] = set(); self.last_client_seen = 0.0
-        self.imu = self.speed = self.ultrasonic = None; self.reply = self.error = ""
+        self.imu = self.speed = self.ultrasonic = None; self.reply = self.error = ""; self.last_rx = 0.0
         self._stop = threading.Event()
+
+    def _load_config(self) -> Config:
+        try:
+            data = json.loads(self.config_path.read_text(encoding="utf-8")); config = Config()
+            for key in ("speed_mode", "target_speed", "kp", "ki", "kd", "straight_pwm", "pivot_pwm", "curve_outer_pwm", "curve_inner_pwm"):
+                if key in data: setattr(config, key, type(getattr(config, key))(data[key]))
+            config.profiles = normalize_profiles(data.get("profiles")); return config
+        except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError, OSError): return Config()
+
+    def _save_config(self) -> None:
+        self.config_path.write_text(json.dumps(asdict(self.config), ensure_ascii=False, indent=2), encoding="utf-8")
 
     def start(self) -> None: threading.Thread(target=self._run, daemon=True, name="robot-control").start()
     def _connect(self) -> None:
@@ -68,10 +104,13 @@ class RobotController:
     def update_config(self, payload: dict) -> dict:
         with self.lock:
             for key, old in asdict(self.config).items():
-                if key in payload: setattr(self.config, key, bool(payload[key]) if isinstance(old, bool) else type(old)(payload[key]))
+                if key not in payload or key == "profiles": continue
+                setattr(self.config, key, bool(payload[key]) if isinstance(old, bool) else type(old)(payload[key]))
+            if "profiles" in payload: self.config.profiles = normalize_profiles(payload["profiles"])
             self.config.target_speed = max(0.0, min(200.0, self.config.target_speed))
             for key in ("straight_pwm", "pivot_pwm", "curve_outer_pwm", "curve_inner_pwm"):
                 setattr(self.config, key, max(0, min(255, getattr(self.config, key))))
+            self._save_config()
             return asdict(self.config)
     def stop_now(self) -> None:
         with self.lock: self.held_keys.clear(); self.action = "STOP"
@@ -100,14 +139,15 @@ class RobotController:
         return self.status()
     @staticmethod
     def _raw(action: str, cfg: Config) -> tuple[int, int, int, int]:
-        s, p, outer, inner = cfg.straight_pwm, cfg.pivot_pwm, cfg.curve_outer_pwm, cfg.curve_inner_pwm
-        return {"F":(s,s,s,s),"B":(-s,-s,-s,-s),"PL":(p,-p,-p,p),"PR":(-p,p,p,-p),"FL":(outer,inner,inner,outer),"FR":(inner,outer,outer,inner),"BL":(-inner,-outer,-outer,-inner),"BR":(-outer,-inner,-inner,-outer),"STOP":(0,0,0,0)}[action]
+        if action == "STOP": return (0, 0, 0, 0)
+        profile = cfg.profiles.get(action, default_profiles()[action])
+        return tuple(profile[wheel] for wheel in WHEELS)
     @staticmethod
     def _speed(action: str, cfg: Config) -> tuple[float, float, int, int]:
         t, h = cfg.target_speed, cfg.target_speed * .5
         return {"F":(t,t,0,0),"B":(-t,-t,0,0),"PL":(-t,t,-cfg.pivot_pwm,cfg.pivot_pwm),"PR":(t,-t,cfg.pivot_pwm,-cfg.pivot_pwm),"FL":(h,t,cfg.curve_inner_pwm,cfg.curve_outer_pwm),"FR":(t,h,cfg.curve_outer_pwm,cfg.curve_inner_pwm),"BL":(-t,-h,-cfg.curve_inner_pwm,-cfg.curve_outer_pwm),"BR":(-h,-t,-cfg.curve_outer_pwm,-cfg.curve_inner_pwm),"STOP":(0,0,0,0)}[action]
     def _parse(self, text: str) -> None:
-        self.reply = text
+        self.reply, self.last_rx = text, time.monotonic()
         try:
             parts = text.split(",")
             if text.startswith("IMU,") and len(parts) == 4: self.imu = [float(x) for x in parts[1:]]
@@ -143,4 +183,5 @@ class RobotController:
                 next_query = time.monotonic() + .5
     def status(self) -> dict:
         with self.lock: cfg, action, seen = asdict(self.config), self.action, self.last_client_seen
-        return {"serial":bool(self.serial and self.serial.is_open),"error":self.error,"reply":self.reply,"config":cfg,"action":action,"keys":sorted(self.held_keys),"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic}
+        serial_open = bool(self.serial and self.serial.is_open); age = time.monotonic() - self.last_rx if self.last_rx else None
+        return {"serial":serial_open,"arduino_online":serial_open and age is not None and age <= 1.5,"last_rx_age":age,"error":self.error,"reply":self.reply,"config":cfg,"action":action,"keys":sorted(self.held_keys),"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic}

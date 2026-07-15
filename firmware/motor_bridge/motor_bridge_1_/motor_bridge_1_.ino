@@ -75,8 +75,8 @@ constexpr unsigned long ULTRASONIC_ECHO_TIMEOUT_US = 30000UL;
 constexpr unsigned long ULTRASONIC_BETWEEN_SENSORS_MS = 35UL;
 constexpr unsigned long ULTRASONIC_REPORT_INTERVAL_MS = 100UL;
 constexpr unsigned long OBSTACLE_HOLD_MS = 800UL;
-constexpr float FRONT_STOP_DISTANCE_CM = 25.0F;
-constexpr float SIDE_TURN_STOP_DISTANCE_CM = 25.0F;
+constexpr float FRONT_STOP_DISTANCE_CM = 15.0F;
+constexpr float SIDE_TURN_STOP_DISTANCE_CM = 15.0F;
 
 float frontDistanceCm = -1.0F;
 

@@ -1,3 +1,103 @@
-<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Robitics 控制台</title><link rel="stylesheet" href="/static/style.css"><body>
-<h1>Robitics 控制台</h1><main><section><img id="video" src="/video_feed" alt="CSI 视频"><p><button id="snapshot">保存当前画面到电脑</button><button id="choose">选择电脑 Pic 文件夹</button><button id="record">开始连续保存</button><button id="stopRecord" disabled>停止保存</button></p><small id="save">图片只写入浏览器已授权的电脑文件夹；需 HTTPS 或 localhost。</small></section>
-<section><h2>终端同款控制</h2><p>按住按键或按钮才运动，松开立即停车；树莓派每 200ms 按终端协议发送。网页失焦、断连或空格会停止。</p><div id="pad"><button data-action="FL">Q 前左</button><button data-action="F">W 前进</button><button data-action="FR">E 前右</button><button data-action="PL">A 原地左转</button><button data-action="STOP">STOP</button><button data-action="PR">D 原地右转</button><button data-action="BL">Z 后左</button><button data-action="B">S 后退</button><button data-action="BR">C 后右</button></div><p>当前动作：<strong id="action">STOP</strong>　控制连接：<strong id="client">等待</strong>　<button id="reconnect" type="button">重新连接 Arduino</button></p><h2>前向距离传感器</h2><p><strong id="distance">等待数据…</strong><br><small>中间超声波：TRIG 26 / ECHO 27。仅前进会触发避障。</small></p><h2>后轮速度 PID</h2><label><input id="speedMode" type="checkbox"> 启用速度模式</label><p>直行 PWM <input id="straightPwm" type="number" value="80" min="0" max="255"> 目标 pps <input id="target" type="number" value="30" min="0" max="200"></p><p>Kp <input id="kp" type="number" value="2" step=".1"> Ki <input id="ki" type="number" value=".8" step=".1"> Kd <input id="kd" type="number" value=".05" step=".01"></p><button id="apply">应用 PID 参数</button><h2>状态</h2><pre id="status">读取中…</pre></section></main><script src="/static/app.js"></script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Robitics 控制台</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div><h1>Robitics 控制台</h1><p class="subtitle">树莓派网页服务 · Arduino Mega 实时控制</p></div>
+  <div class="status-strip">
+    <div class="status-pill"><span>摄像头</span><strong id="cameraState"><i class="dot"></i>读取中</strong></div>
+    <div class="status-pill"><span>Arduino</span><strong id="arduinoState"><i class="dot"></i>读取中</strong></div>
+    <div class="status-pill"><span>网页控制</span><strong id="controlState"><i class="dot"></i>读取中</strong></div>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="main-column">
+    <div class="card video-card">
+      <div class="card-heading"><h2>CSI 视频</h2><span id="cameraMeta">640×480 · 30 FPS</span></div>
+      <img id="video" src="/video_feed" alt="CSI 视频">
+      <div class="toolbar">
+        <button class="primary" id="snapshot">保存当前画面</button>
+        <button id="choose">选择电脑 Pic 文件夹</button>
+        <button id="record">连续保存（5 FPS）</button>
+        <button id="stopRecord" disabled>停止保存</button>
+      </div>
+      <div class="hint" id="save">图片只写入浏览器授权的电脑文件夹；浏览器保存需要 HTTPS 或 localhost。</div>
+    </div>
+
+    <div class="card">
+      <div class="card-heading"><h2>终端同款控制</h2><button class="danger" id="stopButton">紧急停止</button></div>
+      <div class="controls">
+        <button class="move" data-action="FL">Q<small>前左</small></button>
+        <button class="move" data-action="F">W / ↑<small>前进</small></button>
+        <button class="move" data-action="FR">E<small>前右</small></button>
+        <button class="move" data-action="PL">A / ←<small>原地左转</small></button>
+        <button class="move stop" data-action="STOP">STOP<small>空格</small></button>
+        <button class="move" data-action="PR">D / →<small>原地右转</small></button>
+        <button class="move" data-action="BL">Z<small>后左</small></button>
+        <button class="move" data-action="B">S / ↓<small>后退</small></button>
+        <button class="move" data-action="BR">C<small>后右</small></button>
+      </div>
+      <div class="hint">按住按钮或键盘才运动，松开立即停车。网页失焦、网络断开或 Arduino 超时都会停车。</div>
+      <div class="action-line">当前动作：<strong id="action">STOP</strong> · 按键：<strong id="keys">—</strong></div>
+    </div>
+
+    <div class="card">
+      <div class="card-heading"><h2>实时遥测</h2><span id="lastReply">等待 Arduino 回包</span></div>
+      <div class="telemetry">
+        <div class="metric wide"><span>前向超声波</span><strong id="distance">等待数据…</strong><small>TRIG 26 / ECHO 27 · 15 cm 仅限制前进</small></div>
+        <div class="metric"><span>IMU Roll</span><strong id="roll">—</strong></div>
+        <div class="metric"><span>IMU Pitch</span><strong id="pitch">—</strong></div>
+        <div class="metric"><span>IMU Yaw</span><strong id="yaw">—</strong></div>
+        <div class="metric"><span>轮速 L / R</span><strong id="wheelSpeed">—</strong></div>
+        <div class="metric"><span>目标速度 L / R</span><strong id="targetWheelSpeed">—</strong></div>
+      </div>
+    </div>
+  </section>
+
+  <aside>
+    <div class="card">
+      <div class="card-heading"><h2>轮速配置</h2><span>直接 PWM</span></div>
+      <p class="hint">每个动作都保存四轮值。常用调整用“四轮同步”或“左右两侧”，需要校准时再用“四轮独立”。</p>
+      <label class="field-label" for="profileAction">遥控动作</label>
+      <select id="profileAction" class="full-input">
+        <option value="F">W 前进</option><option value="B">S 后退</option>
+        <option value="PL">A 原地左转</option><option value="PR">D 原地右转</option>
+        <option value="FL">Q 前左</option><option value="FR">E 前右</option>
+        <option value="BL">Z 后左</option><option value="BR">C 后右</option>
+      </select>
+      <div class="mode-tabs"><button class="mode active" data-mode="all">四轮同步</button><button class="mode" data-mode="sides">左右两侧</button><button class="mode" data-mode="wheels">四轮独立</button></div>
+      <div id="allEditor" class="editor"><label>统一速度（PWM）<input id="allValue" type="number" min="0" max="255" value="80"></label><small>方向符号由动作自动决定。</small></div>
+      <div id="sidesEditor" class="editor hidden"><label>左侧（左前 + 左后）<input id="leftValue" type="number" min="0" max="255" value="80"></label><label>右侧（右前 + 右后）<input id="rightValue" type="number" min="0" max="255" value="80"></label></div>
+      <div id="wheelsEditor" class="editor hidden wheel-grid"><label>右前 M1<input id="rfValue" type="number" min="-255" max="255"></label><label>左前 M2<input id="lfValue" type="number" min="-255" max="255"></label><label>左后 M3<input id="lrValue" type="number" min="-255" max="255"></label><label>右后 M4<input id="rrValue" type="number" min="-255" max="255"></label></div>
+      <div class="profile-preview"><span>实际发送</span><strong id="profilePreview">M1 0 · M2 0 · M3 0 · M4 0</strong></div>
+      <button class="primary full-button" id="applyProfile">应用并保存当前动作</button>
+      <div class="hint">修改参数时建议让车轮离地；Arduino 仍会执行 PWM 限幅、超声波安全和超时停车。</div>
+    </div>
+
+    <div class="card">
+      <div class="card-heading"><h2>后轮速度 PID</h2><label class="switch-label"><input id="speedMode" type="checkbox">速度模式</label></div>
+      <div class="settings-grid">
+        <label for="targetSpeed">目标速度 pps</label><input id="targetSpeed" type="number" min="0" max="200" step="1">
+        <label for="kp">Kp</label><input id="kp" type="number" min="0" step=".1">
+        <label for="ki">Ki</label><input id="ki" type="number" min="0" step=".1">
+        <label for="kd">Kd</label><input id="kd" type="number" min="0" step=".01">
+      </div>
+      <button class="primary full-button" id="applyPid">应用 PID 参数</button>
+      <div class="hint">PID 模式使用左右后轮目标速度；轮速配置表用于直接 PWM 模式。</div>
+    </div>
+
+    <div class="card">
+      <div class="card-heading"><h2>系统状态</h2><button id="reconnect">重新连接 Arduino</button></div>
+      <pre class="log" id="status">正在读取……</pre>
+    </div>
+  </aside>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
