@@ -22,3 +22,13 @@
 ## Git 工作流
 
 `main` 是唯一可部署分支；`archive/*` 仅保留旧版本。每次完成真实硬件验证后创建本地标签，例如 `robot-v0.1.0-verified`。
+
+## Windows 本地 JPG 保存（5 FPS）
+
+在 Windows PowerShell 中运行，替换为树莓派实际 IP：
+
+```powershell
+.\start_windows_recorder.ps1 -StreamUrl 'http://树莓派IP:5000/video_feed'
+```
+
+图片只会保存到 `Pic\YYYY-MM-DD\`，不会上传或写回树莓派。按 `Ctrl+C` 停止；断线后每 3 秒自动重连，并在可用空间少于 5 GB 时安全停止。
