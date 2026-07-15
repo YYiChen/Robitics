@@ -60,21 +60,16 @@ const unsigned long STOPPED_REPORT_INTERVAL_MS = 1000;
 const unsigned long REVERSE_PAUSE_MS = 80;
 
 // ============================================================
-// Three ultrasonic sensors.  In the first refactored release they are
-// telemetry only; motion safety remains the watchdog and explicit STOP.
+// One forward-facing ultrasonic sensor.  It stops forward travel only.
 //
 // Logical order is always RIGHT, FRONT, LEFT.  The physical pin pairs are
 // intentionally written in that order to match the robot's wiring record.
 // Set to true only after a dedicated obstacle-avoidance hardware validation.
 // ============================================================
 
-constexpr bool ULTRASONIC_BLOCKING_ENABLED = false;
-constexpr uint8_t RIGHT_TRIG_PIN = 29;
-constexpr uint8_t RIGHT_ECHO_PIN = 28;
+constexpr bool ULTRASONIC_BLOCKING_ENABLED = true;
 constexpr uint8_t FRONT_TRIG_PIN = 26;
 constexpr uint8_t FRONT_ECHO_PIN = 27;
-constexpr uint8_t LEFT_TRIG_PIN = 25;
-constexpr uint8_t LEFT_ECHO_PIN = 24;
 
 constexpr unsigned long ULTRASONIC_ECHO_TIMEOUT_US = 30000UL;
 constexpr unsigned long ULTRASONIC_BETWEEN_SENSORS_MS = 35UL;
@@ -83,15 +78,7 @@ constexpr unsigned long OBSTACLE_HOLD_MS = 800UL;
 constexpr float FRONT_STOP_DISTANCE_CM = 25.0F;
 constexpr float SIDE_TURN_STOP_DISTANCE_CM = 25.0F;
 
-enum UltrasonicIndex { ULTRASONIC_RIGHT, ULTRASONIC_FRONT, ULTRASONIC_LEFT };
-constexpr uint8_t ULTRASONIC_COUNT = 3;
-const uint8_t ultrasonicTrigPins[ULTRASONIC_COUNT] = {
-  RIGHT_TRIG_PIN, FRONT_TRIG_PIN, LEFT_TRIG_PIN
-};
-const uint8_t ultrasonicEchoPins[ULTRASONIC_COUNT] = {
-  RIGHT_ECHO_PIN, FRONT_ECHO_PIN, LEFT_ECHO_PIN
-};
-float ultrasonicCm[ULTRASONIC_COUNT] = {-1.0F, -1.0F, -1.0F};
+float frontDistanceCm = -1.0F;
 
 enum UltrasonicState {
   ULTRASONIC_IDLE,
@@ -106,7 +93,6 @@ unsigned long ultrasonicPhaseStartUs = 0;
 unsigned long ultrasonicEchoRiseUs = 0;
 unsigned long lastUltrasonicStartMs = 0;
 unsigned long lastUltrasonicReportTime = 0;
-uint8_t ultrasonicSensorIndex = 0;
 
 // ============================================================
 // MPU-6500 IMU constants and configuration
@@ -1038,12 +1024,10 @@ void setup() {
   lastValidCommandTime = millis();
   timeoutStopped = true;
 
-  // ---- Ultrasonic sensors, logical order: right, front, left ----
-  for (uint8_t index = 0; index < ULTRASONIC_COUNT; ++index) {
-    pinMode(ultrasonicTrigPins[index], OUTPUT);
-    pinMode(ultrasonicEchoPins[index], INPUT);
-    digitalWrite(ultrasonicTrigPins[index], LOW);
-  }
+  // ---- Centre/front ultrasonic sensor: TRIG 26, ECHO 27 ----
+  pinMode(FRONT_TRIG_PIN, OUTPUT);
+  pinMode(FRONT_ECHO_PIN, INPUT);
+  digitalWrite(FRONT_TRIG_PIN, LOW);
   // Start the first reading immediately after setup.
   lastUltrasonicStartMs = millis() - ULTRASONIC_BETWEEN_SENSORS_MS;
 
@@ -1065,9 +1049,9 @@ void setup() {
   imuPresent = initMPU6500();
 
   if (imuPresent) {
-    Serial.println(F("READY:MOTOR_BRIDGE,MAX=255,TIMEOUT=1000,IMU=OK,ENC=18,19,US=RIGHT,FRONT,LEFT"));
+    Serial.println(F("READY:MOTOR_BRIDGE,MAX=255,TIMEOUT=1000,IMU=OK,ENC=18,19,US=FRONT(26,27)"));
   } else {
-    Serial.println(F("READY:MOTOR_BRIDGE,MAX=255,TIMEOUT=1000,IMU=ABSENT,ENC=18,19,US=RIGHT,FRONT,LEFT"));
+    Serial.println(F("READY:MOTOR_BRIDGE,MAX=255,TIMEOUT=1000,IMU=ABSENT,ENC=18,19,US=FRONT(26,27)"));
   }
 }
 
@@ -1111,7 +1095,7 @@ void loop() {
   // Keep sensor sampling independent from remote-control command timing.
   updateUltrasonic();
 
-  // Continuously expose all three sensor readings for Serial Monitor debug.
+  // Continuously expose the front sensor for Serial Monitor debug.
   if (millis() - lastUltrasonicReportTime >= ULTRASONIC_REPORT_INTERVAL_MS) {
     printUltrasonicDebug();
     lastUltrasonicReportTime = millis();

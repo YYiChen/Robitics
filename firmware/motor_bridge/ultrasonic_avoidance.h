@@ -1,13 +1,15 @@
-// Non-blocking three-sensor measurement.  Logical/serial order is right,
-// front, left.  A value of -1 means no valid echo.
+// Non-blocking centre/front ultrasonic sensor: TRIG 26, ECHO 27.
+// The US wire format stays three columns for web compatibility: -1,front,-1.
 
 void printUltrasonic() {
-  Serial.print(F("US,"));
-  Serial.print(ultrasonicCm[ULTRASONIC_RIGHT], 1);
-  Serial.print(',');
-  Serial.print(ultrasonicCm[ULTRASONIC_FRONT], 1);
-  Serial.print(',');
-  Serial.println(ultrasonicCm[ULTRASONIC_LEFT], 1);
+  Serial.print(F("US,-1,"));
+  Serial.print(frontDistanceCm, 1);
+  Serial.println(F(",-1"));
+}
+
+void printUltrasonicDebug() {
+  Serial.print(F("US:FRONT="));
+  Serial.println(frontDistanceCm, 1);
 }
 
 void updateUltrasonic() {
@@ -15,66 +17,39 @@ void updateUltrasonic() {
   switch (ultrasonicState) {
     case ULTRASONIC_IDLE:
       if (millis() - lastUltrasonicStartMs >= ULTRASONIC_BETWEEN_SENSORS_MS) {
-        digitalWrite(ultrasonicTrigPins[ultrasonicSensorIndex], LOW);
-        ultrasonicPhaseStartUs = nowUs;
-        ultrasonicState = ULTRASONIC_TRIGGER_LOW;
+        digitalWrite(FRONT_TRIG_PIN, LOW); ultrasonicPhaseStartUs = nowUs; ultrasonicState = ULTRASONIC_TRIGGER_LOW;
       }
       break;
     case ULTRASONIC_TRIGGER_LOW:
-      if (nowUs - ultrasonicPhaseStartUs >= 3UL) {
-        digitalWrite(ultrasonicTrigPins[ultrasonicSensorIndex], HIGH);
-        ultrasonicPhaseStartUs = nowUs;
-        ultrasonicState = ULTRASONIC_TRIGGER_HIGH;
-      }
+      if (nowUs - ultrasonicPhaseStartUs >= 3UL) { digitalWrite(FRONT_TRIG_PIN, HIGH); ultrasonicPhaseStartUs = nowUs; ultrasonicState = ULTRASONIC_TRIGGER_HIGH; }
       break;
     case ULTRASONIC_TRIGGER_HIGH:
-      if (nowUs - ultrasonicPhaseStartUs >= 10UL) {
-        digitalWrite(ultrasonicTrigPins[ultrasonicSensorIndex], LOW);
-        ultrasonicPhaseStartUs = nowUs;
-        ultrasonicState = ULTRASONIC_WAIT_RISE;
-      }
+      if (nowUs - ultrasonicPhaseStartUs >= 10UL) { digitalWrite(FRONT_TRIG_PIN, LOW); ultrasonicPhaseStartUs = nowUs; ultrasonicState = ULTRASONIC_WAIT_RISE; }
       break;
     case ULTRASONIC_WAIT_RISE:
-      if (digitalRead(ultrasonicEchoPins[ultrasonicSensorIndex]) == HIGH) {
-        ultrasonicEchoRiseUs = nowUs;
-        ultrasonicState = ULTRASONIC_WAIT_FALL;
-      } else if (nowUs - ultrasonicPhaseStartUs >= ULTRASONIC_ECHO_TIMEOUT_US) {
-        ultrasonicCm[ultrasonicSensorIndex] = -1.0F;
-        lastUltrasonicStartMs = millis();
-        ultrasonicSensorIndex = (ultrasonicSensorIndex + 1) % ULTRASONIC_COUNT;
-        ultrasonicState = ULTRASONIC_IDLE;
-      }
+      if (digitalRead(FRONT_ECHO_PIN) == HIGH) { ultrasonicEchoRiseUs = nowUs; ultrasonicState = ULTRASONIC_WAIT_FALL; }
+      else if (nowUs - ultrasonicPhaseStartUs >= ULTRASONIC_ECHO_TIMEOUT_US) { frontDistanceCm = -1.0F; lastUltrasonicStartMs = millis(); ultrasonicState = ULTRASONIC_IDLE; }
       break;
     case ULTRASONIC_WAIT_FALL:
-      if (digitalRead(ultrasonicEchoPins[ultrasonicSensorIndex]) == LOW) {
+      if (digitalRead(FRONT_ECHO_PIN) == LOW) {
         const float cm = ((nowUs - ultrasonicEchoRiseUs) * 0.0343F) / 2.0F;
-        ultrasonicCm[ultrasonicSensorIndex] = (cm >= 5.0F && cm <= 400.0F) ? cm : -1.0F;
-        lastUltrasonicStartMs = millis();
-        ultrasonicSensorIndex = (ultrasonicSensorIndex + 1) % ULTRASONIC_COUNT;
-        ultrasonicState = ULTRASONIC_IDLE;
-      } else if (nowUs - ultrasonicEchoRiseUs >= ULTRASONIC_ECHO_TIMEOUT_US) {
-        ultrasonicCm[ultrasonicSensorIndex] = -1.0F;
-        lastUltrasonicStartMs = millis();
-        ultrasonicSensorIndex = (ultrasonicSensorIndex + 1) % ULTRASONIC_COUNT;
-        ultrasonicState = ULTRASONIC_IDLE;
-      }
+        frontDistanceCm = (cm >= 5.0F && cm <= 400.0F) ? cm : -1.0F;
+        lastUltrasonicStartMs = millis(); ultrasonicState = ULTRASONIC_IDLE;
+      } else if (nowUs - ultrasonicEchoRiseUs >= ULTRASONIC_ECHO_TIMEOUT_US) { frontDistanceCm = -1.0F; lastUltrasonicStartMs = millis(); ultrasonicState = ULTRASONIC_IDLE; }
       break;
   }
 }
 
-// The policy switch keeps sensor collection independent from motion policy.
+// Both sides must be commanded forward.  Any pivot has one side backward, so
+// left/right in-place turns remain available even when an obstacle is close.
 const char *forwardBlockReason(int m1, int m2, int m3, int m4) {
   if (!ULTRASONIC_BLOCKING_ENABLED) return nullptr;
-  const int rightForward = (m1 > 0 ? m1 : 0) + (m4 > 0 ? m4 : 0);
-  const int leftForward = (m2 > 0 ? m2 : 0) + (m3 > 0 ? m3 : 0);
-  if (rightForward == 0 && leftForward == 0) return nullptr;
-  if (ultrasonicCm[ULTRASONIC_FRONT] >= 0.0F && ultrasonicCm[ULTRASONIC_FRONT] <= FRONT_STOP_DISTANCE_CM) return "FRONT";
+  const bool drivingForward = m1 > 0 && m2 > 0 && m3 > 0 && m4 > 0;
+  if (drivingForward && frontDistanceCm >= 0.0F && frontDistanceCm <= FRONT_STOP_DISTANCE_CM) return "FRONT";
   return nullptr;
 }
 
 void stopForObstacle(const char *reason) {
-  releaseAllMotors();
-  timeoutStopped = true;
-  Serial.print(F("BLOCK:"));
-  Serial.println(reason);
+  releaseAllMotors(); timeoutStopped = true;
+  Serial.print(F("BLOCK:")); Serial.println(reason);
 }
