@@ -28,9 +28,10 @@ class CameraStreamer:
             self._picam2 = Picamera2()
             self._picam2.configure(
                 self._picam2.create_video_configuration(
-                    # RGB888 and four capture buffers are the proven stable
-                    # baseline from the team's original fluent web controller.
-                    main={"size": (self.width, self.height), "format": "RGB888"},
+                    # Request OpenCV's native BGR order.  JPEG encoding then
+                    # receives the correct channel order directly, avoiding a
+                    # second RGB/BGR exchange that can swap red and blue.
+                    main={"size": (self.width, self.height), "format": "BGR888"},
                     controls={"FrameDurationLimits": (33333, 33333), "AwbEnable": True},
                     buffer_count=4,
                 )
@@ -49,7 +50,7 @@ class CameraStreamer:
         try:
             while not self._stop.is_set():
                 started = time.monotonic()
-                frame = self._cv2.cvtColor(self._picam2.capture_array(), self._cv2.COLOR_RGB2BGR)
+                frame = self._picam2.capture_array()
                 ok, buffer = self._cv2.imencode(".jpg", frame, [self._cv2.IMWRITE_JPEG_QUALITY, self.quality])
                 if ok:
                     with self._condition:
