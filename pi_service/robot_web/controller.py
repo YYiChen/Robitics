@@ -72,7 +72,14 @@ class RobotController:
             parts = text.split(",")
             if text.startswith("IMU,") and len(parts) == 4: self.imu = [float(x) for x in parts[1:]]
             elif text.startswith("SPD,") and len(parts) == 7: self.speed = [float(x) for x in parts[1:]]
-            elif text.startswith("US,") and len(parts) == 4: self.ultrasonic = [float(x) for x in parts[1:]]
+            elif text.startswith("US,") and len(parts) == 4:
+                self.ultrasonic = [float(x) for x in parts[1:]]
+            elif text.startswith("US,") and len(parts) == 2:
+                # Older one-sensor firmware: US,<frontCm>
+                self.ultrasonic = [-1.0, float(parts[1]), -1.0]
+            elif text.startswith("US:FRONT="):
+                # Periodic debug output from the one-sensor firmware.
+                self.ultrasonic = [-1.0, float(text.split("=", 1)[1]), -1.0]
         except ValueError: pass
     def _run(self) -> None:
         next_query = 0.0
