@@ -28,10 +28,9 @@ class CameraStreamer:
             self._picam2 = Picamera2()
             self._picam2.configure(
                 self._picam2.create_video_configuration(
-                    # Request OpenCV's native BGR order.  JPEG encoding then
-                    # receives the correct channel order directly, avoiding a
-                    # second RGB/BGR exchange that can swap red and blue.
-                    main={"size": (self.width, self.height), "format": "BGR888"},
+                    # Picamera2 supplies RGB pixels; OpenCV's JPEG encoder
+                    # expects BGR, so _capture performs RGB -> BGR explicitly.
+                    main={"size": (self.width, self.height), "format": "RGB888"},
                     controls={"FrameDurationLimits": (33333, 33333), "AwbEnable": True},
                     buffer_count=4,
                 )
@@ -50,7 +49,8 @@ class CameraStreamer:
         try:
             while not self._stop.is_set():
                 started = time.monotonic()
-                frame = self._picam2.capture_array()
+                rgb_frame = self._picam2.capture_array()
+                frame = self._cv2.cvtColor(rgb_frame, self._cv2.COLOR_RGB2BGR)
                 ok, buffer = self._cv2.imencode(".jpg", frame, [self._cv2.IMWRITE_JPEG_QUALITY, self.quality])
                 if ok:
                     with self._condition:
