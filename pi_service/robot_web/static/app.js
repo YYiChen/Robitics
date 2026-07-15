@@ -1,6 +1,7 @@
 const $ = selector => document.querySelector(selector);
 const video = $("#video"), save = $("#save");
 let folder, aborter, count = 0, profiles = {}, activeMode = "all", configLoaded = false, keysSending = false, keysQueued = false;
+let cameraModeDirty = false, cameraModeBusy = false, videoRetryTimer;
 const wheelNames = ["rf", "lf", "lr", "rr"];
 const actionKeys = {FL:"q", F:"w", FR:"e", PL:"a", PR:"d", BL:"z", B:"s", BR:"c"};
 const keyboardKeys = {w:"w", a:"a", s:"s", d:"d", q:"q", e:"e", z:"z", c:"c", ArrowUp:"w", ArrowDown:"s", ArrowLeft:"a", ArrowRight:"d"};
@@ -38,6 +39,26 @@ $("#record").onclick = async () => {
   } catch (error) { note(error.message); } finally { $("#record").disabled = false; $("#stopRecord").disabled = true; }
 };
 $("#stopRecord").onclick = () => aborter?.abort();
+
+function reloadVideo() {
+  clearTimeout(videoRetryTimer);
+  videoRetryTimer = setTimeout(() => { video.src = `/video_feed?ts=${Date.now()}`; }, 800);
+}
+video.addEventListener("error", reloadVideo);
+$("#cameraMode").onchange = () => { cameraModeDirty = true; };
+$("#applyCameraMode").onclick = async () => {
+  if (cameraModeBusy) return;
+  cameraModeBusy = true;
+  const button = $("#applyCameraMode"), select = $("#cameraMode");
+  button.disabled = true; select.disabled = true; note("正在切换相机分辨率，视频流会短暂重连……");
+  try {
+    const response = await fetch("/api/camera/mode", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({mode:select.value})});
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw Error(data.error || "相机模式切换失败");
+    cameraModeDirty = false; note(`相机已切换到 ${data.camera.mode_label}，传感器目标 ${fixed(data.camera.sensor_target_fps)} FPS`); reloadVideo();
+  } catch (error) { note(error.message); }
+  finally { cameraModeBusy = false; button.disabled = false; select.disabled = false; }
+};
 
 function editing(event) { return ["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName); }
 async function sendKeys() {
@@ -105,7 +126,8 @@ async function refreshStatus() { try { const response = await fetch("/api/status
     const camera = data.camera || {};
     $("#cameraState").innerHTML = dot(camera.online, camera.online ? "在线" : camera.status); $("#arduinoState").innerHTML = dot(robot.arduino_online, robot.arduino_online ? "在线" : robot.serial ? "无响应" : "离线", robot.serial);
     const resolution = camera.resolution || (camera.width && camera.height ? `${camera.width}×${camera.height}` : "—");
-    $("#cameraMeta").textContent = `${resolution} · ${fixed(camera.capture_fps)} FPS`;
+    if (!cameraModeDirty && !cameraModeBusy && camera.mode) $("#cameraMode").value = camera.mode;
+    $("#cameraMeta").textContent = `${resolution} · 传感器目标 ${fixed(camera.sensor_target_fps)} FPS · 实际编码 ${fixed(camera.capture_fps)} FPS`;
     $("#cameraResolution").textContent = resolution;
     $("#cameraFps").textContent = `${fixed(camera.capture_fps)} / ${fixed(camera.stream_fps)} FPS`;
     $("#cameraBandwidth").textContent = `${fixed(camera.stream_kBps)} kB/s · ${fixed(camera.stream_kbps)} kbps`;

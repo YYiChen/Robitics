@@ -20,6 +20,15 @@
   <section class="main-column">
     <div class="card video-card">
       <div class="card-heading"><h2>CSI 视频</h2><span id="cameraMeta">读取视频参数…</span></div>
+      <div class="camera-mode-bar">
+        <label for="cameraMode">相机读取档位</label>
+        <select id="cameraMode">
+          <option value="fast_1640">1640×1232 · 传感器 30 FPS</option>
+          <option value="full_3280">3280×2464 · 传感器 30 FPS</option>
+        </select>
+        <button class="primary" id="applyCameraMode">应用分辨率</button>
+        <span class="hint">切换会短暂重启视频流；实际 FPS 以状态数据为准。</span>
+      </div>
       <img id="video" src="/video_feed" alt="CSI 视频">
       <div class="toolbar">
         <button class="primary" id="snapshot">保存当前画面</button>

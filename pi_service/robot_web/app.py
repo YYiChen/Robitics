@@ -30,6 +30,15 @@ def create_app(controller: RobotController, camera: CameraStreamer) -> Flask:
         return jsonify(ok=status["arduino_online"], robot=status)
     @app.post("/api/config")
     def config(): return jsonify(ok=True, config=controller.update_config(request.get_json(silent=True) or {}))
+    @app.post("/api/camera/mode")
+    def camera_mode():
+        payload = request.get_json(silent=True) or {}
+        try:
+            return jsonify(ok=True, camera=camera.set_mode(str(payload.get("mode", ""))))
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        except RuntimeError as exc:
+            return jsonify(ok=False, error=str(exc), camera=camera.status_dict()), 503
     @app.get("/api/status")
     def status(): return jsonify(robot=controller.status(), camera=camera.status_dict())
     return app

@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -21,6 +22,16 @@ class CameraMetricsTests(unittest.TestCase):
         self.assertAlmostEqual(status["jpeg_kbps"], 800.0)
         self.assertAlmostEqual(status["stream_kbps"], 800.4)
         self.assertAlmostEqual(status["encode_ms"], 12.5)
+
+    def test_camera_mode_is_persisted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "camera_config.json"
+            first = CameraStreamer(config_path=config_path)
+            first.mode_key = "full_3280"
+            first._save_mode()
+            second = CameraStreamer(config_path=config_path)
+            self.assertEqual(second.mode_key, "full_3280")
+            self.assertEqual(second.status_dict()["resolution"], "3280x2464")
 
 
 if __name__ == "__main__":

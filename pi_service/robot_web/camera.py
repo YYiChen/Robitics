@@ -5,17 +5,60 @@ import threading
 import time
 from collections import deque
 from collections.abc import Iterator
+import json
+from pathlib import Path
+
+
+CAMERA_MODES = {
+    "fast_1640": {
+        "label": "1640×1232",
+        "width": 1640,
+        "height": 1232,
+        "sensor_fps": 30.0,
+        "stream_fps": 30.0,
+    },
+    "full_3280": {
+        "label": "3280×2464",
+        "width": 3280,
+        "height": 2464,
+        "sensor_fps": 30.0,
+        "stream_fps": 30.0,
+    },
+}
+DEFAULT_CAMERA_MODE = "fast_1640"
 
 
 class CameraStreamer:
-    def __init__(self, width: int = 640, height: int = 480, quality: int = 80, fps: float = 30) -> None:
-        self.width, self.height, self.quality, self.fps = width, height, quality, max(1.0, fps)
+    def __init__(
+        self,
+        width: int | None = None,
+        height: int | None = None,
+        quality: int = 80,
+        fps: float | None = None,
+        mode_key: str | None = None,
+        config_path: Path | None = None,
+    ) -> None:
+        self.config_path = Path(config_path or Path(__file__).with_name("camera_config.json")).expanduser()
+        saved_mode = self._load_saved_mode()
+        self.mode_key = mode_key if mode_key in CAMERA_MODES else saved_mode
+        if self.mode_key not in CAMERA_MODES:
+            self.mode_key = DEFAULT_CAMERA_MODE
+        mode = CAMERA_MODES[self.mode_key]
+        self.width = int(width if width is not None else mode["width"])
+        self.height = int(height if height is not None else mode["height"])
+        self.quality = int(quality)
+        self.sensor_fps = float(mode["sensor_fps"])
+        self.fps = max(1.0, float(fps if fps is not None else mode["stream_fps"]))
         self._condition = threading.Condition()
         self._jpeg: bytes | None = None
         self._sequence = 0
         self._stop = threading.Event()
         self.status, self.error = "未启动", ""
         self._picam2 = self._cv2 = None
+        self._camera_lock = threading.RLock()
+        self._lifecycle_lock = threading.RLock()
+        self._capture_thread: threading.Thread | None = None
+        self._running = False
         self._metrics_lock = threading.Lock()
         self._encoded_events = deque()
         self._stream_events = deque()
@@ -24,6 +67,42 @@ class CameraStreamer:
         self._last_jpeg_bytes = 0
         self._last_encode_ms = 0.0
         self._active_clients = 0
+
+    def _load_saved_mode(self) -> str:
+        try:
+            value = json.loads(self.config_path.read_text(encoding="utf-8")).get("mode")
+            return value if value in CAMERA_MODES else DEFAULT_CAMERA_MODE
+        except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError):
+            return DEFAULT_CAMERA_MODE
+
+    def _save_mode(self) -> None:
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.config_path.with_name(f".{self.config_path.name}.tmp")
+        temporary.write_text(json.dumps({"mode": self.mode_key}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(self.config_path)
+
+    def _mode_status(self) -> dict:
+        mode = CAMERA_MODES[self.mode_key]
+        return {
+            "key": self.mode_key,
+            "label": mode["label"],
+            "width": mode["width"],
+            "height": mode["height"],
+            "sensor_fps": mode["sensor_fps"],
+            "stream_fps": mode["stream_fps"],
+        }
+
+    def _reset_metrics(self) -> None:
+        with self._metrics_lock:
+            self._encoded_events.clear()
+            self._stream_events.clear()
+            self._encode_time_events.clear()
+            self._last_frame_at = 0.0
+            self._last_jpeg_bytes = 0
+            self._last_encode_ms = 0.0
+        with self._condition:
+            self._jpeg = None
+            self._sequence = 0
 
     @staticmethod
     def _window_stats(events: deque, now: float) -> tuple[int, int, float]:
@@ -74,10 +153,14 @@ class CameraStreamer:
             "online": self.online,
             "status": self.status,
             "error": self.error,
+            "mode": self.mode_key,
+            "mode_label": CAMERA_MODES[self.mode_key]["label"],
+            "available_modes": [self._mode_status_for(key) for key in CAMERA_MODES],
             "width": self.width,
             "height": self.height,
             "resolution": f"{self.width}x{self.height}",
             "target_fps": self.fps,
+            "sensor_target_fps": self.sensor_fps,
             "capture_fps": encoded_frames,
             "stream_fps": stream_frames,
             "jpeg_bytes": last_jpeg_bytes,
@@ -92,40 +175,121 @@ class CameraStreamer:
             "jpeg_quality": self.quality,
         }
 
+    @staticmethod
+    def _mode_status_for(key: str) -> dict:
+        mode = CAMERA_MODES[key]
+        return {
+            "key": key,
+            "label": mode["label"],
+            "width": mode["width"],
+            "height": mode["height"],
+            "sensor_fps": mode["sensor_fps"],
+            "stream_fps": mode["stream_fps"],
+        }
+
     @property
     def online(self) -> bool:
         return self.status == "运行中" and not self.error
 
-    def start(self) -> None:
-        try:
-            import cv2
-            from picamera2 import Picamera2
-            self._cv2 = cv2
-            self._picam2 = Picamera2()
-            self._picam2.configure(
-                self._picam2.create_video_configuration(
-                    # Picamera2's RGB888 numpy array is laid out as [B,G,R],
-                    # which is already OpenCV's native channel order.
-                    main={"size": (self.width, self.height), "format": "RGB888"},
-                    controls={"FrameDurationLimits": (33333, 33333), "AwbEnable": True},
-                    buffer_count=4,
-                )
+    def _configure(self) -> None:
+        frame_duration_us = int(round(1_000_000 / self.sensor_fps))
+        self._picam2.configure(
+            self._picam2.create_video_configuration(
+                # Picamera2's RGB888 numpy array is laid out as [B,G,R],
+                # which is already OpenCV's native channel order.
+                main={"size": (self.width, self.height), "format": "RGB888"},
+                controls={
+                    "FrameDurationLimits": (frame_duration_us, frame_duration_us),
+                    "AwbEnable": True,
+                },
+                buffer_count=4,
             )
-            # Apply controls after configure.  A 5 ms exposure reduces motion
-            # blur while automatic analogue gain compensates for low light.
-            self._picam2.set_controls({"ExposureTime": 5000, "AnalogueGain": 0.0})
-            self._picam2.start()
-            self.status = "运行中"
-            threading.Thread(target=self._capture, name="camera-capture", daemon=True).start()
-        except Exception as exc:
-            self.status, self.error = "不可用", str(exc)
+        )
+        # Keep the existing motion-blur-oriented exposure baseline.  The
+        # sensor readout rate is controlled independently by FrameDurationLimits.
+        self._picam2.set_controls({"ExposureTime": 5000, "AnalogueGain": 0.0})
+
+    def start(self) -> None:
+        with self._lifecycle_lock:
+            if self._running: return
+            try:
+                import cv2
+                from picamera2 import Picamera2
+                self._cv2 = cv2
+                self._picam2 = Picamera2()
+                with self._camera_lock:
+                    self._configure()
+                    self._picam2.start()
+                self._stop.clear()
+                self._capture_thread = threading.Thread(target=self._capture, name="camera-capture", daemon=True)
+                self._capture_thread.start()
+                self._running = True
+                self.status, self.error = "运行中", ""
+            except Exception as exc:
+                self.status, self.error = "不可用", str(exc)
+
+    def set_mode(self, mode_key: str) -> dict:
+        """Switch resolution while keeping the sensor frame duration at 30 FPS."""
+        if mode_key not in CAMERA_MODES:
+            raise ValueError("未知相机模式")
+        with self._lifecycle_lock:
+            if mode_key == self.mode_key and self._running and self.online:
+                return self.status_dict()
+            previous = (self.mode_key, self.width, self.height, self.sensor_fps, self.fps)
+            self.status, self.error = "切换中", ""
+            self._stop.set()
+            thread = self._capture_thread
+            if thread and thread is not threading.current_thread():
+                thread.join(timeout=2.0)
+            new_mode = CAMERA_MODES[mode_key]
+            self.mode_key = mode_key
+            self.width, self.height = new_mode["width"], new_mode["height"]
+            self.sensor_fps, self.fps = new_mode["sensor_fps"], new_mode["stream_fps"]
+            try:
+                with self._camera_lock:
+                    if self._picam2 is None:
+                        raise RuntimeError("摄像头尚未启动")
+                    try:
+                        self._picam2.stop()
+                    except Exception:
+                        pass
+                    self._configure()
+                    self._picam2.start()
+            except Exception as exc:
+                # Try to restore the previous working mode before reporting the
+                # failure, so a bad sensor mode cannot leave the stream down.
+                self.mode_key, self.width, self.height, self.sensor_fps, self.fps = previous
+                try:
+                    with self._camera_lock:
+                        self._configure()
+                        self._picam2.start()
+                    self._stop.clear()
+                    self._capture_thread = threading.Thread(target=self._capture, name="camera-capture", daemon=True)
+                    self._capture_thread.start()
+                    self._running = True
+                    self.status = "运行中"
+                except Exception as restore_exc:
+                    self._running = False
+                    self.status = "不可用"
+                    self.error = f"切换失败：{exc}；恢复失败：{restore_exc}"
+                raise RuntimeError(f"相机模式切换失败：{exc}") from exc
+            self._reset_metrics()
+            self._stop.clear()
+            self._capture_thread = threading.Thread(target=self._capture, name="camera-capture", daemon=True)
+            self._capture_thread.start()
+            self._running = True
+            self.status, self.error = "运行中", ""
+            self._save_mode()
+            return self.status_dict()
 
     def _capture(self) -> None:
         interval = 1 / self.fps
         try:
             while not self._stop.is_set():
                 started = time.monotonic()
-                frame = self._picam2.capture_array()
+                with self._camera_lock:
+                    if self._picam2 is None: break
+                    frame = self._picam2.capture_array()
                 ok, buffer = self._cv2.imencode(".jpg", frame, [self._cv2.IMWRITE_JPEG_QUALITY, self.quality])
                 if ok:
                     jpeg = buffer.tobytes()
@@ -155,7 +319,13 @@ class CameraStreamer:
             self._client_stopped()
 
     def stop(self) -> None:
-        self._stop.set()
-        if self._picam2:
-            try: self._picam2.stop()
-            except Exception: pass
+        with self._lifecycle_lock:
+            self._stop.set()
+            thread = self._capture_thread
+            if thread and thread is not threading.current_thread():
+                thread.join(timeout=2.0)
+            with self._camera_lock:
+                if self._picam2:
+                    try: self._picam2.stop()
+                    except Exception: pass
+            self._running = False
