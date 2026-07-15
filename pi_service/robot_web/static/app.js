@@ -99,9 +99,20 @@ $("#applyPid").onclick = async () => { const payload = {speed_mode:$("#speedMode
 $("#reconnect").onclick = async () => { const button = $("#reconnect"); button.disabled = true; note("正在重新连接 Arduino……"); try { const response = await fetch("/api/reconnect", {method:"POST"}), data = await response.json(); if (!response.ok || !data.ok) throw Error(data.robot?.error || "Arduino 未收到回包"); note("Arduino 已重新连接并收到回包"); } catch (error) { note(`重新连接失败：${error.message}`); } finally { button.disabled = false; } };
 
 function dot(online, text, warning = false) { return `<i class="dot ${online ? "online" : warning ? "warn" : "offline"}"></i>${text}`; }
+function fixed(value, digits = 1) { const number = Number(value); return Number.isFinite(number) ? number.toFixed(digits) : "—"; }
 function distance(value) { if (!value) return "等待传感器数据…"; if (value[1] === -1) return "无有效回波（-1）"; return `${value[1].toFixed(1)} cm`; }
 async function refreshStatus() { try { const response = await fetch("/api/status", {cache:"no-store"}), data = await response.json(), robot = data.robot;
-    $("#cameraState").innerHTML = dot(data.camera.online, data.camera.online ? "在线" : data.camera.status); $("#arduinoState").innerHTML = dot(robot.arduino_online, robot.arduino_online ? "在线" : robot.serial ? "无响应" : "离线", robot.serial);
+    const camera = data.camera || {};
+    $("#cameraState").innerHTML = dot(camera.online, camera.online ? "在线" : camera.status); $("#arduinoState").innerHTML = dot(robot.arduino_online, robot.arduino_online ? "在线" : robot.serial ? "无响应" : "离线", robot.serial);
+    const resolution = camera.resolution || (camera.width && camera.height ? `${camera.width}×${camera.height}` : "—");
+    $("#cameraMeta").textContent = `${resolution} · ${fixed(camera.capture_fps)} FPS`;
+    $("#cameraResolution").textContent = resolution;
+    $("#cameraFps").textContent = `${fixed(camera.capture_fps)} / ${fixed(camera.stream_fps)} FPS`;
+    $("#cameraBandwidth").textContent = `${fixed(camera.stream_kBps)} kB/s · ${fixed(camera.stream_kbps)} kbps`;
+    $("#cameraFrameSize").textContent = camera.jpeg_bytes ? `${fixed(camera.jpeg_bytes / 1000)} KB` : "—";
+    $("#cameraEncode").textContent = `${fixed(camera.encode_ms)} ms（平均 ${fixed(camera.encode_ms_avg)} ms）`;
+    $("#cameraAge").textContent = camera.frame_age_ms == null ? "—" : `${fixed(camera.frame_age_ms)} ms`;
+    $("#cameraClients").textContent = `${camera.active_clients ?? 0}`;
     $("#controlState").innerHTML = dot(robot.client_online, robot.client_online ? "在线" : "已超时停车"); $("#action").textContent = robot.action; $("#keys").textContent = robot.keys?.join("+") || "—"; $("#distance").textContent = distance(robot.ultrasonic); $("#lastReply").textContent = robot.reply || "等待 Arduino 回包";
     if (robot.imu) { $("#roll").textContent = `${robot.imu[0].toFixed(2)}°`; $("#pitch").textContent = `${robot.imu[1].toFixed(2)}°`; $("#yaw").textContent = `${robot.imu[2].toFixed(2)}°`; }
     if (robot.speed) { $("#wheelSpeed").textContent = `${robot.speed[0].toFixed(1)} / ${robot.speed[1].toFixed(1)} pps`; $("#targetWheelSpeed").textContent = `${robot.speed[2].toFixed(1)} / ${robot.speed[3].toFixed(1)} pps`; }

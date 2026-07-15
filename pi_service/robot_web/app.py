@@ -31,7 +31,7 @@ def create_app(controller: RobotController, camera: CameraStreamer) -> Flask:
     @app.post("/api/config")
     def config(): return jsonify(ok=True, config=controller.update_config(request.get_json(silent=True) or {}))
     @app.get("/api/status")
-    def status(): return jsonify(robot=controller.status(), camera={"online":camera.online,"status":camera.status,"error":camera.error})
+    def status(): return jsonify(robot=controller.status(), camera=camera.status_dict())
     return app
 
 def main() -> None:

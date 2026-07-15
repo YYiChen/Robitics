@@ -19,7 +19,7 @@
 <main class="layout">
   <section class="main-column">
     <div class="card video-card">
-      <div class="card-heading"><h2>CSI 视频</h2><span id="cameraMeta">640×480 · 30 FPS</span></div>
+      <div class="card-heading"><h2>CSI 视频</h2><span id="cameraMeta">读取视频参数…</span></div>
       <img id="video" src="/video_feed" alt="CSI 视频">
       <div class="toolbar">
         <button class="primary" id="snapshot">保存当前画面</button>
@@ -28,6 +28,15 @@
         <button id="stopRecord" disabled>停止保存</button>
       </div>
       <div class="hint" id="save">图片只写入浏览器授权的电脑文件夹；浏览器保存需要 HTTPS 或 localhost。</div>
+      <div class="stream-metrics" aria-label="视频流参数">
+        <div class="metric"><span>分辨率</span><strong id="cameraResolution">—</strong></div>
+        <div class="metric"><span>采集 / 发送 FPS</span><strong id="cameraFps">—</strong></div>
+        <div class="metric wide"><span>MJPEG 发送带宽（所有网页合计）</span><strong id="cameraBandwidth">—</strong><small>同时显示 kB/s 和 kbps，包含 MJPEG 分片头；单个网页时就是当前流量</small></div>
+        <div class="metric"><span>单帧 JPEG</span><strong id="cameraFrameSize">—</strong></div>
+        <div class="metric"><span>编码耗时</span><strong id="cameraEncode">—</strong></div>
+        <div class="metric"><span>最新帧延迟</span><strong id="cameraAge">—</strong></div>
+        <div class="metric"><span>视频客户端</span><strong id="cameraClients">—</strong></div>
+      </div>
     </div>
 
     <div class="card">
