@@ -27,7 +27,7 @@ def create_app(controller: RobotController, camera: CameraStreamer) -> Flask:
     @app.post("/api/reconnect")
     def reconnect():
         status = controller.reconnect()
-        return jsonify(ok=status["serial"], robot=status)
+        return jsonify(ok=status["arduino_online"], robot=status)
     @app.post("/api/config")
     def config(): return jsonify(ok=True, config=controller.update_config(request.get_json(silent=True) or {}))
     @app.get("/api/status")

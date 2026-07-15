@@ -52,6 +52,7 @@ class RobotController:
     def __init__(self, port: str, config_path: Path | None = None) -> None:
         self.port, self.config_path, self.lock = port, config_path or Path(__file__).with_name("robot_config.json"), threading.RLock()
         self.config = self._load_config()
+        self.serial_lock = threading.RLock()
         self.serial = None; self.action = "STOP"; self.held_keys: set[str] = set(); self.last_client_seen = 0.0
         self.imu = self.speed = self.ultrasonic = None; self.reply = self.error = ""; self.last_rx = 0.0
         self._stop = threading.Event()
@@ -69,14 +70,24 @@ class RobotController:
 
     def start(self) -> None: threading.Thread(target=self._run, daemon=True, name="robot-control").start()
     def _connect(self) -> None:
-        if self.serial and self.serial.is_open: return
-        try: self.serial = serial.Serial(self.port, 9600, timeout=.02, write_timeout=.5); time.sleep(2.5); self.error = ""
-        except Exception as exc: self.serial, self.error = None, str(exc)
+        with self.serial_lock:
+            if self.serial and self.serial.is_open: return
+            try: self.serial = serial.Serial(self.port, 9600, timeout=.02, write_timeout=.5); time.sleep(2.5); self.error = ""
+            except Exception as exc: self.serial, self.error = None, str(exc)
+    def _close_serial(self, send_stop: bool = False) -> None:
+        with self.serial_lock:
+            port, self.serial = self.serial, None
+            if port:
+                try:
+                    if send_stop and port.is_open: port.write(b"STOP\n"); port.flush()
+                    if port.is_open: port.close()
+                except Exception: pass
     def _write(self, command: str) -> None:
         self._connect()
-        if self.serial:
-            try: self.serial.write((command + "\n").encode("ascii")); self.serial.flush()
-            except Exception as exc: self.error = str(exc); self.serial = None
+        with self.serial_lock:
+            if self.serial:
+                try: self.serial.write((command + "\n").encode("ascii")); self.serial.flush()
+                except Exception as exc: self.error = str(exc); self._close_serial()
     def select_action(self, action: str) -> str:
         action = action.upper()
         if action not in ACTIONS: raise ValueError("未知动作")
@@ -123,19 +134,13 @@ class RobotController:
         """
         with self.lock:
             self.held_keys.clear(); self.action, self.last_client_seen = "STOP", 0.0
-            previous, self.serial = self.serial, None
-            self.error = ""
-        if previous:
-            try:
-                if previous.is_open:
-                    previous.write(b"STOP\n")
-                    previous.flush()
-                    previous.close()
-            except Exception:
-                # The point of reconnect is recovery, so a failed close is safe
-                # to ignore before opening a new port session.
-                pass
+            self.last_rx = 0.0; self.error = ""
+        self._close_serial(send_stop=True)
         self._connect()
+        deadline = time.monotonic() + 4.0
+        while time.monotonic() < deadline:
+            if self.last_rx: break
+            time.sleep(.05)
         return self.status()
     @staticmethod
     def _raw(action: str, cfg: Config) -> tuple[int, int, int, int]:
@@ -174,10 +179,12 @@ class RobotController:
                 self._write(f"M,{front_right},{front_left},0,0")
             else:
                 self._write("M," + ",".join(map(str, self._raw(action, cfg))))
-            if self.serial:
-                for _ in range(8):
-                    line = self.serial.readline().decode("ascii", "ignore").strip()
-                    if line: self._parse(line)
+            with self.serial_lock:
+                port = self.serial
+                if port:
+                    for _ in range(8):
+                        line = port.readline().decode("ascii", "ignore").strip()
+                        if line: self._parse(line)
             if time.monotonic() >= next_query:
                 for command in ("IMU", "SPD", "US"): self._write(command)
                 next_query = time.monotonic() + .5
