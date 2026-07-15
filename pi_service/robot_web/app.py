@@ -17,6 +17,9 @@ def create_app(controller: RobotController, camera: CameraStreamer) -> Flask:
     def action():
         try: return jsonify(ok=True, action=controller.select_action((request.get_json(silent=True) or {}).get("action", "STOP")))
         except ValueError as exc: return jsonify(ok=False, error=str(exc)), 400
+    @app.post("/api/keys")
+    def keys():
+        return jsonify(ok=True, action=controller.update_keys(request.get_json(silent=True) or {}))
     @app.post("/api/heartbeat")
     def heartbeat(): controller.heartbeat(); return jsonify(ok=True)
     @app.post("/api/stop")

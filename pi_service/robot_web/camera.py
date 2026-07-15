@@ -28,8 +28,11 @@ class CameraStreamer:
             self._picam2 = Picamera2()
             self._picam2.configure(
                 self._picam2.create_video_configuration(
-                    main={"size": (self.width, self.height)},
-                    controls={"FrameDurationLimits": (33333, 33333)},
+                    # RGB888 and four capture buffers are the proven stable
+                    # baseline from the team's original fluent web controller.
+                    main={"size": (self.width, self.height), "format": "RGB888"},
+                    controls={"FrameDurationLimits": (33333, 33333), "AwbEnable": True},
+                    buffer_count=4,
                 )
             )
             # Apply controls after configure.  A 5 ms exposure reduces motion

@@ -10,6 +10,7 @@ import serial
 HEARTBEAT_SECONDS = 0.20
 CLIENT_TIMEOUT_SECONDS = 0.80
 ACTIONS = {"STOP", "F", "B", "PL", "PR", "FL", "FR", "BL", "BR"}
+KEY_ACTIONS = {"q": "FL", "w": "F", "e": "FR", "a": "PL", "d": "PR", "z": "BL", "s": "B", "c": "BR"}
 
 @dataclass
 class Config:
@@ -26,7 +27,7 @@ class Config:
 class RobotController:
     def __init__(self, port: str) -> None:
         self.port, self.config, self.lock = port, Config(), threading.RLock()
-        self.serial = None; self.action = "STOP"; self.last_client_seen = 0.0
+        self.serial = None; self.action = "STOP"; self.held_keys: set[str] = set(); self.last_client_seen = 0.0
         self.imu = self.speed = self.ultrasonic = None; self.reply = self.error = ""
         self._stop = threading.Event()
 
@@ -43,8 +44,25 @@ class RobotController:
     def select_action(self, action: str) -> str:
         action = action.upper()
         if action not in ACTIONS: raise ValueError("未知动作")
-        with self.lock: self.action, self.last_client_seen = action, time.monotonic()
+        with self.lock:
+            # Compatibility endpoint for terminal/curl diagnostics.  The web
+            # interface itself uses update_keys so releasing a key stops now.
+            self.held_keys.clear(); self.action, self.last_client_seen = action, time.monotonic()
         return action
+    @staticmethod
+    def _action_from_keys(keys: set[str]) -> str:
+        for key in ("q", "e", "z", "c"):
+            if key in keys: return KEY_ACTIONS[key]
+        forward, turn = int("w" in keys) - int("s" in keys), int("d" in keys) - int("a" in keys)
+        if forward > 0: return "FL" if turn < 0 else "FR" if turn > 0 else "F"
+        if forward < 0: return "BL" if turn < 0 else "BR" if turn > 0 else "B"
+        return "PL" if turn < 0 else "PR" if turn > 0 else "STOP"
+    def update_keys(self, payload: dict) -> str:
+        received = payload.get("keys", [])
+        keys = {str(key).lower() for key in received if str(key).lower() in KEY_ACTIONS} if isinstance(received, list) else set()
+        with self.lock:
+            self.held_keys, self.action, self.last_client_seen = keys, self._action_from_keys(keys), time.monotonic()
+            return self.action
     def heartbeat(self) -> None:
         with self.lock: self.last_client_seen = time.monotonic()
     def update_config(self, payload: dict) -> dict:
@@ -56,7 +74,7 @@ class RobotController:
                 setattr(self.config, key, max(0, min(255, getattr(self.config, key))))
             return asdict(self.config)
     def stop_now(self) -> None:
-        with self.lock: self.action = "STOP"
+        with self.lock: self.held_keys.clear(); self.action = "STOP"
         self._write("STOP")
     def reconnect(self) -> dict:
         """Drop the current USB serial session and open it again.
@@ -65,7 +83,7 @@ class RobotController:
         puts the controller in STOP and waits in _connect for boot to finish.
         """
         with self.lock:
-            self.action, self.last_client_seen = "STOP", 0.0
+            self.held_keys.clear(); self.action, self.last_client_seen = "STOP", 0.0
             previous, self.serial = self.serial, None
             self.error = ""
         if previous:
@@ -108,7 +126,7 @@ class RobotController:
         while not self._stop.wait(HEARTBEAT_SECONDS):
             with self.lock:
                 action = self.action if time.monotonic() - self.last_client_seen <= CLIENT_TIMEOUT_SECONDS else "STOP"
-                if action == "STOP": self.action = "STOP"
+                if action == "STOP": self.held_keys.clear(); self.action = "STOP"
                 cfg = Config(**asdict(self.config))
             if cfg.speed_mode:
                 left, right, front_left, front_right = self._speed(action, cfg)
@@ -125,4 +143,4 @@ class RobotController:
                 next_query = time.monotonic() + .5
     def status(self) -> dict:
         with self.lock: cfg, action, seen = asdict(self.config), self.action, self.last_client_seen
-        return {"serial":bool(self.serial and self.serial.is_open),"error":self.error,"reply":self.reply,"config":cfg,"action":action,"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic}
+        return {"serial":bool(self.serial and self.serial.is_open),"error":self.error,"reply":self.reply,"config":cfg,"action":action,"keys":sorted(self.held_keys),"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic}
