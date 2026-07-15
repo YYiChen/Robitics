@@ -38,7 +38,7 @@
             <label for="auxCropMode">电脑端显示方式</label>
             <select id="auxCropMode" class="full-input">
               <option value="fit">完整画面缩放到 640×480</option>
-              <option value="center">中心裁切后缩放到 640×480</option>
+              <option value="center" selected>中心裁切后缩放到 640×480</option>
             </select>
             <label for="auxCropWidth">中心裁切宽度（源图像像素）</label>
             <input id="auxCropWidth" type="number" min="1" value="640">
@@ -86,7 +86,7 @@
     <div class="card">
       <div class="card-heading"><h2>实时遥测</h2><span id="lastReply">等待 Arduino 回包</span></div>
       <div class="telemetry">
-        <div class="metric wide"><span>前向超声波</span><strong id="distance">等待数据…</strong><small>TRIG 26 / ECHO 27 · 15 cm 仅限制前进</small></div>
+        <div class="metric wide"><span>前向超声波</span><strong id="distance">等待数据…</strong><small>TRIG 26 / ECHO 27 · 30 cm 仅限制前进</small></div>
         <div class="metric"><span>IMU Roll</span><strong id="roll">—</strong></div>
         <div class="metric"><span>IMU Pitch</span><strong id="pitch">—</strong></div>
         <div class="metric"><span>IMU Yaw</span><strong id="yaw">—</strong></div>
