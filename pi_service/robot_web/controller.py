@@ -12,14 +12,15 @@ import serial
 
 HEARTBEAT_SECONDS = 0.20
 CLIENT_TIMEOUT_SECONDS = 0.80
-ACTIONS = {"STOP", "F", "B", "PL", "PR", "FL", "FR", "BL", "BR"}
-KEY_ACTIONS = {"q": "FL", "w": "F", "e": "FR", "a": "PL", "d": "PR", "z": "BL", "s": "B", "c": "BR"}
-PROFILE_ACTIONS = ("F", "B", "PL", "PR", "FL", "FR", "BL", "BR")
+ACTIONS = {"STOP", "F", "SF", "B", "PL", "PR", "FL", "FR", "BL", "BR"}
+# Q/E are steering-servo controls rather than motor profiles.
+KEY_ACTIONS = {"w": "F", "r": "SF", "a": "PL", "d": "PR", "z": "BL", "s": "B", "c": "BR"}
+PROFILE_ACTIONS = ("F", "SF", "B", "PL", "PR", "FL", "FR", "BL", "BR")
 WHEELS = ("rf", "lf", "lr", "rr")
 
 def default_profiles() -> dict[str, dict[str, int]]:
     return {
-        "F": {"rf": 80, "lf": 80, "lr": 80, "rr": 80}, "B": {"rf": -80, "lf": -80, "lr": -80, "rr": -80},
+        "F": {"rf": 80, "lf": 80, "lr": 80, "rr": 80}, "SF": {"rf": 100, "lf": 100, "lr": 100, "rr": 100}, "B": {"rf": -80, "lf": -80, "lr": -80, "rr": -80},
         "PL": {"rf": 150, "lf": -150, "lr": -150, "rr": 150}, "PR": {"rf": -150, "lf": 150, "lr": 150, "rr": -150},
         "FL": {"rf": 160, "lf": 60, "lr": 60, "rr": 160}, "FR": {"rf": 60, "lf": 160, "lr": 160, "rr": 60},
         "BL": {"rf": -60, "lf": -160, "lr": -160, "rr": -60}, "BR": {"rf": -160, "lf": -60, "lr": -60, "rr": -160},
@@ -47,6 +48,9 @@ class Config:
     pivot_pwm: int = 150
     curve_outer_pwm: int = 160
     curve_inner_pwm: int = 60
+    servo_center_angle: int = 90
+    servo_speed_dps: float = 10.0
+    servo_qe_reversed: bool = False
     profiles: dict[str, dict[str, int]] = field(default_factory=default_profiles)
 
 class RobotController:
@@ -67,6 +71,7 @@ class RobotController:
             self._save_config()
         self.serial_lock = threading.RLock()
         self.serial = None; self.action = "STOP"; self.held_keys: set[str] = set(); self.last_client_seen = 0.0
+        self.steering_direction = 0; self.last_steering_seen = 0.0; self._last_servo_motion_at = time.monotonic()
         self.imu = self.speed = self.ultrasonic = None; self.servo_angle: int | None = None; self.reply = self.error = ""; self.last_rx = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -77,7 +82,7 @@ class RobotController:
     def _read_config(path: Path) -> Config | None:
         try:
             data = json.loads(path.read_text(encoding="utf-8")); config = Config()
-            for key in ("speed_mode", "target_speed", "kp", "ki", "kd", "straight_pwm", "pivot_pwm", "curve_outer_pwm", "curve_inner_pwm"):
+            for key in ("speed_mode", "target_speed", "kp", "ki", "kd", "straight_pwm", "pivot_pwm", "curve_outer_pwm", "curve_inner_pwm", "servo_center_angle", "servo_speed_dps", "servo_qe_reversed"):
                 if key in data: setattr(config, key, type(getattr(config, key))(data[key]))
             config.profiles = normalize_profiles(data.get("profiles")); return config
         except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError, OSError): return None
@@ -124,7 +129,7 @@ class RobotController:
         self._stop.set()
         with self.lock:
             self.held_keys.clear()
-            self.action = "STOP"
+            self.action = "STOP"; self.steering_direction = 0
             snapshot = asdict(self.config)
         try:
             self._save_config(snapshot)
@@ -162,17 +167,24 @@ class RobotController:
         return action
     @staticmethod
     def _action_from_keys(keys: set[str]) -> str:
-        for key in ("q", "e", "z", "c"):
+        for key in ("z", "c"):
             if key in keys: return KEY_ACTIONS[key]
         forward, turn = int("w" in keys) - int("s" in keys), int("d" in keys) - int("a" in keys)
         if forward > 0: return "FL" if turn < 0 else "FR" if turn > 0 else "F"
         if forward < 0: return "BL" if turn < 0 else "BR" if turn > 0 else "B"
-        return "PL" if turn < 0 else "PR" if turn > 0 else "STOP"
+        if turn < 0: return "PL"
+        if turn > 0: return "PR"
+        return "SF" if "r" in keys else "STOP"
     def update_keys(self, payload: dict) -> str:
         received = payload.get("keys", [])
         keys = {str(key).lower() for key in received if str(key).lower() in KEY_ACTIONS} if isinstance(received, list) else set()
+        try: steering = int(payload.get("steering", 0))
+        except (TypeError, ValueError): steering = 0
+        steering = max(-1, min(1, steering))
         with self.lock:
-            self.held_keys, self.action, self.last_client_seen = keys, self._action_from_keys(keys), time.monotonic()
+            now = time.monotonic()
+            self.held_keys, self.action, self.last_client_seen = keys, self._action_from_keys(keys), now
+            self.steering_direction, self.last_steering_seen = steering, now
             return self.action
     def heartbeat(self) -> None:
         with self.lock: self.last_client_seen = time.monotonic()
@@ -185,12 +197,15 @@ class RobotController:
             self.config.target_speed = max(0.0, min(200.0, self.config.target_speed))
             for key in ("straight_pwm", "pivot_pwm", "curve_outer_pwm", "curve_inner_pwm"):
                 setattr(self.config, key, max(0, min(255, getattr(self.config, key))))
+            self.config.servo_center_angle = max(0, min(180, self.config.servo_center_angle))
+            self.config.servo_speed_dps = max(1.0, min(30.0, self.config.servo_speed_dps))
             result = asdict(self.config)
         # SD-card I/O must not hold the control/heartbeat lock.
         self._save_config(result)
         return result
     def stop_now(self) -> None:
-        with self.lock: self.held_keys.clear(); self.action = "STOP"
+        with self.lock:
+            self.held_keys.clear(); self.action = "STOP"; self.steering_direction = 0
         self._write("STOP")
     def set_servo_angle(self, raw_angle: object) -> int:
         """Move the SG90 without changing the drive action or drive config."""
@@ -211,7 +226,7 @@ class RobotController:
         puts the controller in STOP and waits in _connect for boot to finish.
         """
         with self.lock:
-            self.held_keys.clear(); self.action, self.last_client_seen = "STOP", 0.0
+            self.held_keys.clear(); self.action, self.last_client_seen = "STOP", 0.0; self.steering_direction = 0
             self.last_rx = 0.0; self.error = ""
         self._close_serial(send_stop=True)
         self._connect()
@@ -228,7 +243,22 @@ class RobotController:
     @staticmethod
     def _speed(action: str, cfg: Config) -> tuple[float, float, int, int]:
         t, h = cfg.target_speed, cfg.target_speed * .5
-        return {"F":(t,t,0,0),"B":(-t,-t,0,0),"PL":(-t,t,-cfg.pivot_pwm,cfg.pivot_pwm),"PR":(t,-t,cfg.pivot_pwm,-cfg.pivot_pwm),"FL":(h,t,cfg.curve_inner_pwm,cfg.curve_outer_pwm),"FR":(t,h,cfg.curve_outer_pwm,cfg.curve_inner_pwm),"BL":(-t,-h,-cfg.curve_inner_pwm,-cfg.curve_outer_pwm),"BR":(-h,-t,-cfg.curve_outer_pwm,-cfg.curve_inner_pwm),"STOP":(0,0,0,0)}[action]
+        return {"F":(t,t,0,0),"SF":(t*.5,t*.5,0,0),"B":(-t,-t,0,0),"PL":(-t,t,-cfg.pivot_pwm,cfg.pivot_pwm),"PR":(t,-t,cfg.pivot_pwm,-cfg.pivot_pwm),"FL":(h,t,cfg.curve_inner_pwm,cfg.curve_outer_pwm),"FR":(t,h,cfg.curve_outer_pwm,cfg.curve_inner_pwm),"BL":(-t,-h,-cfg.curve_inner_pwm,-cfg.curve_outer_pwm),"BR":(-h,-t,-cfg.curve_outer_pwm,-cfg.curve_inner_pwm),"STOP":(0,0,0,0)}[action]
+
+    def _advance_steering(self, now: float, cfg: Config) -> None:
+        """Move by the Pi's monotonic clock while a browser steering heartbeat exists."""
+        with self.lock:
+            elapsed = max(0.0, now - self._last_servo_motion_at)
+            self._last_servo_motion_at = now
+            direction = self.steering_direction if now - self.last_steering_seen <= CLIENT_TIMEOUT_SECONDS else 0
+            if cfg.servo_qe_reversed:
+                direction = -direction
+            current = self.servo_angle if self.servo_angle is not None else cfg.servo_center_angle
+        if not direction or elapsed <= 0:
+            return
+        target = max(0, min(180, round(current + direction * cfg.servo_speed_dps * elapsed)))
+        if target != current:
+            self.set_servo_angle(target)
     def _parse(self, text: str) -> None:
         self.reply, self.last_rx = text, time.monotonic()
         try:
@@ -247,6 +277,7 @@ class RobotController:
                 action = self.action if time.monotonic() - self.last_client_seen <= CLIENT_TIMEOUT_SECONDS else "STOP"
                 if action == "STOP": self.held_keys.clear(); self.action = "STOP"
                 cfg = Config(**asdict(self.config))
+            self._advance_steering(time.monotonic(), cfg)
             if cfg.speed_mode:
                 left, right, front_left, front_right = self._speed(action, cfg)
                 self._write(f"V,{left:.1f},{right:.1f}")
@@ -265,4 +296,4 @@ class RobotController:
     def status(self) -> dict:
         with self.lock: cfg, action, seen = asdict(self.config), self.action, self.last_client_seen
         serial_open = bool(self.serial and self.serial.is_open); age = time.monotonic() - self.last_rx if self.last_rx else None
-        return {"serial":serial_open,"arduino_online":serial_open and age is not None and age <= 1.5,"last_rx_age":age,"error":self.error,"reply":self.reply,"config":cfg,"action":action,"keys":sorted(self.held_keys),"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic,"servo_angle":self.servo_angle}
+        return {"serial":serial_open,"arduino_online":serial_open and age is not None and age <= 1.5,"last_rx_age":age,"error":self.error,"reply":self.reply,"config":cfg,"action":action,"keys":sorted(self.held_keys),"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"steering_direction":self.steering_direction,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic,"servo_angle":self.servo_angle}

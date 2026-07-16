@@ -116,8 +116,8 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
     @app.get("/api/status")
     def status():
         return jsonify(
-            api_version="mjpeg-console-2026-07-16",
-            capabilities={"system_metrics": True, "highres_fps_control": hasattr(camera, "set_highres_fps")},
+            api_version="robot-console-2026-07-16-steering",
+            capabilities={"system_metrics": True, "highres_fps_control": hasattr(camera, "set_highres_fps"), "highres_fps_max": 30},
             robot=controller.status(),
             camera=camera.status_dict(),
             system=system_metrics.status_dict(),

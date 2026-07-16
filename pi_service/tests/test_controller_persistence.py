@@ -21,12 +21,41 @@ class ControllerPersistenceTests(unittest.TestCase):
                 "profiles": {"F": {"rf": 123, "lf": 117, "lr": 117, "rr": 123}},
                 "speed_mode": True,
                 "target_speed": 42,
+                "servo_center_angle": 88,
+                "servo_speed_dps": 12,
+                "servo_qe_reversed": True,
             })
 
             second = RobotController("unused", config_path)
             self.assertEqual(second.config.profiles["F"], {"rf": 123, "lf": 117, "lr": 117, "rr": 123})
             self.assertTrue(second.config.speed_mode)
             self.assertEqual(second.config.target_speed, 42.0)
+            self.assertEqual(second.config.profiles["SF"], {"rf": 100, "lf": 100, "lr": 100, "rr": 100})
+            self.assertEqual(second.config.servo_center_angle, 88)
+            self.assertEqual(second.config.servo_speed_dps, 12.0)
+            self.assertTrue(second.config.servo_qe_reversed)
+
+    def test_r_is_slow_forward_and_qe_do_not_select_motor_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = RobotController("unused", Path(directory) / "drive_config.json")
+            self.assertEqual(controller.update_keys({"keys": ["r"]}), "SF")
+            self.assertEqual(controller.config.profiles["SF"], {"rf": 100, "lf": 100, "lr": 100, "rr": 100})
+            self.assertEqual(controller.update_keys({"keys": [], "steering": -1}), "STOP")
+            self.assertEqual(controller.steering_direction, -1)
+
+    def test_steering_uses_pi_time_and_holds_after_heartbeat_stops(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = RobotController("unused", Path(directory) / "drive_config.json")
+            commands: list[str] = []
+            controller._write = commands.append
+            controller.servo_angle = 90
+            controller.update_keys({"keys": [], "steering": 1})
+            controller._last_servo_motion_at = 10.0
+            controller.last_steering_seen = 10.0
+            controller._advance_steering(10.5, controller.config)
+            self.assertEqual(commands, ["SV,95"])
+            controller._advance_steering(11.0, controller.config)
+            self.assertEqual(commands, ["SV,95"])
 
     def test_shutdown_flushes_latest_in_memory_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

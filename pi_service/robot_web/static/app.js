@@ -3,16 +3,17 @@ const video = $("#video"), webrtcVideo = $("#webrtcVideo"), highresVideo = $("#h
 const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:false});
 let folder, aborter, count = 0, profiles = {}, activeMode = "all", configLoaded = false, keysSending = false, keysQueued = false;
 let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, highresProfileDirty = false, highresProfileBusy = false, highresFpsDirty = false, highresFpsBusy = false, exposureDirty = false, exposureBusy = false, videoRetryTimer;
-let servoBusy = false, queuedServoAngle = null;
+let servoBusy = false, queuedServoAngle = null, steeringCenterAngle = 90, steeringReversed = false;
 let receivedFrameCount = 0, receivedFrameWindowAt = performance.now(), browserReceiveFps = 0, statusRttMs = null;
 let activeVideoTransport = "mjpeg", currentWebrtcUrl = "";
 let highresPreviewEnabled = false, highresPreviewAvailable = false;
 let webrtcPeer = null, webrtcSessionUrl = "", webrtcStatsTimer = null, webrtcStatsPrevious = null;
 const webrtcMetrics = {state:"未连接", fps:null, kbps:null, jitterMs:null, jitterBufferMs:null, packetsLost:null, framesDropped:null};
 const wheelNames = ["rf", "lf", "lr", "rr"];
-const actionKeys = {FL:"q", F:"w", FR:"e", PL:"a", PR:"d", BL:"z", B:"s", BR:"c"};
-const keyboardKeys = {w:"w", a:"a", s:"s", d:"d", q:"q", e:"e", z:"z", c:"c", ArrowUp:"w", ArrowDown:"s", ArrowLeft:"a", ArrowRight:"d"};
+const actionKeys = {F:"w", SF:"r", PL:"a", PR:"d", BL:"z", B:"s", BR:"c"};
+const keyboardKeys = {w:"w", r:"r", a:"a", s:"s", d:"d", z:"z", c:"c", ArrowUp:"w", ArrowDown:"s", ArrowLeft:"a", ArrowRight:"d"};
 const heldKeys = new Set();
+const heldSteeringKeys = new Set();
 
 async function requestJson(url, options = {}, timeoutMs = 500) {
   const abort = new AbortController(), timer = setTimeout(() => abort.abort(), timeoutMs);
@@ -293,27 +294,38 @@ $("#applyExposure").onclick = async () => {
 };
 
 function editing(event) { return ["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName); }
+function steeringDirection() {
+  if (heldSteeringKeys.has("q") === heldSteeringKeys.has("e")) return 0;
+  return heldSteeringKeys.has("q") ? -1 : 1;
+}
 async function sendKeys() {
   if (keysSending) { keysQueued = true; return; }
   keysSending = true;
-  do { keysQueued = false; try { const response = await requestJson("/api/keys", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({keys:[...heldKeys]}), keepalive:true});
+  do { keysQueued = false; try { const response = await requestJson("/api/keys", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({keys:[...heldKeys], steering:steeringDirection()}), keepalive:true});
       const data = await response.json(); if (!response.ok) throw Error(data.error || "动作发送失败"); $("#action").textContent = data.action;
     } catch (error) { note(error.message); }
   } while (keysQueued);
   keysSending = false;
 }
 function setKey(key, pressed) { if (pressed) heldKeys.add(key); else heldKeys.delete(key); sendKeys(); }
-function releaseKeys() { heldKeys.clear(); sendKeys(); }
+function setSteeringKey(key, pressed) { if (pressed) heldSteeringKeys.add(key); else heldSteeringKeys.delete(key); sendKeys(); }
+function releaseKeys() { heldKeys.clear(); heldSteeringKeys.clear(); sendKeys(); }
 for (const button of document.querySelectorAll("[data-action]")) {
   const key = actionKeys[button.dataset.action];
   if (!key) { button.onclick = releaseKeys; continue; }
   button.addEventListener("pointerdown", event => { event.preventDefault(); button.setPointerCapture(event.pointerId); setKey(key, true); });
   for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) button.addEventListener(name, event => { event.preventDefault(); setKey(key, false); });
 }
+for (const button of document.querySelectorAll("[data-steering]")) {
+  const key = button.dataset.steering;
+  button.addEventListener("pointerdown", event => { event.preventDefault(); button.setPointerCapture(event.pointerId); setSteeringKey(key, true); });
+  for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) button.addEventListener(name, event => { event.preventDefault(); setSteeringKey(key, false); });
+}
 addEventListener("keydown", event => { if (editing(event) || event.repeat) return; if (event.code === "Space") { event.preventDefault(); releaseKeys(); return; }
+  const steering = event.key?.toLowerCase(); if (steering === "q" || steering === "e") { event.preventDefault(); setSteeringKey(steering, true); return; }
   const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, true); }
 });
-addEventListener("keyup", event => { if (editing(event)) return; const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, false); } });
+addEventListener("keyup", event => { if (editing(event)) return; const steering = event.key?.toLowerCase(); if (steering === "q" || steering === "e") { event.preventDefault(); setSteeringKey(steering, false); return; } const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, false); } });
 addEventListener("blur", releaseKeys); addEventListener("beforeunload", () => navigator.sendBeacon("/api/stop")); setInterval(sendKeys, 180);
 async function sendHeartbeat() { try { await requestJson("/api/heartbeat", {method:"POST", keepalive:true}, 500); } catch (_) {} }
 setInterval(sendHeartbeat, 180);
@@ -348,9 +360,39 @@ async function flushServoQueue() {
 $("#servoSlider").addEventListener("input", () => {
   const angle = Number($("#servoSlider").value);
   $("#servoAngleDisplay").textContent = `${angle}°`;
+  updateSteeringDial(angle, true);
   queuedServoAngle = angle;
   void flushServoQueue();
 });
+
+function updateSteeringDial(angle, known) {
+  const numeric = Number(angle);
+  const dial = $("#steeringDial"), text = $("#steeringDialText");
+  if (!Number.isFinite(numeric) || !known) {
+    dial.classList.add("steering-unknown"); text.textContent = "舵机状态未知"; return;
+  }
+  const denominator = Math.max(1, numeric >= steeringCenterAngle ? 180 - steeringCenterAngle : steeringCenterAngle);
+  let ratio = clamp((numeric - steeringCenterAngle) / denominator, -1, 1);
+  // The reverse switch tells the visualizer which physical angle is left.
+  if (steeringReversed) ratio = -ratio;
+  dial.classList.remove("steering-unknown"); dial.style.setProperty("--turn", `${ratio * 58}deg`);
+  text.textContent = `${Math.round(numeric)}° · ${Math.abs(ratio) < .02 ? "回正" : ratio < 0 ? "左转" : "右转"}`;
+}
+
+$("#servoCenter").onclick = () => {
+  $("#servoSlider").value = steeringCenterAngle;
+  $("#servoSlider").dispatchEvent(new Event("input"));
+};
+$("#applyServoSettings").onclick = async () => {
+  const payload = {servo_center_angle:Number($("#servoCenterAngle").value), servo_speed_dps:Number($("#servoSpeedDps").value), servo_qe_reversed:$("#servoQeReversed").checked};
+  try {
+    const response = await fetch("/api/config", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+    const data = await response.json(); if (!response.ok || !data.ok) throw Error(data.error || "转向设置保存失败");
+    steeringCenterAngle = data.config.servo_center_angle; steeringReversed = !!data.config.servo_qe_reversed;
+    $("#servoCenterAngle").value = steeringCenterAngle; $("#servoSpeedDps").value = data.config.servo_speed_dps; $("#servoQeReversed").checked = steeringReversed;
+    updateSteeringDial($("#servoSlider").value, true); note("转向设置已保存");
+  } catch (error) { note(error.message); }
+};
 
 function profileFor(action) { return profiles[action] || {rf:0, lf:0, lr:0, rr:0}; }
 function signedMagnitude(value, sign) { return Math.round(Math.abs(Number(value) || 0)) * (sign < 0 ? -1 : 1); }
@@ -377,7 +419,10 @@ $("#applyProfile").onclick = async () => { profiles[$("#profileAction").value] =
 };
 
 function fillConfig(config) {
-  profiles = config.profiles || profiles; $("#speedMode").checked = !!config.speed_mode; $("#targetSpeed").value = config.target_speed; $("#kp").value = config.kp; $("#ki").value = config.ki; $("#kd").value = config.kd; fillProfileEditor();
+  profiles = config.profiles || profiles; $("#speedMode").checked = !!config.speed_mode; $("#targetSpeed").value = config.target_speed; $("#kp").value = config.kp; $("#ki").value = config.ki; $("#kd").value = config.kd;
+  steeringCenterAngle = Number(config.servo_center_angle ?? 90); steeringReversed = !!config.servo_qe_reversed;
+  $("#servoCenterAngle").value = steeringCenterAngle; $("#servoSpeedDps").value = config.servo_speed_dps ?? 10; $("#servoQeReversed").checked = steeringReversed;
+  fillProfileEditor(); updateSteeringDial($("#servoSlider").value, true);
 }
 $("#applyPid").onclick = async () => { const payload = {speed_mode:$("#speedMode").checked, target_speed:Number($("#targetSpeed").value), kp:Number($("#kp").value), ki:Number($("#ki").value), kd:Number($("#kd").value)};
   try { const response = await fetch("/api/config", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)}); if (!response.ok) throw Error("PID 参数提交失败"); note("PID 参数已应用并保存"); } catch (error) { note(error.message); }
@@ -495,7 +540,8 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     $("#oledState").textContent = oled.online ? `在线 · ${oled.address || "I2C"}` : oled.disabled ? "已关闭" : "不可用";
     $("#oledHint").textContent = oled.online ? `I2C-${oled.i2c_port ?? 1} · 每秒刷新状态` : (oled.error || "检查 I2C、地址和 luma.oled 依赖");
     $("#controlState").innerHTML = dot(robot.client_online, robot.client_online ? "在线" : "已超时停车"); $("#action").textContent = robot.action; $("#keys").textContent = robot.keys?.join("+") || "—"; $("#distance").textContent = distance(robot.ultrasonic); $("#lastReply").textContent = robot.reply || "等待 Arduino 回包";
-    if (!servoBusy && robot.servo_angle != null) { $("#servoSlider").value = robot.servo_angle; $("#servoAngleDisplay").textContent = `${robot.servo_angle}°`; }
+    if (!servoBusy && robot.servo_angle != null) { $("#servoSlider").value = robot.servo_angle; $("#servoAngleDisplay").textContent = `${robot.servo_angle}°`; updateSteeringDial(robot.servo_angle, true); }
+    else if (robot.servo_angle == null) updateSteeringDial(null, false);
     if (robot.imu) { $("#roll").textContent = `${robot.imu[0].toFixed(2)}°`; $("#pitch").textContent = `${robot.imu[1].toFixed(2)}°`; $("#yaw").textContent = `${robot.imu[2].toFixed(2)}°`; }
     if (robot.speed) { $("#wheelSpeed").textContent = `${robot.speed[0].toFixed(1)} / ${robot.speed[1].toFixed(1)} pps`; $("#targetWheelSpeed").textContent = `${robot.speed[2].toFixed(1)} / ${robot.speed[3].toFixed(1)} pps`; }
     if (!configLoaded) { fillConfig(robot.config); configLoaded = true; }

@@ -77,8 +77,9 @@ class CameraMetricsTests(unittest.TestCase):
             self.assertEqual(status["highres_profile"]["target_fps"], 5.0)
             second = CameraStreamer(config_path=config_path)
             self.assertEqual(second.highres_fps, 5.0)
+            self.assertEqual(second.set_highres_fps(30)["highres"]["target_fps"], 30.0)
             with self.assertRaises(ValueError):
-                second.set_highres_fps(16)
+                second.set_highres_fps(31)
 
     def test_mjpeg_highres_work_requires_an_active_preview_client(self) -> None:
         camera = CameraStreamer()
@@ -142,8 +143,9 @@ class CameraMetricsTests(unittest.TestCase):
             self.assertEqual(status["highres"]["target_fps"], 5.0)
             second = DualStreamCamera(config_path=config_path)
             self.assertEqual(second.status_dict()["highres"]["target_fps"], 5.0)
+            self.assertEqual(second.set_highres_fps(30)["highres"]["target_fps"], 30.0)
             with self.assertRaises(ValueError):
-                second.set_highres_fps(16)
+                second.set_highres_fps(31)
 
     @unittest.skipUnless(importlib.util.find_spec("flask"), "Flask is installed on the Raspberry Pi deployment target")
     def test_webrtc_mode_rejects_mjpeg_endpoints(self) -> None:
@@ -170,9 +172,10 @@ class CameraMetricsTests(unittest.TestCase):
         response = app.test_client().get("/api/status")
         self.assertEqual(response.status_code, 200)
         body = response.get_json()
-        self.assertEqual(body["api_version"], "mjpeg-console-2026-07-16")
+        self.assertEqual(body["api_version"], "robot-console-2026-07-16-steering")
         self.assertTrue(body["capabilities"]["system_metrics"])
         self.assertTrue(body["capabilities"]["highres_fps_control"])
+        self.assertEqual(body["capabilities"]["highres_fps_max"], 30)
 
 
 if __name__ == "__main__":

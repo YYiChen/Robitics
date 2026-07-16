@@ -14,7 +14,7 @@ from urllib.request import urlopen
 
 DEFAULT_HIGHRES_FPS = 2.0
 MIN_HIGHRES_FPS = 1.0
-MAX_HIGHRES_FPS = 15.0
+MAX_HIGHRES_FPS = 30.0
 HIGHRES_JPEG_QUALITY = 75
 # When no browser is watching the high-resolution feed, do not spend CPU on
 # JPEG encoding.  A latest-image API call can still request one on demand.
