@@ -96,6 +96,15 @@ class CameraMetricsTests(unittest.TestCase):
             self.assertTrue(status["stream_profile"]["low_latency_mux"])
             self.assertEqual(status["stream_profile"]["camera_buffer_count"], 2)
 
+    def test_dual_webrtc_camera_only_encodes_highres_when_a_client_is_present(self) -> None:
+        camera = DualStreamCamera()
+        self.assertFalse(camera._highres_has_clients())
+        camera._highres_client_started()
+        self.assertTrue(camera._highres_has_clients())
+        self.assertTrue(camera._highres_wakeup.is_set())
+        camera._highres_client_stopped()
+        self.assertFalse(camera._highres_has_clients())
+
     @unittest.skipUnless(importlib.util.find_spec("flask"), "Flask is installed on the Raspberry Pi deployment target")
     def test_webrtc_mode_rejects_mjpeg_endpoints(self) -> None:
         from app import create_app

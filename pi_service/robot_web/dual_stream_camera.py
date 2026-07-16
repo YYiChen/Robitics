@@ -14,6 +14,9 @@ from urllib.request import urlopen
 
 HIGHRES_FPS = 2.0
 HIGHRES_JPEG_QUALITY = 75
+# When no browser is watching the high-resolution feed, do not spend CPU on
+# JPEG encoding.  A latest-image API call can still request one on demand.
+HIGHRES_CACHE_MAX_AGE = 0.45
 HIGHRES_PROFILES = {
     "source": {"label": "原始尺寸 · JPEG 75", "max_width": None},
     "medium_1640": {"label": "高清平衡 · 最大 1640 px · JPEG 75", "max_width": 1640},
@@ -71,6 +74,7 @@ class DualStreamCamera:
         self._last_jpeg_bytes = 0
         self._last_encode_ms = 0.0
         self._active_clients = 0
+        self._highres_wakeup = threading.Event()
 
     @property
     def _probe_url(self) -> str:
@@ -186,25 +190,49 @@ class DualStreamCamera:
             self.status, self.error, self._running = "不可用", str(exc), False
             self.stop()
 
+    def _highres_client_started(self) -> None:
+        with self._metrics_lock:
+            self._active_clients += 1
+        # Do not make a newly opened preview wait for the next 0.5 s slot.
+        self._highres_wakeup.set()
+
+    def _highres_client_stopped(self) -> None:
+        with self._metrics_lock:
+            self._active_clients = max(0, self._active_clients - 1)
+
+    def _highres_has_clients(self) -> bool:
+        with self._metrics_lock:
+            return self._active_clients > 0
+
+    def _capture_highres_frame(self) -> bytes | None:
+        started = time.monotonic()
+        with self._camera_lock:
+            if self._picam2 is None:
+                return None
+            frame = self._picam2.capture_array("main")
+        width, height = self._highres_dimensions()
+        if (width, height) != (self.width, self.height):
+            frame = self._cv2.resize(frame, (width, height), interpolation=self._cv2.INTER_AREA)
+        ok, buffer = self._cv2.imencode(".jpg", frame, [self._cv2.IMWRITE_JPEG_QUALITY, HIGHRES_JPEG_QUALITY])
+        if not ok:
+            return None
+        jpeg = buffer.tobytes()
+        self._record_frame(len(jpeg), (time.monotonic() - started) * 1000.0)
+        with self._condition:
+            self._jpeg, self._sequence = jpeg, self._sequence + 1
+            self._condition.notify_all()
+        return jpeg
+
     def _capture_highres(self) -> None:
         interval = 1.0 / HIGHRES_FPS
         try:
             while not self._stop.is_set():
+                if not self._highres_has_clients():
+                    self._highres_wakeup.wait(timeout=1.0)
+                    self._highres_wakeup.clear()
+                    continue
                 started = time.monotonic()
-                with self._camera_lock:
-                    if self._picam2 is None:
-                        break
-                    frame = self._picam2.capture_array("main")
-                width, height = self._highres_dimensions()
-                if (width, height) != (self.width, self.height):
-                    frame = self._cv2.resize(frame, (width, height), interpolation=self._cv2.INTER_AREA)
-                ok, buffer = self._cv2.imencode(".jpg", frame, [self._cv2.IMWRITE_JPEG_QUALITY, HIGHRES_JPEG_QUALITY])
-                if ok:
-                    jpeg = buffer.tobytes()
-                    self._record_frame(len(jpeg), (time.monotonic() - started) * 1000.0)
-                    with self._condition:
-                        self._jpeg, self._sequence = jpeg, self._sequence + 1
-                        self._condition.notify_all()
+                self._capture_highres_frame()
                 self._stop.wait(max(0.0, interval - (time.monotonic() - started)))
         except Exception as exc:
             self.status, self.error = "高清 JPEG 采集错误", str(exc)
@@ -220,12 +248,18 @@ class DualStreamCamera:
 
     def latest_highres_jpeg(self) -> bytes | None:
         with self._condition:
-            return self._jpeg
+            cached = self._jpeg
+        with self._metrics_lock:
+            cache_age = time.monotonic() - self._last_frame_at if self._last_frame_at else float("inf")
+        if cached is not None and cache_age <= HIGHRES_CACHE_MAX_AGE:
+            return cached
+        # The one-shot API remains available for DL and verification even when
+        # the browser preview is deliberately switched off.
+        return self._capture_highres_frame() or cached
 
     def iter_highres_mjpeg(self) -> Iterator[bytes]:
         last = -1
-        with self._metrics_lock:
-            self._active_clients += 1
+        self._highres_client_started()
         try:
             while not self._stop.is_set():
                 with self._condition:
@@ -238,8 +272,7 @@ class DualStreamCamera:
                     self._record_stream(len(payload))
                     yield payload
         finally:
-            with self._metrics_lock:
-                self._active_clients = max(0, self._active_clients - 1)
+            self._highres_client_stopped()
 
     def status_dict(self) -> dict:
         now = time.monotonic()
@@ -300,6 +333,7 @@ class DualStreamCamera:
 
     def stop(self) -> None:
         self._stop.set()
+        self._highres_wakeup.set()
         thread = self._thread
         if thread and thread is not threading.current_thread():
             thread.join(timeout=2.0)
