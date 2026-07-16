@@ -11,10 +11,11 @@ from pathlib import Path
 import serial
 
 HEARTBEAT_SECONDS = 0.20
+SERVO_TICK_SECONDS = 0.05
 CLIENT_TIMEOUT_SECONDS = 0.80
 ACTIONS = {"STOP", "F", "SF", "B", "PL", "PR", "FL", "FR", "BL", "BR"}
 # Q/E are steering-servo controls rather than motor profiles.
-KEY_ACTIONS = {"w": "F", "r": "SF", "a": "PL", "d": "PR", "z": "BL", "s": "B", "c": "BR"}
+KEY_ACTIONS = {"w": "F", "r": "SF", "a": "PL", "d": "PR", "s": "B", "c": "BR"}
 PROFILE_ACTIONS = ("F", "SF", "B", "PL", "PR", "FL", "FR", "BL", "BR")
 WHEELS = ("rf", "lf", "lr", "rr")
 
@@ -72,6 +73,7 @@ class RobotController:
         self.serial_lock = threading.RLock()
         self.serial = None; self.action = "STOP"; self.held_keys: set[str] = set(); self.last_client_seen = 0.0
         self.steering_direction = 0; self.last_steering_seen = 0.0; self._last_servo_motion_at = time.monotonic()
+        self._servo_target_angle: float | None = None
         self.imu = self.speed = self.ultrasonic = None; self.servo_angle: int | None = None; self.reply = self.error = ""; self.last_rx = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -167,7 +169,7 @@ class RobotController:
         return action
     @staticmethod
     def _action_from_keys(keys: set[str]) -> str:
-        for key in ("z", "c"):
+        for key in ("c",):
             if key in keys: return KEY_ACTIONS[key]
         forward, turn = int("w" in keys) - int("s" in keys), int("d" in keys) - int("a" in keys)
         if forward > 0: return "FL" if turn < 0 else "FR" if turn > 0 else "F"
@@ -207,7 +209,7 @@ class RobotController:
         with self.lock:
             self.held_keys.clear(); self.action = "STOP"; self.steering_direction = 0
         self._write("STOP")
-    def set_servo_angle(self, raw_angle: object) -> int:
+    def set_servo_angle(self, raw_angle: object, *, track_target: bool = True) -> int:
         """Move the SG90 without changing the drive action or drive config."""
         try: angle = int(raw_angle)
         except (TypeError, ValueError): raise ValueError("舵机角度必须是 0 到 180 的整数") from None
@@ -217,7 +219,9 @@ class RobotController:
         # Keep the web slider at the requested position immediately. The
         # Arduino's later OK:SV reply confirms the same value, but this is
         # intentionally not saved in drive_config.json.
-        with self.lock: self.servo_angle = angle
+        with self.lock:
+            self.servo_angle = angle
+            if track_target: self._servo_target_angle = float(angle)
         return angle
     def reconnect(self) -> dict:
         """Drop the current USB serial session and open it again.
@@ -254,11 +258,14 @@ class RobotController:
             if cfg.servo_qe_reversed:
                 direction = -direction
             current = self.servo_angle if self.servo_angle is not None else cfg.servo_center_angle
+            target = self._servo_target_angle if self._servo_target_angle is not None else float(current)
         if not direction or elapsed <= 0:
             return
-        target = max(0, min(180, round(current + direction * cfg.servo_speed_dps * elapsed)))
-        if target != current:
-            self.set_servo_angle(target)
+        target = max(0.0, min(180.0, target + direction * cfg.servo_speed_dps * elapsed))
+        with self.lock: self._servo_target_angle = target
+        requested = round(target)
+        if requested != current:
+            self.set_servo_angle(requested, track_target=False)
     def _parse(self, text: str) -> None:
         self.reply, self.last_rx = text, time.monotonic()
         try:
@@ -271,28 +278,32 @@ class RobotController:
                 self.servo_angle = int(text.split(",", 1)[1])
         except ValueError: pass
     def _run(self) -> None:
-        next_query = 0.0
-        while not self._stop.wait(HEARTBEAT_SECONDS):
+        next_motor, next_query = 0.0, 0.0
+        while not self._stop.wait(SERVO_TICK_SECONDS):
+            now = time.monotonic()
             with self.lock:
-                action = self.action if time.monotonic() - self.last_client_seen <= CLIENT_TIMEOUT_SECONDS else "STOP"
+                action = self.action if now - self.last_client_seen <= CLIENT_TIMEOUT_SECONDS else "STOP"
                 if action == "STOP": self.held_keys.clear(); self.action = "STOP"
                 cfg = Config(**asdict(self.config))
-            self._advance_steering(time.monotonic(), cfg)
+            self._advance_steering(now, cfg)
+            if now < next_motor:
+                continue
             if cfg.speed_mode:
                 left, right, front_left, front_right = self._speed(action, cfg)
                 self._write(f"V,{left:.1f},{right:.1f}")
                 self._write(f"M,{front_right},{front_left},0,0")
             else:
                 self._write("M," + ",".join(map(str, self._raw(action, cfg))))
+            next_motor = now + HEARTBEAT_SECONDS
             with self.serial_lock:
                 port = self.serial
                 if port:
                     for _ in range(8):
                         line = port.readline().decode("ascii", "ignore").strip()
                         if line: self._parse(line)
-            if time.monotonic() >= next_query:
+            if now >= next_query:
                 for command in ("IMU", "SPD", "US"): self._write(command)
-                next_query = time.monotonic() + .5
+                next_query = now + .5
     def status(self) -> dict:
         with self.lock: cfg, action, seen = asdict(self.config), self.action, self.last_client_seen
         serial_open = bool(self.serial and self.serial.is_open); age = time.monotonic() - self.last_rx if self.last_rx else None

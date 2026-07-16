@@ -10,8 +10,8 @@ let highresPreviewEnabled = false, highresPreviewAvailable = false;
 let webrtcPeer = null, webrtcSessionUrl = "", webrtcStatsTimer = null, webrtcStatsPrevious = null;
 const webrtcMetrics = {state:"未连接", fps:null, kbps:null, jitterMs:null, jitterBufferMs:null, packetsLost:null, framesDropped:null};
 const wheelNames = ["rf", "lf", "lr", "rr"];
-const actionKeys = {F:"w", SF:"r", PL:"a", PR:"d", BL:"z", B:"s", BR:"c"};
-const keyboardKeys = {w:"w", r:"r", a:"a", s:"s", d:"d", z:"z", c:"c", ArrowUp:"w", ArrowDown:"s", ArrowLeft:"a", ArrowRight:"d"};
+const actionKeys = {F:"w", SF:"r", PL:"a", PR:"d", B:"s", BR:"c"};
+const keyboardKeys = {w:"w", r:"r", a:"a", s:"s", d:"d", c:"c", ArrowUp:"w", ArrowDown:"s", ArrowLeft:"a", ArrowRight:"d"};
 const heldKeys = new Set();
 const heldSteeringKeys = new Set();
 
@@ -321,7 +321,9 @@ for (const button of document.querySelectorAll("[data-steering]")) {
   button.addEventListener("pointerdown", event => { event.preventDefault(); button.setPointerCapture(event.pointerId); setSteeringKey(key, true); });
   for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) button.addEventListener(name, event => { event.preventDefault(); setSteeringKey(key, false); });
 }
+for (const button of document.querySelectorAll("[data-servo-center]")) button.addEventListener("click", centerServo);
 addEventListener("keydown", event => { if (editing(event) || event.repeat) return; if (event.code === "Space") { event.preventDefault(); releaseKeys(); return; }
+  if (event.key?.toLowerCase() === "z") { event.preventDefault(); centerServo(); return; }
   const steering = event.key?.toLowerCase(); if (steering === "q" || steering === "e") { event.preventDefault(); setSteeringKey(steering, true); return; }
   const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, true); }
 });
@@ -381,10 +383,12 @@ function updateSteeringDial(angle, known) {
   turnLabel.textContent = `${direction} · 偏角 ${Math.abs(turn).toFixed(0)}°`;
 }
 
-$("#servoCenter").onclick = () => {
+function centerServo() {
+  heldSteeringKeys.clear(); sendKeys();
   $("#servoSlider").value = steeringCenterAngle;
   $("#servoSlider").dispatchEvent(new Event("input"));
-};
+}
+$("#servoCenter").onclick = centerServo;
 $("#applyServoSettings").onclick = async () => {
   const payload = {servo_center_angle:Number($("#servoCenterAngle").value), servo_speed_dps:Number($("#servoSpeedDps").value), servo_qe_reversed:$("#servoQeReversed").checked};
   try {
