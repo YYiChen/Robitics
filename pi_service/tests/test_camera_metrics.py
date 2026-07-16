@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[1] / "robot_web"))
 
 from camera import CameraStreamer
+from dual_stream_camera import DualStreamCamera
 from webrtc_stream import WebRTCStreamer
 
 
@@ -75,6 +76,20 @@ class CameraMetricsTests(unittest.TestCase):
         self.assertEqual(status["resolution"], "1280x720")
         self.assertEqual(status["webrtc_port"], 8889)
         self.assertEqual(status["rtsp_url_template"], "rtsp://{host}:8554/cam")
+
+    def test_dual_webrtc_camera_keeps_low_video_and_highres_jpeg_separate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            camera = DualStreamCamera(
+                video_width=640, video_height=480, video_fps=30, video_bitrate=1_500_000,
+                highres_width=1640, highres_height=1232,
+                config_path=Path(directory) / "camera_config.json",
+            )
+            status = camera.set_highres_profile("medium_1640")
+            self.assertEqual(status["transport"], "webrtc")
+            self.assertEqual(status["resolution"], "640x480")
+            self.assertEqual(status["highres_profile"]["resolution"], "1640x1232")
+            self.assertEqual(status["highres_profile"]["target_fps"], 2.0)
+            self.assertTrue(status["highres_available"])
 
     @unittest.skipUnless(importlib.util.find_spec("flask"), "Flask is installed on the Raspberry Pi deployment target")
     def test_webrtc_mode_rejects_mjpeg_endpoints(self) -> None:

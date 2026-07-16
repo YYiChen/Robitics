@@ -23,7 +23,7 @@ chmod +x install_webrtc.sh start_webrtc.sh
 ./start_webrtc.sh
 ```
 
-首次参数为 `1280×720 / 30 FPS / 2.5 Mbps / 15 帧关键帧`。网页仍访问 `http://树莓派IP:5000`，它会自动嵌入 `http://树莓派IP:8889/cam/` 的 WebRTC 预览；电脑端 DL 可读取 `rtsp://树莓派IP:8554/cam`。按 `Ctrl+C` 会同时停止 Flask、`rpicam-vid` 与 MediaMTX。日志保存在 `pi_service/logs/`。
+默认采用单 CSI 相机双输出：`1640×1232` 主画面每秒编码 2 张 JPEG 75，`640×480 / 30 FPS / 1.5 Mbps` 低分辨率画面编码为 H.264/WebRTC。网页仍访问 `http://树莓派IP:5000`，左侧为 `http://树莓派IP:8889/cam/` 的 WebRTC 预览，右侧为高清 JPEG；电脑端 DL 可读取 `rtsp://树莓派IP:8554/cam`。按 `Ctrl+C` 会停止 Flask、Picamera2 双输出和 MediaMTX。日志保存在 `pi_service/logs/`。
 
 服务启动约 3 秒后，执行自动验收：
 
@@ -32,15 +32,16 @@ chmod +x verify_webrtc.sh
 ./verify_webrtc.sh
 ```
 
-它必须输出 `Flask backend: webrtc` 和 `PASS`。若 `Camera online: False`，先查看 `logs/mediamtx.log` 与 `logs/rpicam-vid.log`；若命令通过但电脑无法播放，检查热点网络是否允许树莓派的 TCP 8889 和 WebRTC UDP 通信。
+它必须输出 `Flask backend: webrtc`、高清 JPEG 目标与 `PASS`。若 `Camera online: False`，先查看 `logs/mediamtx.log` 和运行 `start_webrtc.sh` 的终端输出；若命令通过但电脑无法播放，检查热点网络是否允许树莓派的 TCP 8889 和 WebRTC UDP 通信。
 
 可在启动前调节参数，例如：
 
 ```bash
-ROBOT_WEBRTC_WIDTH=1640 ROBOT_WEBRTC_HEIGHT=1232 ROBOT_WEBRTC_BITRATE=4000000 ./start_webrtc.sh
+ROBOT_WEBRTC_WIDTH=640 ROBOT_WEBRTC_HEIGHT=480 ROBOT_WEBRTC_BITRATE=1500000 \
+ROBOT_HIGHRES_WIDTH=1640 ROBOT_HIGHRES_HEIGHT=1232 ./start_webrtc.sh
 ```
 
-WebRTC 模式不能同时运行 `start_robot.sh`，也不会支持现有 MJPEG 的浏览器 Canvas 裁切、浏览器 JPG 保存或网页 EV/快门动态调节；这些功能仍可通过 `start_robot.sh` 使用。WebRTC 页面和 RTSP 使用同一条 H.264 流，DL 不应再单独拉取 `/video_feed`。
+WebRTC 模式不能同时运行 `start_robot.sh`，也不会支持现有 MJPEG 的浏览器 Canvas 裁切、浏览器 JPG 保存或网页 EV/快门动态调节；这些功能仍可通过 `start_robot.sh` 使用。WebRTC 页面与 RTSP 使用同一条低分辨率 H.264 流；高清 JPEG 通过 `/highres_feed` 和 `/api/camera/highres/latest` 独立提供，浏览器与 DL 可各自使用该接口，但每增加一个客户端都会增加该 JPEG 通道的网络流量。
 
 ## 重要约定
 

@@ -21,9 +21,13 @@ print("Flask backend:", camera.get("transport"))
 print("Camera status:", camera.get("status"))
 print("Camera online:", camera.get("online"))
 print("H.264 target:", camera.get("resolution"), "@", camera.get("sensor_target_fps"), "FPS")
+if not camera.get("highres_available"):
+    raise SystemExit("High-resolution JPEG channel is not enabled")
+print("High JPEG target:", camera.get("highres_profile", {}).get("resolution"), "@", camera.get("highres", {}).get("target_fps"), "FPS")
 ' <<<"$status_json"
 
 curl --fail --silent --show-error --output /dev/null "$webrtc_url"
+curl --fail --silent --show-error --output /dev/null "http://127.0.0.1:${web_port}/api/camera/highres/latest"
 host_ip="$(hostname -I | awk '{print $1}')"
 echo "MediaMTX WebRTC page: $webrtc_url"
 echo "DL RTSP stream: rtsp://${host_ip}:8554/${stream_path}"

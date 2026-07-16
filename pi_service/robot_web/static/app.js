@@ -27,13 +27,15 @@ function webrtcUrl(camera) {
 function setVideoTransport(camera) {
   activeVideoTransport = camera.transport || "mjpeg";
   const mjpeg = isMjpeg();
-  for (const id of ["mjpegModeControls", "mjpegProfileControls", "mjpegHighresControls", "mjpegExposureControls", "mjpegAuxiliary", "mjpegCaptureControls"]) {
+  const highresAvailable = mjpeg || !!camera.highres_available;
+  for (const id of ["mjpegModeControls", "mjpegProfileControls", "mjpegExposureControls", "mjpegAuxiliary", "mjpegCaptureControls"]) {
     $("#" + id).classList.toggle("hidden", !mjpeg);
   }
+  $("#mjpegHighresControls").classList.toggle("hidden", !highresAvailable);
   video.classList.toggle("hidden", !mjpeg);
   webrtcVideo.classList.toggle("hidden", mjpeg);
-  highresVideo.classList.toggle("hidden", !mjpeg);
-  $("#highresUnavailable").classList.toggle("hidden", mjpeg);
+  highresVideo.classList.toggle("hidden", !highresAvailable);
+  $("#highresUnavailable").classList.toggle("hidden", highresAvailable);
   if (!mjpeg) {
     const url = webrtcUrl(camera);
     if (url !== currentWebrtcUrl) { currentWebrtcUrl = url; webrtcVideo.src = url; }
@@ -350,13 +352,14 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     $("#cameraBandwidth").textContent = isMjpeg() ? `${fixed(camera.stream_kBps)} kB/s · ${fixed(camera.stream_kbps)} kbps` : camera.stream_profile?.label || "H.264";
     $("#cameraBandwidthDetail").textContent = $("#cameraBandwidth").textContent;
     $("#cameraFrameSize").textContent = isMjpeg() ? (camera.jpeg_bytes ? `${fixed(camera.jpeg_bytes / 1000)} KB` : "—") : "连续 H.264 帧";
-    $("#cameraEncode").textContent = isMjpeg() ? `${fixed(camera.encode_ms)} ms（平均 ${fixed(camera.encode_ms_avg)} ms）` : "rpicam-vid";
+    $("#cameraEncode").textContent = isMjpeg() ? `${fixed(camera.encode_ms)} ms（平均 ${fixed(camera.encode_ms_avg)} ms）` : (camera.stream_profile?.encoder || "H.264 encoder");
     $("#cameraAge").textContent = isMjpeg() ? (camera.frame_age_ms == null ? "—" : `${fixed(camera.frame_age_ms)} ms`) : "由 WebRTC 自适应";
     const highres = camera.highres || {}, highresProfile = camera.highres_profile || {};
-    $("#highresStats").textContent = isMjpeg()
+    const highresAvailable = isMjpeg() || !!camera.highres_available;
+    $("#highresStats").textContent = highresAvailable
       ? `${highresProfile.resolution || "—"} · ${fixed(highres.capture_fps)} / ${fixed(highres.target_fps)} FPS · 发送 ${fixed(highres.stream_kBps)} kB/s`
       : "当前 WebRTC 模式不可用";
-    $("#highresHint").textContent = isMjpeg()
+    $("#highresHint").textContent = highresAvailable
       ? `JPEG ${highresProfile.quality ?? 75} · 单张 ${highres.jpeg_bytes ? `${fixed(highres.jpeg_bytes / 1000)} KB` : "—"} · 编码 ${fixed(highres.encode_ms)} ms · 客户端 ${highres.active_clients ?? 0}`
       : "请使用 start_robot.sh 启动 MJPEG 服务。";
     $("#highresStatusDetail").textContent = $("#highresStats").textContent;
@@ -364,7 +367,7 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     $("#liveFeedMeta").textContent = isMjpeg()
       ? `${streamResolution} · ${fixed(camera.stream_fps)} FPS`
       : `${resolution} · H.264`;
-    $("#highresFeedMeta").textContent = isMjpeg()
+    $("#highresFeedMeta").textContent = highresAvailable
       ? `${highresProfile.resolution || "—"} · ${fixed(highres.capture_fps)} FPS`
       : "MJPEG 专用";
     const [diagnosis, diagnosisDetail] = streamDiagnosis(camera);

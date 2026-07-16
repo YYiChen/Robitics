@@ -12,6 +12,7 @@ esac
 
 command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
+sudo apt install -y ffmpeg
 
 release_json="$(curl -fsSL https://api.github.com/repos/bluenviron/mediamtx/releases/latest)"
 asset_url="$(python3 -c '

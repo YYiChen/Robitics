@@ -4,16 +4,20 @@ import atexit
 from flask import Flask, Response, jsonify, request, render_template
 from camera import CameraStreamer
 from controller import RobotController
+from dual_stream_camera import DualStreamCamera
 from oled_status import OledStatusService
 from system_metrics import SystemMetrics
 from webrtc_stream import WebRTCStreamer
 
-def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStreamer, system_metrics: SystemMetrics | None = None, oled: OledStatusService | None = None) -> Flask:
+def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStreamer | DualStreamCamera, system_metrics: SystemMetrics | None = None, oled: OledStatusService | None = None) -> Flask:
     app = Flask(__name__)
     system_metrics = system_metrics or SystemMetrics()
     def mjpeg_only():
         if camera.transport == "mjpeg": return None
         return jsonify(ok=False, error="当前为 H.264/WebRTC 模式；请使用 start_robot.sh 启动 MJPEG 后再调整该项"), 409
+    def highres_available():
+        if getattr(camera, "highres_available", False) or camera.transport == "mjpeg": return None
+        return jsonify(ok=False, error="当前视频模式未启用高清 JPEG 通道"), 409
     @app.get("/")
     def index(): return render_template("index.html")
     @app.get("/video_feed")
@@ -24,13 +28,13 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
         return Response(camera.iter_mjpeg(), mimetype="multipart/x-mixed-replace; boundary=frame")
     @app.get("/highres_feed")
     def highres_feed():
-        unavailable = mjpeg_only()
+        unavailable = highres_available()
         if unavailable is not None: return unavailable
         if not camera.online: return jsonify(error=camera.error or camera.status), 503
         return Response(camera.iter_highres_mjpeg(), mimetype="multipart/x-mixed-replace; boundary=frame")
     @app.get("/api/camera/highres/latest")
     def latest_highres_image():
-        unavailable = mjpeg_only()
+        unavailable = highres_available()
         if unavailable is not None: return unavailable
         if not camera.online: return jsonify(error=camera.error or camera.status), 503
         jpeg = camera.latest_highres_jpeg()
@@ -91,7 +95,7 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
             return jsonify(ok=False, error=str(exc)), 400
     @app.post("/api/camera/highres-profile")
     def camera_highres_profile():
-        unavailable = mjpeg_only()
+        unavailable = highres_available()
         if unavailable is not None: return unavailable
         payload = request.get_json(silent=True) or {}
         try:
@@ -113,6 +117,9 @@ def main() -> None:
     parser.add_argument("--webrtc-bitrate", type=int, default=2_500_000)
     parser.add_argument("--webrtc-port", type=int, default=8889)
     parser.add_argument("--webrtc-path", default="cam")
+    parser.add_argument("--highres-width", type=int, default=1640)
+    parser.add_argument("--highres-height", type=int, default=1232)
+    parser.add_argument("--webrtc-udp-output", default="udp://127.0.0.1:1234?pkt_size=1316")
     parser.add_argument("--disable-oled", action="store_true")
     parser.add_argument("--oled-address", type=lambda value: int(value, 0), default=0x3C)
     parser.add_argument("--oled-i2c-port", type=int, default=1)
@@ -120,7 +127,13 @@ def main() -> None:
     camera = (
         CameraStreamer()
         if args.video_backend == "mjpeg"
-        else WebRTCStreamer(args.webrtc_width, args.webrtc_height, args.webrtc_fps, args.webrtc_bitrate, args.webrtc_port, args.webrtc_path)
+        else DualStreamCamera(
+            video_width=args.webrtc_width, video_height=args.webrtc_height,
+            video_fps=args.webrtc_fps, video_bitrate=args.webrtc_bitrate,
+            highres_width=args.highres_width, highres_height=args.highres_height,
+            webrtc_port=args.webrtc_port, webrtc_path=args.webrtc_path,
+            udp_output=args.webrtc_udp_output,
+        )
     )
     camera.start(); controller = RobotController(args.port); controller.start()
     oled = None if args.disable_oled else OledStatusService(controller, camera, address=args.oled_address, i2c_port=args.oled_i2c_port)
