@@ -47,8 +47,16 @@ class CameraMetricsTests(unittest.TestCase):
         camera = CameraStreamer(width=1640, height=1232)
         status = camera.set_stream_profile("low_latency")
         self.assertEqual(status["resolution"], "1640x1232")
-        self.assertEqual(status["stream_profile"]["resolution"], "820x616")
-        self.assertEqual(status["stream_profile"]["quality"], 70)
+        self.assertEqual(status["stream_profile"]["resolution"], "640x480")
+        self.assertEqual(status["stream_profile"]["quality"], 60)
+
+    def test_highres_profile_scales_only_the_two_fps_channel(self) -> None:
+        camera = CameraStreamer(width=3280, height=2464)
+        status = camera.set_highres_profile("medium_1640")
+        self.assertEqual(status["resolution"], "3280x2464")
+        self.assertEqual(status["highres_profile"]["resolution"], "1640x1232")
+        self.assertEqual(status["highres_profile"]["quality"], 75)
+        self.assertEqual(status["highres_profile"]["target_fps"], 2.0)
 
     def test_exposure_uses_one_over_n_shutter_unit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

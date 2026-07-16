@@ -39,6 +39,16 @@
         <button class="primary" id="applyStreamProfile">应用传输档位</button>
         <span class="hint">相机仍按上方档位采集；这里只压缩发往网页的画面，不增加缓存。</span>
       </div>
+      <div class="camera-mode-bar" id="mjpegHighresControls">
+        <label for="highresProfile">高清 JPEG 通道</label>
+        <select id="highresProfile">
+          <option value="source">原始尺寸 · JPEG 75</option>
+          <option value="medium_1640">高清平衡 · 最宽 1640 px · JPEG 75</option>
+          <option value="compact_1280">高清轻量 · 最宽 1280 px · JPEG 75</option>
+        </select>
+        <button class="primary" id="applyHighresProfile">应用高清档位</button>
+        <span class="hint">独立 2 FPS，不写入树莓派磁盘。DL 可读取 <code>/highres_feed</code>，单张读取 <code>/api/camera/highres/latest</code>。</span>
+      </div>
       <div class="camera-exposure-bar" id="mjpegExposureControls">
         <label for="exposureMode">曝光模式</label>
         <select id="exposureMode">
@@ -90,6 +100,7 @@
         <div class="metric"><span>视频客户端</span><strong id="cameraClients">—</strong></div>
         <div class="metric"><span>本浏览器实际收到 FPS</span><strong id="browserReceiveFps">测量中…</strong><small>由当前页面的 MJPEG 图片加载事件统计</small></div>
         <div class="metric"><span>网页状态 RTT</span><strong id="statusRtt">测量中…</strong><small>浏览器到树莓派 `/api/status` 的往返时间</small></div>
+        <div class="metric wide"><span>高清 JPEG 通道</span><strong id="highresStats">读取中…</strong><small id="highresHint">2 FPS · JPEG 75 · 独立于实时预览</small></div>
         <div class="metric wide"><span>卡顿诊断</span><strong id="streamDiagnosis">正在收集样本…</strong><small id="streamDiagnosisDetail">请至少观察 5 秒；该结论区分树莓派采集/编码、网络往返和浏览器接收，不等同于电机控制延迟。</small></div>
       </div>
       <div class="card-heading system-heading"><h3>树莓派资源</h3><span>由树莓派自身 `/proc` 实时采样</span></div>

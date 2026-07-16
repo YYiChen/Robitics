@@ -21,6 +21,20 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
         if unavailable is not None: return unavailable
         if not camera.online: return jsonify(error=camera.error or camera.status), 503
         return Response(camera.iter_mjpeg(), mimetype="multipart/x-mixed-replace; boundary=frame")
+    @app.get("/highres_feed")
+    def highres_feed():
+        unavailable = mjpeg_only()
+        if unavailable is not None: return unavailable
+        if not camera.online: return jsonify(error=camera.error or camera.status), 503
+        return Response(camera.iter_highres_mjpeg(), mimetype="multipart/x-mixed-replace; boundary=frame")
+    @app.get("/api/camera/highres/latest")
+    def latest_highres_image():
+        unavailable = mjpeg_only()
+        if unavailable is not None: return unavailable
+        if not camera.online: return jsonify(error=camera.error or camera.status), 503
+        jpeg = camera.latest_highres_jpeg()
+        if jpeg is None: return jsonify(error="高清图片尚未生成"), 503
+        return Response(jpeg, mimetype="image/jpeg", headers={"Cache-Control": "no-store, max-age=0"})
     @app.post("/api/action")
     def action():
         try: return jsonify(ok=True, action=controller.select_action((request.get_json(silent=True) or {}).get("action", "STOP")))
@@ -72,6 +86,15 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
         payload = request.get_json(silent=True) or {}
         try:
             return jsonify(ok=True, camera=camera.set_stream_profile(str(payload.get("profile", ""))))
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+    @app.post("/api/camera/highres-profile")
+    def camera_highres_profile():
+        unavailable = mjpeg_only()
+        if unavailable is not None: return unavailable
+        payload = request.get_json(silent=True) or {}
+        try:
+            return jsonify(ok=True, camera=camera.set_highres_profile(str(payload.get("profile", ""))))
         except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
     @app.get("/api/status")

@@ -2,7 +2,7 @@ const $ = selector => document.querySelector(selector);
 const video = $("#video"), webrtcVideo = $("#webrtcVideo"), save = $("#save");
 const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:false});
 let folder, aborter, count = 0, profiles = {}, activeMode = "all", configLoaded = false, keysSending = false, keysQueued = false;
-let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, exposureDirty = false, exposureBusy = false, videoRetryTimer;
+let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, highresProfileDirty = false, highresProfileBusy = false, exposureDirty = false, exposureBusy = false, videoRetryTimer;
 let servoBusy = false, queuedServoAngle = null;
 let receivedFrameCount = 0, receivedFrameWindowAt = performance.now(), browserReceiveFps = 0, statusRttMs = null;
 let activeVideoTransport = "mjpeg", currentWebrtcUrl = "";
@@ -27,7 +27,7 @@ function webrtcUrl(camera) {
 function setVideoTransport(camera) {
   activeVideoTransport = camera.transport || "mjpeg";
   const mjpeg = isMjpeg();
-  for (const id of ["mjpegModeControls", "mjpegProfileControls", "mjpegExposureControls", "mjpegAuxiliary", "mjpegCaptureControls"]) {
+  for (const id of ["mjpegModeControls", "mjpegProfileControls", "mjpegHighresControls", "mjpegExposureControls", "mjpegAuxiliary", "mjpegCaptureControls"]) {
     $("#" + id).classList.toggle("hidden", !mjpeg);
   }
   video.classList.toggle("hidden", !mjpeg);
@@ -131,6 +131,22 @@ $("#applyStreamProfile").onclick = async () => {
     note(`已应用 ${data.camera.stream_profile.label}；采集不重启，网页将在下一帧使用新压缩画面。`);
   } catch (error) { note(error.message); }
   finally { streamProfileBusy = false; button.disabled = false; select.disabled = false; }
+};
+
+$("#highresProfile").onchange = () => { highresProfileDirty = true; };
+$("#applyHighresProfile").onclick = async () => {
+  if (highresProfileBusy) return;
+  highresProfileBusy = true;
+  const button = $("#applyHighresProfile"), select = $("#highresProfile");
+  button.disabled = true; select.disabled = true;
+  try {
+    const response = await fetch("/api/camera/highres-profile", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({profile:select.value})});
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw Error(data.error || "高清图片档位切换失败");
+    highresProfileDirty = false;
+    note(`已应用 ${data.camera.highres_profile.label}；高清 JPEG 将在下一张（最多 0.5 秒）生效。`);
+  } catch (error) { note(error.message); }
+  finally { highresProfileBusy = false; button.disabled = false; select.disabled = false; }
 };
 
 function updateExposureUi() {
@@ -297,6 +313,7 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     if (isMjpeg()) {
       if (!cameraModeDirty && !cameraModeBusy && camera.mode) $("#cameraMode").value = camera.mode;
       if (!streamProfileDirty && !streamProfileBusy && camera.stream_profile?.key) $("#streamProfile").value = camera.stream_profile.key;
+      if (!highresProfileDirty && !highresProfileBusy && camera.highres_profile?.key) $("#highresProfile").value = camera.highres_profile.key;
       if (camera.width && camera.height) { $("#auxCropWidth").max = camera.width; $("#auxCropHeight").max = camera.height; }
       if (!exposureDirty && !exposureBusy && camera.exposure) {
         $("#exposureMode").value = camera.exposure.auto ? "auto" : "manual";
@@ -320,6 +337,13 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     $("#cameraAge").textContent = isMjpeg() ? (camera.frame_age_ms == null ? "—" : `${fixed(camera.frame_age_ms)} ms`) : "由 WebRTC 自适应";
     $("#cameraClients").textContent = isMjpeg() ? `${camera.active_clients ?? 0}` : "MediaMTX 管理";
     $("#browserReceiveFps").textContent = isMjpeg() ? (browserReceiveFps > 0 ? `${fixed(browserReceiveFps)} FPS` : "测量中…") : "MediaMTX 页面显示";
+    const highres = camera.highres || {}, highresProfile = camera.highres_profile || {};
+    $("#highresStats").textContent = isMjpeg()
+      ? `${highresProfile.resolution || "—"} · ${fixed(highres.capture_fps)} / ${fixed(highres.target_fps)} FPS · 发送 ${fixed(highres.stream_kBps)} kB/s`
+      : "当前 WebRTC 模式不可用";
+    $("#highresHint").textContent = isMjpeg()
+      ? `JPEG ${highresProfile.quality ?? 75} · 单张 ${highres.jpeg_bytes ? `${fixed(highres.jpeg_bytes / 1000)} KB` : "—"} · 编码 ${fixed(highres.encode_ms)} ms · 客户端 ${highres.active_clients ?? 0}`
+      : "请使用 start_robot.sh 启动 MJPEG 服务。";
     $("#statusRtt").textContent = statusRttMs == null ? "测量中…" : `${fixed(statusRttMs)} ms`;
     const [diagnosis, diagnosisDetail] = streamDiagnosis(camera);
     $("#streamDiagnosis").textContent = diagnosis;
