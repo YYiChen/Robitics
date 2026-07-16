@@ -8,6 +8,7 @@ captures/
 pi_service/robot_web/robot_config.json
 pi_service/robot_web/drive_config.json
 pi_service/robot_web/camera_config.json
+pi_service/vendor/
 
 # Browser-side captured images must never enter source control.
 Pic/

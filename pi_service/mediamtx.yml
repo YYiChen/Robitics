@@ -1,0 +1,5 @@
+# MediaMTX receives the local H.264/MPEG-TS stream from start_webrtc.sh.
+# It exposes WebRTC in a browser and RTSP for the PC-side DL service.
+paths:
+  cam:
+    source: udp://127.0.0.1:1234

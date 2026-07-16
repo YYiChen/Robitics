@@ -20,7 +20,7 @@
   <section class="main-column">
     <div class="card video-card">
       <div class="card-heading"><h2>CSI 视频</h2><span id="cameraMeta">读取视频参数…</span></div>
-      <div class="camera-mode-bar">
+      <div class="camera-mode-bar" id="mjpegModeControls">
         <label for="cameraMode">相机读取档位</label>
         <select id="cameraMode">
           <option value="fast_1640">1640×1232 · 传感器 30 FPS</option>
@@ -29,7 +29,7 @@
         <button class="primary" id="applyCameraMode">应用分辨率</button>
         <span class="hint">切换会短暂重启视频流；实际 FPS 以状态数据为准。</span>
       </div>
-      <div class="camera-mode-bar">
+      <div class="camera-mode-bar" id="mjpegProfileControls">
         <label for="streamProfile">网页传输档位</label>
         <select id="streamProfile">
           <option value="low_latency">低延迟 · 最宽 820 px · JPEG 70</option>
@@ -39,7 +39,7 @@
         <button class="primary" id="applyStreamProfile">应用传输档位</button>
         <span class="hint">相机仍按上方档位采集；这里只压缩发往网页的画面，不增加缓存。</span>
       </div>
-      <div class="camera-exposure-bar">
+      <div class="camera-exposure-bar" id="mjpegExposureControls">
         <label for="exposureMode">曝光模式</label>
         <select id="exposureMode">
           <option value="auto">自动曝光（调 EV）</option>
@@ -53,7 +53,8 @@
         <span class="hint" id="exposureHint">自动模式下 EV 生效；固定快门时 EV 不参与自动曝光。</span>
       </div>
       <img id="video" src="/video_feed" alt="CSI 视频">
-      <div class="auxiliary-preview">
+      <iframe id="webrtcVideo" class="webrtc-video hidden" title="H.264 WebRTC 视频" allow="autoplay; fullscreen"></iframe>
+      <div class="auxiliary-preview" id="mjpegAuxiliary">
         <div class="card-heading"><h3>电脑端辅助画面</h3><span>本地 Canvas，不增加树莓派带宽</span></div>
         <div class="auxiliary-layout">
           <canvas id="auxVideo" width="640" height="480"></canvas>
@@ -71,7 +72,7 @@
           </div>
         </div>
       </div>
-      <div class="toolbar">
+      <div class="toolbar" id="mjpegCaptureControls">
         <button class="primary" id="snapshot">保存当前画面</button>
         <button id="choose">选择电脑 Pic 文件夹</button>
         <button id="record">连续保存（5 FPS）</button>
@@ -82,7 +83,7 @@
         <div class="metric"><span>采集 → 网页分辨率</span><strong id="cameraResolution">—</strong></div>
         <div class="metric"><span>网页传输档位</span><strong id="streamProfileState">—</strong></div>
         <div class="metric"><span>采集 / 发送 FPS</span><strong id="cameraFps">—</strong></div>
-        <div class="metric wide"><span>MJPEG 发送带宽（所有网页合计）</span><strong id="cameraBandwidth">—</strong><small>同时显示 kB/s 和 kbps，包含 MJPEG 分片头；单个网页时就是当前流量</small></div>
+        <div class="metric wide"><span id="cameraBandwidthLabel">MJPEG 发送带宽（所有网页合计）</span><strong id="cameraBandwidth">—</strong><small id="cameraBandwidthHint">同时显示 kB/s 和 kbps，包含 MJPEG 分片头；单个网页时就是当前流量</small></div>
         <div class="metric"><span>单帧 JPEG</span><strong id="cameraFrameSize">—</strong></div>
         <div class="metric"><span>编码耗时</span><strong id="cameraEncode">—</strong></div>
         <div class="metric"><span>最新帧延迟</span><strong id="cameraAge">—</strong></div>

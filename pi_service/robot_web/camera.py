@@ -39,6 +39,8 @@ DEFAULT_STREAM_PROFILE = "low_latency"
 
 
 class CameraStreamer:
+    transport = "mjpeg"
+
     def __init__(
         self,
         width: int | None = None,

@@ -1,10 +1,11 @@
 const $ = selector => document.querySelector(selector);
-const video = $("#video"), save = $("#save");
+const video = $("#video"), webrtcVideo = $("#webrtcVideo"), save = $("#save");
 const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:false});
 let folder, aborter, count = 0, profiles = {}, activeMode = "all", configLoaded = false, keysSending = false, keysQueued = false;
 let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, exposureDirty = false, exposureBusy = false, videoRetryTimer;
 let servoTimer = null, servoBusy = false;
 let receivedFrameCount = 0, receivedFrameWindowAt = performance.now(), browserReceiveFps = 0, statusRttMs = null;
+let activeVideoTransport = "mjpeg", currentWebrtcUrl = "";
 const wheelNames = ["rf", "lf", "lr", "rr"];
 const actionKeys = {FL:"q", F:"w", FR:"e", PL:"a", PR:"d", BL:"z", B:"s", BR:"c"};
 const keyboardKeys = {w:"w", a:"a", s:"s", d:"d", q:"q", e:"e", z:"z", c:"c", ArrowUp:"w", ArrowDown:"s", ArrowLeft:"a", ArrowRight:"d"};
@@ -17,8 +18,28 @@ async function requestJson(url, options = {}, timeoutMs = 500) {
 
 const note = text => { save.textContent = text; };
 const fileName = () => `robot_${new Date().toISOString().replace(/[:.]/g, "-")}_${++count}.jpg`;
+const isMjpeg = () => activeVideoTransport === "mjpeg";
+function webrtcUrl(camera) {
+  const port = Number(camera.webrtc_port) || 8889;
+  const path = String(camera.webrtc_path || "cam").replace(/^\/+|\/+$/g, "");
+  return `http://${location.hostname}:${port}/${path}/`;
+}
+function setVideoTransport(camera) {
+  activeVideoTransport = camera.transport || "mjpeg";
+  const mjpeg = isMjpeg();
+  for (const id of ["mjpegModeControls", "mjpegProfileControls", "mjpegExposureControls", "mjpegAuxiliary", "mjpegCaptureControls"]) {
+    $("#" + id).classList.toggle("hidden", !mjpeg);
+  }
+  video.classList.toggle("hidden", !mjpeg);
+  webrtcVideo.classList.toggle("hidden", mjpeg);
+  if (!mjpeg) {
+    const url = webrtcUrl(camera);
+    if (url !== currentWebrtcUrl) { currentWebrtcUrl = url; webrtcVideo.src = url; }
+  }
+}
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function drawAuxiliaryFrame() {
+  if (!isMjpeg()) { requestAnimationFrame(drawAuxiliaryFrame); return; }
   const sourceWidth = video.naturalWidth, sourceHeight = video.naturalHeight;
   if (sourceWidth && sourceHeight && video.complete) {
     let sx = 0, sy = 0, cropWidth = sourceWidth, cropHeight = sourceHeight;
@@ -50,6 +71,7 @@ async function saveBlob(blob) {
   const writer = await handle.createWritable(); await writer.write(blob); await writer.close();
 }
 async function saveFrame() {
+  if (!isMjpeg()) throw Error("WebRTC 预览由独立媒体服务提供，当前浏览器不能直接导出这一帧；请使用 RTSP/DL 端保存。");
   const canvas = document.createElement("canvas"); canvas.width = video.naturalWidth; canvas.height = video.naturalHeight;
   canvas.getContext("2d").drawImage(video, 0, 0);
   const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", .9));
@@ -65,6 +87,7 @@ $("#record").onclick = async () => {
 $("#stopRecord").onclick = () => aborter?.abort();
 
 function reloadVideo() {
+  if (!isMjpeg()) return;
   clearTimeout(videoRetryTimer);
   videoRetryTimer = setTimeout(() => { video.src = `/video_feed?ts=${Date.now()}`; }, 800);
 }
@@ -227,6 +250,9 @@ function distance(value) {
   return `${front.toFixed(1)} cm`;
 }
 function streamDiagnosis(camera) {
+  if (camera.transport === "webrtc") {
+    return ["H.264 / WebRTC 低延迟模式", "视频由 rpicam-vid 编码、MediaMTX 分发；请在 MediaMTX 日志和浏览器 WebRTC 页面确认 FPS、码率与连接状态。"];
+  }
   if (!camera.online) return ["树莓派相机服务离线", "请先处理相机状态或服务错误；网络判断暂不可用。"];
   const target = Number(camera.target_fps) || Number(camera.sensor_target_fps) || 0;
   const capture = Number(camera.capture_fps) || 0;
@@ -249,28 +275,35 @@ function streamDiagnosis(camera) {
 }
 async function refreshStatus() { try { const statusStartedAt = performance.now(); const response = await fetch("/api/status", {cache:"no-store"}), data = await response.json(), robot = data.robot, system = data.system || {}; statusRttMs = performance.now() - statusStartedAt;
     const camera = data.camera || {};
+    setVideoTransport(camera);
     $("#cameraState").innerHTML = dot(camera.online, camera.online ? "在线" : camera.status); $("#arduinoState").innerHTML = dot(robot.arduino_online, robot.arduino_online ? "在线" : robot.serial ? "无响应" : "离线", robot.serial);
     const resolution = camera.resolution || (camera.width && camera.height ? `${camera.width}×${camera.height}` : "—");
-    if (!cameraModeDirty && !cameraModeBusy && camera.mode) $("#cameraMode").value = camera.mode;
-    if (!streamProfileDirty && !streamProfileBusy && camera.stream_profile?.key) $("#streamProfile").value = camera.stream_profile.key;
-    if (camera.width && camera.height) { $("#auxCropWidth").max = camera.width; $("#auxCropHeight").max = camera.height; }
-    if (!exposureDirty && !exposureBusy && camera.exposure) {
-      $("#exposureMode").value = camera.exposure.auto ? "auto" : "manual";
-      $("#cameraEv").value = camera.exposure.ev;
-      $("#shutterDenominator").value = camera.exposure.shutter_denominator;
-      updateExposureUi();
+    if (isMjpeg()) {
+      if (!cameraModeDirty && !cameraModeBusy && camera.mode) $("#cameraMode").value = camera.mode;
+      if (!streamProfileDirty && !streamProfileBusy && camera.stream_profile?.key) $("#streamProfile").value = camera.stream_profile.key;
+      if (camera.width && camera.height) { $("#auxCropWidth").max = camera.width; $("#auxCropHeight").max = camera.height; }
+      if (!exposureDirty && !exposureBusy && camera.exposure) {
+        $("#exposureMode").value = camera.exposure.auto ? "auto" : "manual";
+        $("#cameraEv").value = camera.exposure.ev;
+        $("#shutterDenominator").value = camera.exposure.shutter_denominator;
+        updateExposureUi();
+      }
     }
     const streamResolution = camera.stream_profile?.resolution || resolution;
-    $("#cameraMeta").textContent = `采集 ${resolution} → 网页 ${streamResolution} · 传感器目标 ${fixed(camera.sensor_target_fps)} FPS · 实际编码 ${fixed(camera.capture_fps)} FPS`;
-    $("#cameraResolution").textContent = `${resolution} → ${streamResolution}`;
+    $("#cameraMeta").textContent = isMjpeg()
+      ? `采集 ${resolution} → 网页 ${streamResolution} · 传感器目标 ${fixed(camera.sensor_target_fps)} FPS · 实际编码 ${fixed(camera.capture_fps)} FPS`
+      : `采集 ${resolution} · H.264 ${fixed(camera.sensor_target_fps)} FPS · WebRTC 低延迟传输`;
+    $("#cameraResolution").textContent = isMjpeg() ? `${resolution} → ${streamResolution}` : resolution;
     $("#streamProfileState").textContent = camera.stream_profile?.label || "—";
-    $("#cameraFps").textContent = `${fixed(camera.capture_fps)} / ${fixed(camera.stream_fps)} FPS`;
-    $("#cameraBandwidth").textContent = `${fixed(camera.stream_kBps)} kB/s · ${fixed(camera.stream_kbps)} kbps`;
-    $("#cameraFrameSize").textContent = camera.jpeg_bytes ? `${fixed(camera.jpeg_bytes / 1000)} KB` : "—";
-    $("#cameraEncode").textContent = `${fixed(camera.encode_ms)} ms（平均 ${fixed(camera.encode_ms_avg)} ms）`;
-    $("#cameraAge").textContent = camera.frame_age_ms == null ? "—" : `${fixed(camera.frame_age_ms)} ms`;
-    $("#cameraClients").textContent = `${camera.active_clients ?? 0}`;
-    $("#browserReceiveFps").textContent = browserReceiveFps > 0 ? `${fixed(browserReceiveFps)} FPS` : "测量中…";
+    $("#cameraFps").textContent = isMjpeg() ? `${fixed(camera.capture_fps)} / ${fixed(camera.stream_fps)} FPS` : `${fixed(camera.sensor_target_fps)} FPS · H.264`;
+    $("#cameraBandwidthLabel").textContent = isMjpeg() ? "MJPEG 发送带宽（所有网页合计）" : "H.264 目标码率";
+    $("#cameraBandwidthHint").textContent = isMjpeg() ? "同时显示 kB/s 和 kbps，包含 MJPEG 分片头；单个网页时就是当前流量" : "实际 WebRTC 码率由 MediaMTX/浏览器统计；此处显示启动时的编码目标。";
+    $("#cameraBandwidth").textContent = isMjpeg() ? `${fixed(camera.stream_kBps)} kB/s · ${fixed(camera.stream_kbps)} kbps` : camera.stream_profile?.label || "H.264";
+    $("#cameraFrameSize").textContent = isMjpeg() ? (camera.jpeg_bytes ? `${fixed(camera.jpeg_bytes / 1000)} KB` : "—") : "连续 H.264 帧";
+    $("#cameraEncode").textContent = isMjpeg() ? `${fixed(camera.encode_ms)} ms（平均 ${fixed(camera.encode_ms_avg)} ms）` : "rpicam-vid";
+    $("#cameraAge").textContent = isMjpeg() ? (camera.frame_age_ms == null ? "—" : `${fixed(camera.frame_age_ms)} ms`) : "由 WebRTC 自适应";
+    $("#cameraClients").textContent = isMjpeg() ? `${camera.active_clients ?? 0}` : "MediaMTX 管理";
+    $("#browserReceiveFps").textContent = isMjpeg() ? (browserReceiveFps > 0 ? `${fixed(browserReceiveFps)} FPS` : "测量中…") : "MediaMTX 页面显示";
     $("#statusRtt").textContent = statusRttMs == null ? "测量中…" : `${fixed(statusRttMs)} ms`;
     const [diagnosis, diagnosisDetail] = streamDiagnosis(camera);
     $("#streamDiagnosis").textContent = diagnosis;

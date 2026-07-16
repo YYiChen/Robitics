@@ -12,6 +12,27 @@
 2. 将 `pi_service/` 复制到树莓派，执行 `./install_dependencies.sh` 一次。
 3. 执行 `chmod +x start_robot.sh && ./start_robot.sh`，随后打开输出的网址。脚本使用 Bash，不能用 `sh start_robot.sh` 启动。
 
+## 低延迟 H.264 / WebRTC 视频
+
+默认 `start_robot.sh` 仍是 MJPEG 兼容模式。需要低延迟连续视频时，使用 H.264/WebRTC：CSI 由 `rpicam-vid` 独占并以 H.264 编码，MediaMTX 分发 WebRTC 给网页、RTSP 给电脑 DL；Flask 只保留控制、串口和状态 API。
+
+```bash
+cd ~/Desktop/Robitics/pi_service
+chmod +x install_webrtc.sh start_webrtc.sh
+./install_webrtc.sh        # 一次性下载匹配系统架构的 MediaMTX
+./start_webrtc.sh
+```
+
+首次参数为 `1280×720 / 30 FPS / 2.5 Mbps / 15 帧关键帧`。网页仍访问 `http://树莓派IP:5000`，它会自动嵌入 `http://树莓派IP:8889/cam/` 的 WebRTC 预览；电脑端 DL 可读取 `rtsp://树莓派IP:8554/cam`。按 `Ctrl+C` 会同时停止 Flask、`rpicam-vid` 与 MediaMTX。日志保存在 `pi_service/logs/`。
+
+可在启动前调节参数，例如：
+
+```bash
+ROBOT_WEBRTC_WIDTH=1640 ROBOT_WEBRTC_HEIGHT=1232 ROBOT_WEBRTC_BITRATE=4000000 ./start_webrtc.sh
+```
+
+WebRTC 模式不能同时运行 `start_robot.sh`，也不会支持现有 MJPEG 的浏览器 Canvas 裁切、浏览器 JPG 保存或网页 EV/快门动态调节；这些功能仍可通过 `start_robot.sh` 使用。WebRTC 页面和 RTSP 使用同一条 H.264 流，DL 不应再单独拉取 `/video_feed`。
+
 ## 重要约定
 
 - 串口波特率为 9600；协议见 `docs/serial-protocol.md`。

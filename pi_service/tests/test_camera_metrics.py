@@ -1,11 +1,13 @@
 import sys
 import tempfile
 import unittest
+import importlib.util
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "robot_web"))
 
 from camera import CameraStreamer
+from webrtc_stream import WebRTCStreamer
 
 
 class CameraMetricsTests(unittest.TestCase):
@@ -55,6 +57,29 @@ class CameraMetricsTests(unittest.TestCase):
             self.assertFalse(status["exposure"]["auto"])
             self.assertEqual(status["exposure"]["shutter_denominator"], 200)
             self.assertEqual(status["exposure"]["shutter_us"], 5000)
+
+    def test_webrtc_status_declares_h264_transport(self) -> None:
+        stream = WebRTCStreamer(1280, 720, 30, 2_500_000, 8889, "cam")
+        stream._media_server_online = lambda: True
+        status = stream.status_dict()
+        self.assertTrue(status["online"])
+        self.assertEqual(status["transport"], "webrtc")
+        self.assertEqual(status["resolution"], "1280x720")
+        self.assertEqual(status["webrtc_port"], 8889)
+        self.assertEqual(status["rtsp_url_template"], "rtsp://{host}:8554/cam")
+
+    @unittest.skipUnless(importlib.util.find_spec("flask"), "Flask is installed on the Raspberry Pi deployment target")
+    def test_webrtc_mode_rejects_mjpeg_endpoints(self) -> None:
+        from app import create_app
+
+        class Controller:
+            pass
+
+        stream = WebRTCStreamer(1280, 720, 30, 2_500_000, 8889, "cam")
+        app = create_app(Controller(), stream)
+        client = app.test_client()
+        self.assertEqual(client.get("/video_feed").status_code, 409)
+        self.assertEqual(client.post("/api/camera/mode", json={"mode": "fast_1640"}).status_code, 409)
 
 
 if __name__ == "__main__":
