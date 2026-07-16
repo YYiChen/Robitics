@@ -12,7 +12,9 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 
-HIGHRES_FPS = 2.0
+DEFAULT_HIGHRES_FPS = 2.0
+MIN_HIGHRES_FPS = 1.0
+MAX_HIGHRES_FPS = 15.0
 HIGHRES_JPEG_QUALITY = 75
 # When no browser is watching the high-resolution feed, do not spend CPU on
 # JPEG encoding.  A latest-image API call can still request one on demand.
@@ -55,7 +57,7 @@ class DualStreamCamera:
         self.port, self.path = int(webrtc_port), str(webrtc_path).strip("/") or "cam"
         self.udp_output = str(udp_output)
         self.config_path = Path(config_path or Path(__file__).with_name("camera_config.json"))
-        self.highres_profile_key = self._load_highres_profile()
+        self.highres_profile_key, self.highres_fps = self._load_highres_settings()
         self.status, self.error = "未启动", ""
         self._picam2 = self._cv2 = self._encoder = self._output = None
         self.encoder_name = ""
@@ -80,16 +82,19 @@ class DualStreamCamera:
     def _probe_url(self) -> str:
         return f"http://127.0.0.1:{self.port}/{self.path}/"
 
-    def _load_highres_profile(self) -> str:
+    def _load_highres_settings(self) -> tuple[str, float]:
+        profile_key, highres_fps = "medium_1640", DEFAULT_HIGHRES_FPS
         try:
-            profile = json.loads(self.config_path.read_text(encoding="utf-8")).get("highres_profile")
+            saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+            profile = saved.get("highres_profile")
             if profile in HIGHRES_PROFILES:
-                return profile
-        except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError):
+                profile_key = profile
+            highres_fps = max(MIN_HIGHRES_FPS, min(MAX_HIGHRES_FPS, float(saved.get("highres_fps", highres_fps))))
+        except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError, TypeError, ValueError):
             pass
-        return "medium_1640"
+        return profile_key, highres_fps
 
-    def _save_highres_profile(self) -> None:
+    def _save_highres_settings(self) -> None:
         payload: dict = {}
         try:
             saved = json.loads(self.config_path.read_text(encoding="utf-8"))
@@ -98,6 +103,7 @@ class DualStreamCamera:
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             pass
         payload["highres_profile"] = self.highres_profile_key
+        payload["highres_fps"] = self.highres_fps
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.config_path.with_name(f".{self.config_path.name}.tmp")
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -123,7 +129,7 @@ class DualStreamCamera:
     def _highres_profile_status(self) -> dict:
         width, height = self._highres_dimensions()
         profile = HIGHRES_PROFILES[self.highres_profile_key]
-        return {"key": self.highres_profile_key, "label": profile["label"], "max_width": profile["max_width"], "quality": HIGHRES_JPEG_QUALITY, "width": width, "height": height, "resolution": f"{width}x{height}", "target_fps": HIGHRES_FPS}
+        return {"key": self.highres_profile_key, "label": profile["label"], "max_width": profile["max_width"], "quality": HIGHRES_JPEG_QUALITY, "width": width, "height": height, "resolution": f"{width}x{height}", "target_fps": self.highres_fps}
 
     @staticmethod
     def _window_stats(events: deque[tuple[float, int]], now: float) -> tuple[int, int]:
@@ -224,7 +230,6 @@ class DualStreamCamera:
         return jpeg
 
     def _capture_highres(self) -> None:
-        interval = 1.0 / HIGHRES_FPS
         try:
             while not self._stop.is_set():
                 if not self._highres_has_clients():
@@ -233,6 +238,7 @@ class DualStreamCamera:
                     continue
                 started = time.monotonic()
                 self._capture_highres_frame()
+                interval = 1.0 / self.highres_fps
                 self._stop.wait(max(0.0, interval - (time.monotonic() - started)))
         except Exception as exc:
             self.status, self.error = "高清 JPEG 采集错误", str(exc)
@@ -243,7 +249,19 @@ class DualStreamCamera:
         if profile_key not in HIGHRES_PROFILES:
             raise ValueError("未知高清图片档位")
         self.highres_profile_key = profile_key
-        self._save_highres_profile()
+        self._save_highres_settings()
+        return self.status_dict()
+
+    def set_highres_fps(self, value: float) -> dict:
+        try:
+            fps = float(value)
+        except (TypeError, ValueError):
+            raise ValueError("高清图片帧率必须是数字") from None
+        if not MIN_HIGHRES_FPS <= fps <= MAX_HIGHRES_FPS:
+            raise ValueError(f"高清图片帧率范围为 {MIN_HIGHRES_FPS:g}–{MAX_HIGHRES_FPS:g} FPS")
+        self.highres_fps = fps
+        self._save_highres_settings()
+        self._highres_wakeup.set()
         return self.status_dict()
 
     def latest_highres_jpeg(self) -> bytes | None:
@@ -322,7 +340,7 @@ class DualStreamCamera:
                 "camera_buffer_count": 2,
             },
             "highres_profile": self._highres_profile_status(),
-            "highres": {"target_fps": HIGHRES_FPS, "capture_fps": frame_count, "stream_fps": stream_count, "jpeg_bytes": last_size, "kBps": frame_bytes / 1000.0, "kbps": frame_bytes * 8.0 / 1000.0, "stream_kBps": stream_bytes / 1000.0, "stream_kbps": stream_bytes * 8.0 / 1000.0, "encode_ms": last_encode, "encode_ms_avg": encode_average, "frame_age_ms": (now - last_at) * 1000.0 if last_at else None, "active_clients": clients},
+            "highres": {"target_fps": self.highres_fps, "capture_fps": frame_count, "stream_fps": stream_count, "jpeg_bytes": last_size, "kBps": frame_bytes / 1000.0, "kbps": frame_bytes * 8.0 / 1000.0, "stream_kBps": stream_bytes / 1000.0, "stream_kbps": stream_bytes * 8.0 / 1000.0, "encode_ms": last_encode, "encode_ms_avg": encode_average, "frame_age_ms": (now - last_at) * 1000.0 if last_at else None, "active_clients": clients},
             "available_modes": [],
             "available_stream_profiles": [],
             "available_highres_profiles": [{"key": key, "label": profile["label"], "max_width": profile["max_width"], "quality": HIGHRES_JPEG_QUALITY} for key, profile in HIGHRES_PROFILES.items()],

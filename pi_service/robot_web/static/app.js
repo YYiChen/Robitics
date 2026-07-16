@@ -2,7 +2,7 @@ const $ = selector => document.querySelector(selector);
 const video = $("#video"), webrtcVideo = $("#webrtcVideo"), highresVideo = $("#highresVideo"), save = $("#save");
 const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:false});
 let folder, aborter, count = 0, profiles = {}, activeMode = "all", configLoaded = false, keysSending = false, keysQueued = false;
-let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, highresProfileDirty = false, highresProfileBusy = false, exposureDirty = false, exposureBusy = false, videoRetryTimer;
+let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, highresProfileDirty = false, highresProfileBusy = false, highresFpsDirty = false, highresFpsBusy = false, exposureDirty = false, exposureBusy = false, videoRetryTimer;
 let servoBusy = false, queuedServoAngle = null;
 let receivedFrameCount = 0, receivedFrameWindowAt = performance.now(), browserReceiveFps = 0, statusRttMs = null;
 let activeVideoTransport = "mjpeg", currentWebrtcUrl = "";
@@ -245,6 +245,22 @@ $("#applyHighresProfile").onclick = async () => {
   } catch (error) { note(error.message); }
   finally { highresProfileBusy = false; button.disabled = false; select.disabled = false; }
 };
+$("#highresFps").onchange = () => { highresFpsDirty = true; };
+$("#applyHighresFps").onclick = async () => {
+  if (highresFpsBusy) return;
+  highresFpsBusy = true;
+  const button = $("#applyHighresFps"), input = $("#highresFps");
+  button.disabled = true; input.disabled = true;
+  try {
+    const response = await fetch("/api/camera/highres-fps", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({fps:Number(input.value)})});
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw Error(data.error || "高清图片帧率设置失败");
+    highresFpsDirty = false;
+    input.value = data.camera.highres.target_fps;
+    note(`高清 JPEG 已设为 ${fixed(data.camera.highres.target_fps)} FPS；该设置会保存。`);
+  } catch (error) { note(error.message); }
+  finally { highresFpsBusy = false; button.disabled = false; input.disabled = false; }
+};
 
 function updateExposureUi() {
   const automatic = $("#exposureMode").value === "auto";
@@ -412,7 +428,6 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     if (isMjpeg()) {
       if (!cameraModeDirty && !cameraModeBusy && camera.mode) $("#cameraMode").value = camera.mode;
       if (!streamProfileDirty && !streamProfileBusy && camera.stream_profile?.key) $("#streamProfile").value = camera.stream_profile.key;
-      if (!highresProfileDirty && !highresProfileBusy && camera.highres_profile?.key) $("#highresProfile").value = camera.highres_profile.key;
       if (camera.width && camera.height) { $("#auxCropWidth").max = camera.width; $("#auxCropHeight").max = camera.height; }
       if (!exposureDirty && !exposureBusy && camera.exposure) {
         $("#exposureMode").value = camera.exposure.auto ? "auto" : "manual";
@@ -436,6 +451,8 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     $("#cameraEncode").textContent = isMjpeg() ? `${fixed(camera.encode_ms)} ms（平均 ${fixed(camera.encode_ms_avg)} ms）` : (camera.stream_profile?.encoder || "H.264 encoder");
     $("#cameraAge").textContent = isMjpeg() ? (camera.frame_age_ms == null ? "—" : `${fixed(camera.frame_age_ms)} ms`) : "由 WebRTC 自适应";
     const highres = camera.highres || {}, highresProfile = camera.highres_profile || {};
+    if (!highresProfileDirty && !highresProfileBusy && highresProfile.key) $("#highresProfile").value = highresProfile.key;
+    if (!highresFpsDirty && !highresFpsBusy && highres.target_fps != null) $("#highresFps").value = highres.target_fps;
     const highresAvailable = isMjpeg() || !!camera.highres_available;
     $("#highresStats").textContent = highresAvailable
       ? `${highresProfile.resolution || "—"} · ${fixed(highres.capture_fps)} / ${fixed(highres.target_fps)} FPS · 发送 ${fixed(highres.stream_kBps)} kB/s`

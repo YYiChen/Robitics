@@ -102,6 +102,17 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
             return jsonify(ok=True, camera=camera.set_highres_profile(str(payload.get("profile", ""))))
         except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
+    @app.post("/api/camera/highres-fps")
+    def camera_highres_fps():
+        unavailable = highres_available()
+        if unavailable is not None: return unavailable
+        if not hasattr(camera, "set_highres_fps"):
+            return jsonify(ok=False, error="当前相机后端不支持动态调整高清图片帧率"), 409
+        payload = request.get_json(silent=True) or {}
+        try:
+            return jsonify(ok=True, camera=camera.set_highres_fps(payload.get("fps")))
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
     @app.get("/api/status")
     def status(): return jsonify(robot=controller.status(), camera=camera.status_dict(), system=system_metrics.status_dict(), oled=oled.status_dict() if oled else {"online": False, "disabled": True, "error": "已通过启动参数关闭"})
     return app

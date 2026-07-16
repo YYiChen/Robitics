@@ -105,6 +105,17 @@ class CameraMetricsTests(unittest.TestCase):
         camera._highres_client_stopped()
         self.assertFalse(camera._highres_has_clients())
 
+    def test_dual_webrtc_camera_persists_configurable_highres_fps(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "camera_config.json"
+            first = DualStreamCamera(config_path=config_path)
+            status = first.set_highres_fps(5)
+            self.assertEqual(status["highres"]["target_fps"], 5.0)
+            second = DualStreamCamera(config_path=config_path)
+            self.assertEqual(second.status_dict()["highres"]["target_fps"], 5.0)
+            with self.assertRaises(ValueError):
+                second.set_highres_fps(16)
+
     @unittest.skipUnless(importlib.util.find_spec("flask"), "Flask is installed on the Raspberry Pi deployment target")
     def test_webrtc_mode_rejects_mjpeg_endpoints(self) -> None:
         from app import create_app
