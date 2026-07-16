@@ -96,7 +96,7 @@ class RobotController:
         self.serial = None; self.action = "STOP"; self.held_keys: set[str] = set(); self.last_client_seen = 0.0
         self.steering_direction = 0; self.last_steering_seen = 0.0; self._last_servo_motion_at = time.monotonic()
         self._servo_target_angle: float | None = None
-        self.imu = self.speed = self.ultrasonic = None; self.servo_angle: int | None = None; self.reply = self.error = ""; self.last_rx = 0.0
+        self.imu = self.speed = self.ultrasonic = None; self.servo_angle: int | None = None; self.motor_output: list[int] | None = None; self.reply = self.error = ""; self.last_rx = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._shutdown_lock = threading.Lock()
@@ -301,10 +301,13 @@ class RobotController:
             parts = text.split(",")
             if text.startswith("IMU,") and len(parts) == 4: self.imu = [float(x) for x in parts[1:]]
             elif text.startswith("SPD,") and len(parts) == 7: self.speed = [float(x) for x in parts[1:]]
+            elif text.startswith("OK:M,") and len(parts) == 5: self.motor_output = [int(x) for x in parts[1:]]
             elif text.startswith("US,") and len(parts) == 2:
                 self.ultrasonic = float(parts[1])
             elif text.startswith("OK:SV,"):
                 self.servo_angle = int(text.split(",", 1)[1])
+            elif text in {"OK:STOP", "STATUS:STOPPED", "TIMEOUT:STOP"} or text.startswith("BLOCK:"):
+                self.motor_output = [0, 0, 0, 0]
         except ValueError: pass
     def _run(self) -> None:
         next_motor, next_query = 0.0, 0.0
@@ -336,4 +339,4 @@ class RobotController:
     def status(self) -> dict:
         with self.lock: cfg, action, seen = asdict(self.config), self.action, self.last_client_seen
         serial_open = bool(self.serial and self.serial.is_open); age = time.monotonic() - self.last_rx if self.last_rx else None
-        return {"serial":serial_open,"arduino_online":serial_open and age is not None and age <= 1.5,"last_rx_age":age,"error":self.error,"reply":self.reply,"config":cfg,"config_path":str(self.config_path),"config_source":self.config_source,"config_error":self.config_error,"action":action,"keys":sorted(self.held_keys),"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"steering_direction":self.steering_direction,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic,"servo_angle":self.servo_angle}
+        return {"serial":serial_open,"arduino_online":serial_open and age is not None and age <= 1.5,"last_rx_age":age,"error":self.error,"reply":self.reply,"config":cfg,"config_path":str(self.config_path),"config_source":self.config_source,"config_error":self.config_error,"action":action,"keys":sorted(self.held_keys),"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"steering_direction":self.steering_direction,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic,"servo_angle":self.servo_angle,"motor_output":self.motor_output}

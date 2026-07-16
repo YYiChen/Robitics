@@ -401,6 +401,18 @@ function updateSteeringDial(angle, known) {
   turnLabel.textContent = `摄像头${direction} · 相对中位 ${Math.abs(cameraOffset).toFixed(0)}°`;
 }
 
+function updateWheelOutputs(output, known) {
+  const ids = {rf:"wheelOutputRf", lf:"wheelOutputLf", lr:"wheelOutputLr", rr:"wheelOutputRr"};
+  const values = Array.isArray(output) && output.length === 4 ? {rf:output[0], lf:output[1], lr:output[2], rr:output[3]} : {};
+  for (const [wheel, id] of Object.entries(ids)) {
+    const node = $("#" + id), value = Number(values[wheel]);
+    const valid = known && Number.isFinite(value);
+    node.textContent = valid ? `${node.id === "wheelOutputRf" ? "M1" : node.id === "wheelOutputLf" ? "M2" : node.id === "wheelOutputLr" ? "M3" : "M4"} ${value > 0 ? "+" : ""}${Math.round(value)}` : `${node.id === "wheelOutputRf" ? "M1" : node.id === "wheelOutputLf" ? "M2" : node.id === "wheelOutputLr" ? "M3" : "M4"} —`;
+    node.classList.toggle("forward", valid && value > 0);
+    node.classList.toggle("reverse", valid && value < 0);
+  }
+}
+
 function centerServo() {
   heldSteeringKeys.clear(); sendKeys();
   $("#servoSlider").value = steeringCenterAngle;
@@ -579,6 +591,7 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     const marker = $("#distanceMarker"); marker.style.left = validDistance ? `${Math.min(frontDistance, 100)}%` : "100%"; marker.style.background = blocked ? "var(--red)" : "var(--green)"; marker.style.boxShadow = blocked ? "0 0 9px rgb(222 89 101)" : "0 0 9px rgb(71 201 140)";
     if (!servoBusy && robot.servo_angle != null) { $("#servoSlider").value = robot.servo_angle; $("#servoAngleDisplay").textContent = `${robot.servo_angle}°`; updateSteeringDial(robot.servo_angle, true); }
     else if (robot.servo_angle == null) updateSteeringDial(null, false);
+    updateWheelOutputs(robot.motor_output, robot.arduino_online);
     if (robot.imu) { $("#roll").textContent = `${robot.imu[0].toFixed(2)}°`; $("#pitch").textContent = `${robot.imu[1].toFixed(2)}°`; $("#yaw").textContent = `${robot.imu[2].toFixed(2)}°`; }
     if (robot.speed) { $("#wheelSpeed").textContent = `${robot.speed[0].toFixed(1)} / ${robot.speed[1].toFixed(1)} pps`; $("#targetWheelSpeed").textContent = `${robot.speed[2].toFixed(1)} / ${robot.speed[3].toFixed(1)} pps`; }
     if (!configLoaded) { fillConfig(robot.config); configLoaded = true; }
