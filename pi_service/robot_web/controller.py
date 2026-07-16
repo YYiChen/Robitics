@@ -54,6 +54,27 @@ class Config:
     servo_qe_reversed: bool = True
     profiles: dict[str, dict[str, int]] = field(default_factory=default_profiles)
 
+
+def legacy_scalar_profiles(config: Config) -> dict[str, dict[str, int]]:
+    """Translate pre-profile PWM settings into the current action profiles."""
+    straight = max(0, min(255, int(config.straight_pwm)))
+    pivot = max(0, min(255, int(config.pivot_pwm)))
+    outer = max(0, min(255, int(config.curve_outer_pwm)))
+    inner = max(0, min(255, int(config.curve_inner_pwm)))
+    profiles = default_profiles()
+    profiles.update({
+        "F": {wheel: straight for wheel in WHEELS},
+        "B": {wheel: -straight for wheel in WHEELS},
+        "PL": {"rf": pivot, "lf": -pivot, "lr": -pivot, "rr": pivot},
+        "PR": {"rf": -pivot, "lf": pivot, "lr": pivot, "rr": -pivot},
+        "FL": {"rf": outer, "lf": inner, "lr": inner, "rr": outer},
+        "FR": {"rf": inner, "lf": outer, "lr": outer, "rr": inner},
+        "BL": {"rf": -inner, "lf": -outer, "lr": -outer, "rr": -inner},
+        "BR": {"rf": -outer, "lf": -inner, "lr": -inner, "rr": -outer},
+    })
+    return profiles
+
+
 class RobotController:
     def __init__(self, port: str, config_path: Path | None = None, legacy_config_path: Path | None = None) -> None:
         default_path = Path(__file__).with_name("drive_config.json")
@@ -64,7 +85,7 @@ class RobotController:
             else Path(__file__).with_name("robot_config.json") if config_path is None else None
         )
         self.config_io_lock = threading.Lock()
-        self.config, migrated_legacy = self._load_config()
+        self.config, migrated_legacy, self.config_source, self.config_error = self._load_config()
         # Existing users already have their tuned values in robot_config.json.
         # Copy them once to the dedicated drive file; never overwrite the old
         # file, and never let ordinary source edits replace the tuned values.
@@ -81,23 +102,29 @@ class RobotController:
         self._stopped = False
 
     @staticmethod
-    def _read_config(path: Path) -> Config | None:
+    def _read_config(path: Path) -> tuple[Config | None, str]:
         try:
             data = json.loads(path.read_text(encoding="utf-8")); config = Config()
             for key in ("speed_mode", "target_speed", "kp", "ki", "kd", "straight_pwm", "pivot_pwm", "curve_outer_pwm", "curve_inner_pwm", "servo_center_angle", "servo_speed_dps", "servo_qe_reversed"):
                 if key in data: setattr(config, key, type(getattr(config, key))(data[key]))
-            config.profiles = normalize_profiles(data.get("profiles")); return config
-        except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError, OSError): return None
+            raw_profiles = data.get("profiles")
+            config.profiles = normalize_profiles(raw_profiles) if isinstance(raw_profiles, dict) else legacy_scalar_profiles(config)
+            return config, ""
+        except FileNotFoundError:
+            return None, ""
+        except (json.JSONDecodeError, TypeError, ValueError, OSError) as exc:
+            return None, f"无法读取配置文件 {path}: {exc}"
 
-    def _load_config(self) -> tuple[Config, bool]:
-        config = self._read_config(self.config_path)
+    def _load_config(self) -> tuple[Config, bool, str, str]:
+        config, error = self._read_config(self.config_path)
         if config is not None:
-            return config, False
+            return config, False, "drive_config", ""
         if self.legacy_config_path is not None:
-            legacy = self._read_config(self.legacy_config_path)
+            legacy, legacy_error = self._read_config(self.legacy_config_path)
             if legacy is not None:
-                return legacy, True
-        return Config(), False
+                return legacy, True, "legacy_robot_config", ""
+            error = error or legacy_error
+        return Config(), False, "code_defaults", error
 
     def _save_config(self, snapshot: dict | None = None) -> None:
         data = snapshot if snapshot is not None else asdict(self.config)
@@ -113,6 +140,7 @@ class RobotController:
                 handle.flush()
                 os.fsync(handle.fileno())
             temporary.replace(self.config_path)
+        self.config_source, self.config_error = "drive_config", ""
 
     def start(self) -> None:
         with self._shutdown_lock:
@@ -307,4 +335,4 @@ class RobotController:
     def status(self) -> dict:
         with self.lock: cfg, action, seen = asdict(self.config), self.action, self.last_client_seen
         serial_open = bool(self.serial and self.serial.is_open); age = time.monotonic() - self.last_rx if self.last_rx else None
-        return {"serial":serial_open,"arduino_online":serial_open and age is not None and age <= 1.5,"last_rx_age":age,"error":self.error,"reply":self.reply,"config":cfg,"action":action,"keys":sorted(self.held_keys),"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"steering_direction":self.steering_direction,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic,"servo_angle":self.servo_angle}
+        return {"serial":serial_open,"arduino_online":serial_open and age is not None and age <= 1.5,"last_rx_age":age,"error":self.error,"reply":self.reply,"config":cfg,"config_path":str(self.config_path),"config_source":self.config_source,"config_error":self.config_error,"action":action,"keys":sorted(self.held_keys),"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"steering_direction":self.steering_direction,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic,"servo_angle":self.servo_angle}

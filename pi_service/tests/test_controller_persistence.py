@@ -88,6 +88,16 @@ class ControllerPersistenceTests(unittest.TestCase):
             self.assertIn('"target_speed": 57.0', drive_path.read_text(encoding="utf-8"))
             self.assertIn('"target_speed": 57', legacy_path.read_text(encoding="utf-8"))
 
+    def test_legacy_scalar_pwm_config_is_converted_to_drive_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "drive_config.json"
+            config_path.write_text('{"straight_pwm": 121, "pivot_pwm": 141, "curve_outer_pwm": 201, "curve_inner_pwm": 71}', encoding="utf-8")
+            controller = RobotController("unused", config_path)
+            self.assertEqual(controller.config_source, "drive_config")
+            self.assertEqual(controller.config.profiles["F"], {"rf": 121, "lf": 121, "lr": 121, "rr": 121})
+            self.assertEqual(controller.config.profiles["FL"], {"rf": 201, "lf": 71, "lr": 71, "rr": 201})
+            self.assertEqual(controller.config.profiles["FR"], {"rf": 71, "lf": 201, "lr": 201, "rr": 71})
+
     def test_parses_one_front_sensor_and_servo_reply(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             controller = RobotController("unused", Path(directory) / "drive_config.json")

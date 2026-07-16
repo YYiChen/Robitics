@@ -1,6 +1,8 @@
 from __future__ import annotations
 import argparse
 import atexit
+import os
+from pathlib import Path
 from flask import Flask, Response, jsonify, request, render_template
 from camera import CameraStreamer
 from controller import RobotController
@@ -128,6 +130,7 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", default="/dev/ttyACM0")
+    parser.add_argument("--drive-config", default=os.environ.get("ROBOT_DRIVE_CONFIG"))
     parser.add_argument("--web-port", type=int, default=5000)
     parser.add_argument("--video-backend", choices=("mjpeg", "webrtc"), default="mjpeg")
     parser.add_argument("--webrtc-width", type=int, default=1280)
@@ -156,7 +159,8 @@ def main() -> None:
             udp_output=args.webrtc_udp_output,
         )
     )
-    camera.start(); controller = RobotController(args.port); controller.start()
+    config_path = Path(args.drive_config).expanduser() if args.drive_config else None
+    camera.start(); controller = RobotController(args.port, config_path=config_path); controller.start()
     oled = None if args.disable_oled else OledStatusService(controller, camera, address=args.oled_address, i2c_port=args.oled_i2c_port)
     if oled: oled.start()
     # Persist the current wheel profiles on normal process exit as well as
