@@ -46,7 +46,7 @@ WebRTC 模式不能同时运行 `start_robot.sh`，也不会支持现有 MJPEG �
 
 - 串口波特率为 9600；协议见 `docs/serial-protocol.md`。
 - 后轮编码器使用 Mega 的 18（左）和 19（右）；IMU 使用 MPU-6500 I2C。
-- 超声波仅保留中间前向传感器（TRIG 26 / ECHO 27），返回 `US,front`；前方距离小于等于 30 cm 时 Arduino 只拒绝前进，原地转向和后退不受限制。
+- 超声波仅保留中间前向传感器（TRIG 26 / ECHO 27），返回 `US,front`；前方距离小于等于 10 cm 时 Arduino 只拒绝前进，原地转向和后退不受限制。
 - SG90 舵机信号线使用 Mega D22，网页滑块控制 `0–180°`；舵机必须独立稳定供电并与 Mega 共地。舵机命令不会延长电机心跳。
 - 网页“轮速配置”、PWM 与 PID 参数保存在树莓派独立的 `drive_config.json`；该文件不进入 Git，也不会被后续代码更新覆盖。首次升级会从旧 `robot_config.json` 自动复制现有调参值。`drive_config.example.json` 仅是可提交的默认模板。
 - 网页相机支持自动曝光 EV 和固定快门；快门以 `1/xx` 秒输入。自动曝光模式下 EV 生效，固定快门模式下关闭自动曝光。

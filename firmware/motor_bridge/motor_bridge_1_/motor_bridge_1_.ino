@@ -76,7 +76,7 @@ constexpr unsigned long ULTRASONIC_BETWEEN_SENSORS_MS = 35UL;
 // Only the single centre/front sensor is safety active.  A distance at or
 // below this threshold blocks forward wheel commands; pivots and reverse are
 // intentionally left available.
-constexpr float FRONT_STOP_DISTANCE_CM = 30.0F;
+constexpr float FRONT_STOP_DISTANCE_CM = 10.0F;
 
 float frontDistanceCm = -1.0F;
 
