@@ -6,6 +6,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Iterator
+from fractions import Fraction
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -166,7 +167,8 @@ class DualStreamCamera:
                 bitrate=self.video_bitrate,
                 repeat=True,
                 iperiod=self.webrtc_gop_frames,
-                framerate=self.video_fps,
+                # Picamera2's Libav encoder expects a Fraction, not a float.
+                framerate=Fraction(str(self.video_fps)),
                 profile="baseline",
             )
             # These are output-side FFmpeg options.  They avoid the default
