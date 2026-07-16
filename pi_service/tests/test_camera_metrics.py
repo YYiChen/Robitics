@@ -2,6 +2,7 @@ import sys
 import tempfile
 import unittest
 import importlib.util
+import re
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "robot_web"))
@@ -12,6 +13,14 @@ from webrtc_stream import WebRTCStreamer
 
 
 class CameraMetricsTests(unittest.TestCase):
+    def test_template_defines_every_id_referenced_by_frontend_script(self) -> None:
+        web_root = Path(__file__).parents[1] / "robot_web"
+        script = (web_root / "static" / "app.js").read_text(encoding="utf-8")
+        template = (web_root / "templates" / "index.html").read_text(encoding="utf-8")
+        referenced_ids = set(re.findall(r"#([A-Za-z][A-Za-z0-9_-]+)", script))
+        missing = sorted(item for item in referenced_ids if f'id="{item}"' not in template)
+        self.assertEqual(missing, [])
+
     def test_reports_encoded_and_stream_bandwidth(self) -> None:
         camera = CameraStreamer(width=1280, height=720, fps=15)
         camera._record_encoded(100_000, 12.5)
