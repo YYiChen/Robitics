@@ -6,6 +6,9 @@ let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false,
 let servoBusy = false, queuedServoAngle = null;
 let receivedFrameCount = 0, receivedFrameWindowAt = performance.now(), browserReceiveFps = 0, statusRttMs = null;
 let activeVideoTransport = "mjpeg", currentWebrtcUrl = "";
+let highresPreviewEnabled = false, highresPreviewAvailable = false;
+let webrtcPeer = null, webrtcSessionUrl = "", webrtcStatsTimer = null, webrtcStatsPrevious = null;
+const webrtcMetrics = {state:"未连接", fps:null, kbps:null, jitterMs:null, jitterBufferMs:null, packetsLost:null, framesDropped:null};
 const wheelNames = ["rf", "lf", "lr", "rr"];
 const actionKeys = {FL:"q", F:"w", FR:"e", PL:"a", PR:"d", BL:"z", B:"s", BR:"c"};
 const keyboardKeys = {w:"w", a:"a", s:"s", d:"d", q:"q", e:"e", z:"z", c:"c", ArrowUp:"w", ArrowDown:"s", ArrowLeft:"a", ArrowRight:"d"};
@@ -24,21 +27,97 @@ function webrtcUrl(camera) {
   const path = String(camera.webrtc_path || "cam").replace(/^\/+|\/+$/g, "");
   return `http://${location.hostname}:${port}/${path}/`;
 }
+function whepUrl(camera) { return `${webrtcUrl(camera).replace(/\/$/, "")}/whep`; }
+function setHighresPreview(enabled) {
+  highresPreviewEnabled = !!enabled && highresPreviewAvailable;
+  const image = $("#highresVideo"), idle = $("#highresPreviewIdle"), toggle = $("#highresPreviewToggle");
+  if (highresPreviewEnabled) {
+    image.src = `/highres_feed?ts=${Date.now()}`;
+    image.classList.remove("hidden"); idle.classList.add("hidden");
+    toggle.textContent = "关闭预览";
+  } else {
+    image.removeAttribute("src"); image.classList.add("hidden");
+    idle.classList.toggle("hidden", !highresPreviewAvailable);
+    toggle.textContent = "开启预览";
+  }
+}
+$("#highresPreviewToggle").onclick = () => setHighresPreview(!highresPreviewEnabled);
+function waitForIceGathering(peer) {
+  if (peer.iceGatheringState === "complete") return Promise.resolve();
+  return new Promise(resolve => {
+    const done = () => { if (peer.iceGatheringState === "complete") { peer.removeEventListener("icegatheringstatechange", done); resolve(); } };
+    peer.addEventListener("icegatheringstatechange", done);
+  });
+}
+function stopWebrtc() {
+  clearInterval(webrtcStatsTimer); webrtcStatsTimer = null; webrtcStatsPrevious = null;
+  const session = webrtcSessionUrl; webrtcSessionUrl = "";
+  if (session) fetch(session, {method:"DELETE", keepalive:true}).catch(() => {});
+  if (webrtcPeer) { webrtcPeer.close(); webrtcPeer = null; }
+  webrtcVideo.srcObject = null;
+}
+async function refreshWebrtcStats() {
+  if (!webrtcPeer) return;
+  try {
+    const reports = await webrtcPeer.getStats();
+    let inbound = null;
+    reports.forEach(report => { if (report.type === "inbound-rtp" && report.kind === "video") inbound = report; });
+    if (!inbound) return;
+    const now = performance.now(), previous = webrtcStatsPrevious;
+    if (previous) {
+      const seconds = Math.max(.001, (now - previous.at) / 1000);
+      webrtcMetrics.kbps = (inbound.bytesReceived - previous.bytes) * 8 / seconds / 1000;
+      webrtcMetrics.fps = (inbound.framesDecoded - previous.frames) / seconds;
+    }
+    webrtcMetrics.jitterMs = Number.isFinite(inbound.jitter) ? inbound.jitter * 1000 : null;
+    webrtcMetrics.jitterBufferMs = inbound.jitterBufferEmittedCount ? inbound.jitterBufferDelay / inbound.jitterBufferEmittedCount * 1000 : null;
+    webrtcMetrics.packetsLost = Number.isFinite(inbound.packetsLost) ? inbound.packetsLost : null;
+    const quality = webrtcVideo.getVideoPlaybackQuality?.();
+    webrtcMetrics.framesDropped = quality ? quality.droppedVideoFrames : null;
+    webrtcStatsPrevious = {at:now, bytes:inbound.bytesReceived || 0, frames:inbound.framesDecoded || 0};
+  } catch (_) {}
+}
+async function startWebrtc(camera) {
+  stopWebrtc();
+  const endpoint = whepUrl(camera), peer = new RTCPeerConnection();
+  currentWebrtcUrl = endpoint; webrtcPeer = peer; webrtcMetrics.state = "正在建立 WHEP/WebRTC…";
+  peer.addTransceiver("video", {direction:"recvonly"});
+  peer.ontrack = event => { webrtcVideo.srcObject = event.streams[0]; webrtcVideo.play().catch(() => {}); webrtcMetrics.state = "已连接"; };
+  peer.onconnectionstatechange = () => { if (peer === webrtcPeer && peer.connectionState !== "connected") webrtcMetrics.state = `连接状态：${peer.connectionState}`; };
+  try {
+    await peer.setLocalDescription(await peer.createOffer());
+    await waitForIceGathering(peer);
+    const response = await fetch(endpoint, {method:"POST", headers:{"Content-Type":"application/sdp", Accept:"application/sdp"}, body:peer.localDescription.sdp});
+    if (!response.ok) throw Error(`WHEP 返回 HTTP ${response.status}`);
+    const location = response.headers.get("location");
+    webrtcSessionUrl = location ? new URL(location, endpoint).toString() : endpoint;
+    await peer.setRemoteDescription({type:"answer", sdp:await response.text()});
+    webrtcStatsTimer = setInterval(refreshWebrtcStats, 1000); refreshWebrtcStats();
+  } catch (error) {
+    if (peer === webrtcPeer) { webrtcMetrics.state = `WHEP 连接失败：${error.message}`; stopWebrtc(); }
+  }
+}
 function setVideoTransport(camera) {
   activeVideoTransport = camera.transport || "mjpeg";
   const mjpeg = isMjpeg();
   const highresAvailable = mjpeg || !!camera.highres_available;
+  highresPreviewAvailable = highresAvailable;
   for (const id of ["mjpegModeControls", "mjpegProfileControls", "mjpegExposureControls", "mjpegAuxiliary", "mjpegCaptureControls"]) {
     $("#" + id).classList.toggle("hidden", !mjpeg);
   }
   $("#mjpegHighresControls").classList.toggle("hidden", !highresAvailable);
   video.classList.toggle("hidden", !mjpeg);
   webrtcVideo.classList.toggle("hidden", mjpeg);
-  highresVideo.classList.toggle("hidden", !highresAvailable);
+  highresVideo.classList.toggle("hidden", !highresAvailable || !highresPreviewEnabled);
   $("#highresUnavailable").classList.toggle("hidden", highresAvailable);
+  $("#highresPreviewToggle").disabled = !highresAvailable;
+  if (!highresAvailable && highresPreviewEnabled) setHighresPreview(false);
+  $("#highresPreviewIdle").classList.toggle("hidden", !highresAvailable || highresPreviewEnabled);
   if (!mjpeg) {
-    const url = webrtcUrl(camera);
-    if (url !== currentWebrtcUrl) { currentWebrtcUrl = url; webrtcVideo.src = url; }
+    const url = whepUrl(camera);
+    if (url !== currentWebrtcUrl || !webrtcPeer) void startWebrtc(camera);
+  } else if (webrtcPeer) {
+    stopWebrtc(); currentWebrtcUrl = "";
   }
 }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
@@ -301,7 +380,9 @@ function distance(value) {
 }
 function streamDiagnosis(camera) {
   if (camera.transport === "webrtc") {
-    return ["H.264 / WebRTC 低延迟模式", "视频由 rpicam-vid 编码、MediaMTX 分发；请在 MediaMTX 日志和浏览器 WebRTC 页面确认 FPS、码率与连接状态。"];
+    if (webrtcMetrics.jitterBufferMs != null && webrtcMetrics.jitterBufferMs > 150) return ["浏览器 WebRTC 缓冲偏高", `当前抖动缓冲约 ${fixed(webrtcMetrics.jitterBufferMs)} ms；请先关闭高清预览，并检查热点信号或降低实时码率。`];
+    if (webrtcMetrics.packetsLost != null && webrtcMetrics.packetsLost > 0) return ["WebRTC 存在丢包", `累计丢包 ${webrtcMetrics.packetsLost}；热点链路会为恢复丢包而增加缓冲。`];
+    return ["H.264 / WebRTC 低延迟模式", `浏览器状态：${webrtcMetrics.state}；请观察接收 FPS、码率和抖动缓冲。`];
   }
   if (!camera.online) return ["树莓派相机服务离线", "请先处理相机状态或服务错误；网络判断暂不可用。"];
   const target = Number(camera.target_fps) || Number(camera.sensor_target_fps) || 0;
@@ -362,8 +443,20 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     $("#highresHint").textContent = highresAvailable
       ? `JPEG ${highresProfile.quality ?? 75} · 单张 ${highres.jpeg_bytes ? `${fixed(highres.jpeg_bytes / 1000)} KB` : "—"} · 编码 ${fixed(highres.encode_ms)} ms · 客户端 ${highres.active_clients ?? 0}`
       : "请使用 start_robot.sh 启动 MJPEG 服务。";
-    $("#highresStatusDetail").textContent = $("#highresStats").textContent;
-    $("#highresDetailHint").textContent = $("#highresHint").textContent;
+    $("#highresStatusDetail").textContent = highresPreviewEnabled ? $("#highresStats").textContent : "预览关闭 · 不占用网页高清传输带宽";
+    $("#highresDetailHint").textContent = highresPreviewEnabled ? $("#highresHint").textContent : "点击高清画面右上角“开启预览”后再订阅。";
+    if (camera.transport === "webrtc") {
+      const fps = webrtcMetrics.fps == null ? "—" : `${fixed(webrtcMetrics.fps)} FPS`;
+      const rate = webrtcMetrics.kbps == null ? "—" : `${fixed(webrtcMetrics.kbps)} kbps`;
+      $("#webrtcReception").textContent = `${webrtcMetrics.state} · ${fps} · ${rate}`;
+      const jitter = webrtcMetrics.jitterBufferMs == null ? "—" : `${fixed(webrtcMetrics.jitterBufferMs)} ms`;
+      const lost = webrtcMetrics.packetsLost == null ? "—" : webrtcMetrics.packetsLost;
+      const dropped = webrtcMetrics.framesDropped == null ? "—" : webrtcMetrics.framesDropped;
+      $("#webrtcReceptionDetail").textContent = `抖动缓冲 ${jitter} · 累计丢包 ${lost} · 浏览器丢帧 ${dropped} · 相机缓冲 ${camera.stream_profile?.camera_buffer_count ?? "—"}`;
+    } else {
+      $("#webrtcReception").textContent = "当前为 MJPEG 模式";
+      $("#webrtcReceptionDetail").textContent = "切换到 start_webrtc.sh 后显示浏览器 WebRTC 接收统计。";
+    }
     $("#liveFeedMeta").textContent = isMjpeg()
       ? `${streamResolution} · ${fixed(camera.stream_fps)} FPS`
       : `${resolution} · H.264`;
@@ -390,4 +483,5 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     $("#status").textContent = [`Arduino: ${robot.arduino_online ? "在线" : robot.serial ? "无响应" : "离线"}`, `串口: ${robot.serial ? "已打开" : "未打开"}`, `最近回包: ${age}`, `动作: ${robot.action}`, `按键: ${robot.keys?.join("+") || "—"}`, `回复: ${robot.reply || "—"}`, `错误: ${robot.error || "—"}`].join("\n");
   } catch (error) { $("#status").textContent = `网页后端连接失败：${error}`; $("#arduinoState").innerHTML = dot(false, "网页服务异常"); }
 }
+addEventListener("beforeunload", stopWebrtc);
 refreshStatus(); setInterval(refreshStatus, 500);

@@ -23,14 +23,15 @@
         <div class="feed-heading"><div><span class="eyebrow">低延迟控制画面</span><h2>实时预览</h2></div><span class="feed-badge" id="liveFeedMeta">连接中…</span></div>
         <div class="feed-stage">
           <img id="video" src="/video_feed" alt="CSI 实时预览">
-          <iframe id="webrtcVideo" class="hidden" title="H.264 WebRTC 视频" allow="autoplay; fullscreen"></iframe>
+          <video id="webrtcVideo" class="hidden" muted autoplay playsinline aria-label="H.264 WebRTC 视频" style="display:block;width:100%;height:100%;border:0;object-fit:contain"></video>
         </div>
         <div class="feed-footer"><span id="cameraMeta">读取视频参数…</span><span id="cameraBandwidth">—</span></div>
       </article>
       <article class="feed-card" id="highresCard">
-        <div class="feed-heading"><div><span class="eyebrow">2 FPS · JPEG 75</span><h2>高清图片预览</h2></div><span class="feed-badge" id="highresFeedMeta">连接中…</span></div>
+        <div class="feed-heading"><div><span class="eyebrow">2 FPS · JPEG 75</span><h2>高清图片预览</h2></div><button class="compact-button primary" id="highresPreviewToggle" type="button">开启预览</button></div>
         <div class="feed-stage">
-          <img id="highresVideo" src="/highres_feed" alt="高清 JPEG 预览">
+          <img id="highresVideo" class="hidden" alt="高清 JPEG 预览">
+          <div class="feed-unavailable" id="highresPreviewIdle">预览默认关闭。开启后才会通过热点接收 1640 px 高清 JPEG。</div>
           <div class="feed-unavailable hidden" id="highresUnavailable">高清 JPEG 通道仅在 MJPEG 服务模式下可用。</div>
         </div>
         <div class="feed-footer"><span id="highresStats">读取中…</span><span id="highresHint">独立高清通道</span></div>
@@ -85,6 +86,7 @@
       <div class="telemetry compact-metrics"><div class="metric wide"><span>前向超声波</span><strong id="distance">等待数据…</strong><small>TRIG 26 / ECHO 27 · 10 cm 仅限制前进</small></div><div class="metric"><span>IMU Roll</span><strong id="roll">—</strong></div><div class="metric"><span>IMU Pitch</span><strong id="pitch">—</strong></div><div class="metric"><span>IMU Yaw</span><strong id="yaw">—</strong></div><div class="metric"><span>轮速 L / R</span><strong id="wheelSpeed">—</strong></div><div class="metric"><span>目标 L / R</span><strong id="targetWheelSpeed">—</strong></div></div>
       <div class="stream-metrics compact-metrics"><div class="metric"><span>采集 → 网页</span><strong id="cameraResolution">—</strong></div><div class="metric"><span>传输档位</span><strong id="streamProfileState">—</strong></div><div class="metric"><span>采集 / 发送 FPS</span><strong id="cameraFps">—</strong></div><div class="metric"><span>单帧 JPEG</span><strong id="cameraFrameSize">—</strong></div><div class="metric"><span>实时编码</span><strong id="cameraEncode">—</strong></div><div class="metric"><span>实时帧延迟</span><strong id="cameraAge">—</strong></div><div class="metric wide"><span id="cameraBandwidthLabel">MJPEG 发送带宽</span><strong id="cameraBandwidthDetail">—</strong><small id="cameraBandwidthHint">包含所有网页客户端。</small></div><div class="metric wide"><span>高清 JPEG 通道</span><strong id="highresStatusDetail">读取中…</strong><small id="highresDetailHint">2 FPS · JPEG 75</small></div><div class="metric wide"><span>卡顿诊断</span><strong id="streamDiagnosis">正在收集样本…</strong><small id="streamDiagnosisDetail">请观察至少 5 秒。</small></div></div>
       <div class="stream-metrics compact-metrics"><div class="metric"><span>CPU</span><strong id="systemCpu">测量中…</strong></div><div class="metric"><span>负载</span><strong id="systemLoad">—</strong></div><div class="metric"><span>内存</span><strong id="systemMemory">—</strong></div><div class="metric"><span>温度</span><strong id="systemTemperature">—</strong></div><div class="metric"><span>磁盘</span><strong id="systemDisk">—</strong></div><div class="metric"><span>服务运行时长</span><strong id="systemUptime">—</strong></div><div class="metric wide"><span>OLED 64×48</span><strong id="oledState">读取中…</strong><small id="oledHint">I2C 状态</small></div></div>
+      <div class="metric"><span>WebRTC 接收</span><strong id="webrtcReception">等待 WebRTC 连接</strong><small id="webrtcReceptionDetail">仅 H.264/WebRTC 模式显示浏览器接收统计。</small></div>
       <p class="reply-line">最近回包：<strong id="lastReply">等待 Arduino 回包</strong></p><pre class="log" id="status">正在读取……</pre>
     </section>
   </aside>

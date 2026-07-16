@@ -94,6 +94,7 @@ class CameraMetricsTests(unittest.TestCase):
             self.assertEqual(status["stream_profile"]["keyframe_interval_ms"], 267)
             self.assertEqual(status["stream_profile"]["profile"], "baseline")
             self.assertTrue(status["stream_profile"]["low_latency_mux"])
+            self.assertEqual(status["stream_profile"]["camera_buffer_count"], 2)
 
     @unittest.skipUnless(importlib.util.find_spec("flask"), "Flask is installed on the Raspberry Pi deployment target")
     def test_webrtc_mode_rejects_mjpeg_endpoints(self) -> None:

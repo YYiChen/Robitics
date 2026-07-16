@@ -157,7 +157,9 @@ class DualStreamCamera:
                 main={"size": (self.width, self.height), "format": "RGB888"},
                 lores={"size": (self.video_width, self.video_height), "format": "YUV420"},
                 controls={"FrameDurationLimits": (frame_duration_us, frame_duration_us), "AwbEnable": True},
-                buffer_count=4,
+                # Keep only two camera buffers: at 30 FPS this avoids up to
+                # roughly 67 ms of extra capture queueing versus four buffers.
+                buffer_count=2,
             )
             self._picam2.configure(config)
             self._encoder = Encoder(
@@ -282,6 +284,7 @@ class DualStreamCamera:
                 "keyframe_interval_ms": round(self.webrtc_gop_frames / self.video_fps * 1000),
                 "profile": "baseline",
                 "low_latency_mux": True,
+                "camera_buffer_count": 2,
             },
             "highres_profile": self._highres_profile_status(),
             "highres": {"target_fps": HIGHRES_FPS, "capture_fps": frame_count, "stream_fps": stream_count, "jpeg_bytes": last_size, "kBps": frame_bytes / 1000.0, "kbps": frame_bytes * 8.0 / 1000.0, "stream_kBps": stream_bytes / 1000.0, "stream_kbps": stream_bytes * 8.0 / 1000.0, "encode_ms": last_encode, "encode_ms_avg": encode_average, "frame_age_ms": (now - last_at) * 1000.0 if last_at else None, "active_clients": clients},
