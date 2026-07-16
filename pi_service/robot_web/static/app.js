@@ -1,5 +1,5 @@
 const $ = selector => document.querySelector(selector);
-const video = $("#video"), webrtcVideo = $("#webrtcVideo"), save = $("#save");
+const video = $("#video"), webrtcVideo = $("#webrtcVideo"), highresVideo = $("#highresVideo"), save = $("#save");
 const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:false});
 let folder, aborter, count = 0, profiles = {}, activeMode = "all", configLoaded = false, keysSending = false, keysQueued = false;
 let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, highresProfileDirty = false, highresProfileBusy = false, exposureDirty = false, exposureBusy = false, videoRetryTimer;
@@ -32,6 +32,8 @@ function setVideoTransport(camera) {
   }
   video.classList.toggle("hidden", !mjpeg);
   webrtcVideo.classList.toggle("hidden", mjpeg);
+  highresVideo.classList.toggle("hidden", !mjpeg);
+  $("#highresUnavailable").classList.toggle("hidden", mjpeg);
   if (!mjpeg) {
     const url = webrtcUrl(camera);
     if (url !== currentWebrtcUrl) { currentWebrtcUrl = url; webrtcVideo.src = url; }
@@ -102,6 +104,20 @@ video.addEventListener("load", () => {
     receivedFrameWindowAt = now;
   }
 });
+highresVideo.addEventListener("error", () => {
+  $("#highresFeedMeta").textContent = "高清流断开";
+  $("#highresCard").classList.add("feed-error");
+});
+highresVideo.addEventListener("load", () => {
+  $("#highresCard").classList.remove("feed-error");
+});
+for (const tab of document.querySelectorAll(".section-tab")) {
+  tab.addEventListener("click", () => {
+    const panelId = tab.dataset.panel;
+    document.querySelectorAll(".section-tab").forEach(item => item.classList.toggle("active", item === tab));
+    document.querySelectorAll(".tab-panel").forEach(panel => panel.classList.toggle("active", panel.id === panelId));
+  });
+}
 $("#cameraMode").onchange = () => { cameraModeDirty = true; };
 $("#applyCameraMode").onclick = async () => {
   if (cameraModeBusy) return;
@@ -332,11 +348,10 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     $("#cameraBandwidthLabel").textContent = isMjpeg() ? "MJPEG 发送带宽（所有网页合计）" : "H.264 目标码率";
     $("#cameraBandwidthHint").textContent = isMjpeg() ? "同时显示 kB/s 和 kbps，包含 MJPEG 分片头；单个网页时就是当前流量" : "实际 WebRTC 码率由 MediaMTX/浏览器统计；此处显示启动时的编码目标。";
     $("#cameraBandwidth").textContent = isMjpeg() ? `${fixed(camera.stream_kBps)} kB/s · ${fixed(camera.stream_kbps)} kbps` : camera.stream_profile?.label || "H.264";
+    $("#cameraBandwidthDetail").textContent = $("#cameraBandwidth").textContent;
     $("#cameraFrameSize").textContent = isMjpeg() ? (camera.jpeg_bytes ? `${fixed(camera.jpeg_bytes / 1000)} KB` : "—") : "连续 H.264 帧";
     $("#cameraEncode").textContent = isMjpeg() ? `${fixed(camera.encode_ms)} ms（平均 ${fixed(camera.encode_ms_avg)} ms）` : "rpicam-vid";
     $("#cameraAge").textContent = isMjpeg() ? (camera.frame_age_ms == null ? "—" : `${fixed(camera.frame_age_ms)} ms`) : "由 WebRTC 自适应";
-    $("#cameraClients").textContent = isMjpeg() ? `${camera.active_clients ?? 0}` : "MediaMTX 管理";
-    $("#browserReceiveFps").textContent = isMjpeg() ? (browserReceiveFps > 0 ? `${fixed(browserReceiveFps)} FPS` : "测量中…") : "MediaMTX 页面显示";
     const highres = camera.highres || {}, highresProfile = camera.highres_profile || {};
     $("#highresStats").textContent = isMjpeg()
       ? `${highresProfile.resolution || "—"} · ${fixed(highres.capture_fps)} / ${fixed(highres.target_fps)} FPS · 发送 ${fixed(highres.stream_kBps)} kB/s`
@@ -344,7 +359,14 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     $("#highresHint").textContent = isMjpeg()
       ? `JPEG ${highresProfile.quality ?? 75} · 单张 ${highres.jpeg_bytes ? `${fixed(highres.jpeg_bytes / 1000)} KB` : "—"} · 编码 ${fixed(highres.encode_ms)} ms · 客户端 ${highres.active_clients ?? 0}`
       : "请使用 start_robot.sh 启动 MJPEG 服务。";
-    $("#statusRtt").textContent = statusRttMs == null ? "测量中…" : `${fixed(statusRttMs)} ms`;
+    $("#highresStatusDetail").textContent = $("#highresStats").textContent;
+    $("#highresDetailHint").textContent = $("#highresHint").textContent;
+    $("#liveFeedMeta").textContent = isMjpeg()
+      ? `${streamResolution} · ${fixed(camera.stream_fps)} FPS`
+      : `${resolution} · H.264`;
+    $("#highresFeedMeta").textContent = isMjpeg()
+      ? `${highresProfile.resolution || "—"} · ${fixed(highres.capture_fps)} FPS`
+      : "MJPEG 专用";
     const [diagnosis, diagnosisDetail] = streamDiagnosis(camera);
     $("#streamDiagnosis").textContent = diagnosis;
     $("#streamDiagnosisDetail").textContent = diagnosisDetail;
