@@ -25,6 +25,15 @@ chmod +x install_webrtc.sh start_webrtc.sh
 
 首次参数为 `1280×720 / 30 FPS / 2.5 Mbps / 15 帧关键帧`。网页仍访问 `http://树莓派IP:5000`，它会自动嵌入 `http://树莓派IP:8889/cam/` 的 WebRTC 预览；电脑端 DL 可读取 `rtsp://树莓派IP:8554/cam`。按 `Ctrl+C` 会同时停止 Flask、`rpicam-vid` 与 MediaMTX。日志保存在 `pi_service/logs/`。
 
+服务启动约 3 秒后，执行自动验收：
+
+```bash
+chmod +x verify_webrtc.sh
+./verify_webrtc.sh
+```
+
+它必须输出 `Flask backend: webrtc` 和 `PASS`。若 `Camera online: False`，先查看 `logs/mediamtx.log` 与 `logs/rpicam-vid.log`；若命令通过但电脑无法播放，检查热点网络是否允许树莓派的 TCP 8889 和 WebRTC UDP 通信。
+
 可在启动前调节参数，例如：
 
 ```bash
@@ -44,7 +53,7 @@ WebRTC 模式不能同时运行 `start_robot.sh`，也不会支持现有 MJPEG �
 - 网页采用“按住才动、松开即停”的按键状态协议：浏览器每 180 ms 经 HTTP/TCP 发送按键集合，树莓派每 200 ms 向 Arduino 发送电机命令。网页失焦、网络断开和 Arduino 1 秒收不到命令都会停车。
 - 网页 CSI 视频卡片会显示实时分辨率、采集/发送 FPS、JPEG 单帧大小、编码耗时、最新帧延迟以及 MJPEG 实际发送带宽；带宽同时显示十进制 `kB/s` 和 `kbps`。
 - 网页“传输档位”与“相机读取档位”分开：相机仍以选择的 CSI 分辨率和 30 FPS 采集，树莓派只将缩放后的 JPEG 最新帧发给网页。默认“低延迟”为最多 `820×616`、JPEG 质量 70，显著降低热点带宽且不新增队列/缓存；需要全分辨率截图或 DL 原图时再切换“原始尺寸”。此项会保存到 `camera_config.json`。
-- 当前网页视频仍是低延迟 MJPEG，不是 H.264/WebRTC。H.264/WebRTC 能进一步节省带宽，但需要独立媒体服务与浏览器播放链路，不能仅替换 Flask 的一个响应头；后续应在保持此控制服务不变的前提下单独部署。
+- 默认网页视频仍是低延迟 MJPEG；通过 `start_webrtc.sh` 可切换至 H.264/WebRTC 独立媒体服务，不能与 MJPEG 模式同时启动。
 - 视频卡片中的“电脑端辅助画面”使用浏览器 Canvas 复用当前视频帧，可完整缩放或中心裁切到 640×480；它不创建第二条视频连接，不增加树莓派网络带宽和编码负载。
 - 网页可在 `1640×1232` 与 `3280×2464` 两个 CSI 读取档位之间切换；两个档位都请求 30 FPS 传感器帧时长，切换会短暂重启视频流，实际采集/编码帧率以网页指标为准。
 - 本地图片保存需要 Chrome/Edge 的 HTTPS 或 localhost 安全上下文，并由用户选择文件夹授权。
