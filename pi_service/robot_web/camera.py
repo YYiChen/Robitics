@@ -27,17 +27,21 @@ CAMERA_MODES = {
 }
 DEFAULT_CAMERA_MODE = "fast_1640"
 DEFAULT_EXPOSURE = {"auto": True, "ev": 0.0, "shutter_denominator": 200}
+LOW_LATENCY_SIZE = (640, 480)
 STREAM_PROFILES = {
     # Keep the camera running at the selected sensor mode, but constrain the
     # image which leaves the Pi.  MJPEG browsers always receive the newest
     # encoded frame, so no extra buffering is introduced by these profiles.
-    "low_latency": {"label": "低延迟 · 640×480 · JPEG 60", "max_width": 640, "size": (640, 480), "quality": 60},
+    "low_latency": {"label": "低延迟 · 640×480 · JPEG 60", "max_width": 640, "size": LOW_LATENCY_SIZE, "quality": 60},
     "balanced": {"label": "平衡 · 最宽 1230 px · JPEG 70", "max_width": 1230, "quality": 70},
     "source": {"label": "原始尺寸 · JPEG 70", "max_width": None, "quality": 70},
 }
 DEFAULT_STREAM_PROFILE = "low_latency"
-HIGHRES_FPS = 2.0
+DEFAULT_HIGHRES_FPS = 2.0
+MIN_HIGHRES_FPS = 1.0
+MAX_HIGHRES_FPS = 15.0
 HIGHRES_JPEG_QUALITY = 75
+HIGHRES_CACHE_MAX_AGE = 0.45
 HIGHRES_PROFILES = {
     "source": {"label": "原始尺寸 · JPEG 75", "max_width": None},
     "medium_1640": {"label": "高清平衡 · 最宽 1640 px · JPEG 75", "max_width": 1640},
@@ -75,6 +79,7 @@ class CameraStreamer:
         self.shutter_denominator = int(saved["exposure"]["shutter_denominator"])
         self.stream_profile_key = saved["stream_profile"]
         self.highres_profile_key = saved["highres_profile"]
+        self.highres_fps = float(saved["highres_fps"])
         self._condition = threading.Condition()
         self._jpeg: bytes | None = None
         self._sequence = 0
@@ -110,6 +115,7 @@ class CameraStreamer:
             "exposure": dict(DEFAULT_EXPOSURE),
             "stream_profile": DEFAULT_STREAM_PROFILE,
             "highres_profile": DEFAULT_HIGHRES_PROFILE,
+            "highres_fps": DEFAULT_HIGHRES_FPS,
         }
         try:
             data = json.loads(self.config_path.read_text(encoding="utf-8"))
@@ -120,6 +126,7 @@ class CameraStreamer:
             if stream_profile in STREAM_PROFILES: defaults["stream_profile"] = stream_profile
             highres_profile = data.get("highres_profile")
             if highres_profile in HIGHRES_PROFILES: defaults["highres_profile"] = highres_profile
+            defaults["highres_fps"] = max(MIN_HIGHRES_FPS, min(MAX_HIGHRES_FPS, float(data.get("highres_fps", defaults["highres_fps"]))))
             exposure = data.get("exposure", {})
             if isinstance(exposure, dict):
                 defaults["exposure"]["auto"] = bool(exposure.get("auto", defaults["exposure"]["auto"]))
@@ -136,6 +143,7 @@ class CameraStreamer:
             "mode": self.mode_key,
             "stream_profile": self.stream_profile_key,
             "highres_profile": self.highres_profile_key,
+            "highres_fps": self.highres_fps,
             "exposure": {
                 "auto": self.auto_exposure,
                 "ev": self.exposure_ev,
@@ -187,7 +195,7 @@ class CameraStreamer:
             "width": width,
             "height": height,
             "resolution": f"{width}x{height}",
-            "target_fps": HIGHRES_FPS,
+            "target_fps": self.highres_fps,
         }
 
     def _mode_status(self) -> dict:
@@ -274,6 +282,13 @@ class CameraStreamer:
         with self._metrics_lock:
             self._highres_active_clients = max(0, self._highres_active_clients - 1)
 
+    def _highres_is_due(self, now: float) -> bool:
+        with self._metrics_lock:
+            if self._highres_active_clients <= 0 or now < self._next_highres_at:
+                return False
+            self._next_highres_at = now + (1.0 / self.highres_fps)
+            return True
+
     @property
     def shutter_us(self) -> int:
         return max(1, int(round(1_000_000 / self.shutter_denominator)))
@@ -337,11 +352,25 @@ class CameraStreamer:
         return self.status_dict()
 
     def set_highres_profile(self, profile_key: str) -> dict:
-        """Resize only the 2 FPS high-resolution JPEG channel."""
+        """Resize only the high-resolution JPEG channel."""
         if profile_key not in HIGHRES_PROFILES:
             raise ValueError("未知高清图片档位")
         with self._lifecycle_lock:
             self.highres_profile_key = profile_key
+            self._save_settings()
+        return self.status_dict()
+
+    def set_highres_fps(self, value: float) -> dict:
+        try:
+            fps = float(value)
+        except (TypeError, ValueError):
+            raise ValueError("高清图片帧率必须是数字") from None
+        if not MIN_HIGHRES_FPS <= fps <= MAX_HIGHRES_FPS:
+            raise ValueError(f"高清图片帧率范围为 {MIN_HIGHRES_FPS:g}–{MAX_HIGHRES_FPS:g} FPS")
+        with self._lifecycle_lock:
+            self.highres_fps = fps
+            with self._metrics_lock:
+                self._next_highres_at = 0.0
             self._save_settings()
         return self.status_dict()
 
@@ -408,7 +437,7 @@ class CameraStreamer:
             "active_clients": active_clients,
             "jpeg_quality": self.quality,
             "highres": {
-                "target_fps": HIGHRES_FPS,
+                "target_fps": self.highres_fps,
                 "capture_fps": highres_frames,
                 "stream_fps": highres_stream_frames,
                 "jpeg_bytes": last_highres_jpeg_bytes,
@@ -450,11 +479,14 @@ class CameraStreamer:
                 # Picamera2's RGB888 numpy array is laid out as [B,G,R],
                 # which is already OpenCV's native channel order.
                 main={"size": (self.width, self.height), "format": "RGB888"},
+                # The ISP performs this downscale before Python receives the
+                # preview frame, avoiding a main-resolution resize at 30 FPS.
+                lores={"size": LOW_LATENCY_SIZE, "format": "RGB888"},
                 controls={
                     "FrameDurationLimits": (frame_duration_us, frame_duration_us),
                     "AwbEnable": True,
                 },
-                buffer_count=4,
+                buffer_count=2,
             )
         )
         # Exposure settings are reapplied after every resolution switch.
@@ -539,32 +571,22 @@ class CameraStreamer:
         try:
             while not self._stop.is_set():
                 started = time.monotonic()
-                with self._camera_lock:
-                    if self._picam2 is None: break
-                    frame = self._picam2.capture_array()
-                if started >= self._next_highres_at:
-                    highres_started = time.monotonic()
-                    highres_width, highres_height = self._highres_dimensions()
-                    highres_frame = frame
-                    if (highres_width, highres_height) != (self.width, self.height):
-                        highres_frame = self._cv2.resize(
-                            frame, (highres_width, highres_height), interpolation=self._cv2.INTER_AREA
-                        )
-                    highres_ok, highres_buffer = self._cv2.imencode(
-                        ".jpg", highres_frame, [self._cv2.IMWRITE_JPEG_QUALITY, HIGHRES_JPEG_QUALITY]
-                    )
-                    self._next_highres_at = started + (1.0 / HIGHRES_FPS)
-                    if highres_ok:
-                        highres_jpeg = highres_buffer.tobytes()
-                        self._record_highres_encoded(
-                            len(highres_jpeg), (time.monotonic() - highres_started) * 1000.0
-                        )
-                        with self._condition:
-                            self._highres_jpeg, self._highres_sequence = highres_jpeg, self._highres_sequence + 1
-                            self._condition.notify_all()
                 profile = STREAM_PROFILES[self.stream_profile_key]
+                use_lores = self.stream_profile_key == "low_latency"
+                highres_due = self._highres_is_due(started)
+                main_frame = None
+                with self._camera_lock:
+                    if self._picam2 is None:
+                        break
+                    request = self._picam2.capture_request()
+                    try:
+                        frame = request.make_array("lores" if use_lores else "main")
+                        if highres_due:
+                            main_frame = request.make_array("main")
+                    finally:
+                        request.release()
                 stream_width, stream_height = self._stream_dimensions()
-                if (stream_width, stream_height) != (self.width, self.height):
+                if (frame.shape[1], frame.shape[0]) != (stream_width, stream_height):
                     frame = self._cv2.resize(frame, (stream_width, stream_height), interpolation=self._cv2.INTER_AREA)
                 ok, buffer = self._cv2.imencode(
                     ".jpg", frame, [self._cv2.IMWRITE_JPEG_QUALITY, int(profile["quality"])]
@@ -575,10 +597,29 @@ class CameraStreamer:
                     with self._condition:
                         self._jpeg, self._sequence = jpeg, self._sequence + 1
                         self._condition.notify_all()
+                # JPEG encode the auxiliary high-resolution image only after
+                # the low-latency preview frame is published.
+                if highres_due and main_frame is not None:
+                    self._publish_highres_frame(main_frame)
                 self._stop.wait(max(0, interval - (time.monotonic() - started)))
         except Exception as exc:
             self.status, self.error = "采集错误", str(exc)
             with self._condition: self._condition.notify_all()
+
+    def _publish_highres_frame(self, frame) -> bytes | None:
+        started = time.monotonic()
+        highres_width, highres_height = self._highres_dimensions()
+        if (frame.shape[1], frame.shape[0]) != (highres_width, highres_height):
+            frame = self._cv2.resize(frame, (highres_width, highres_height), interpolation=self._cv2.INTER_AREA)
+        ok, buffer = self._cv2.imencode(".jpg", frame, [self._cv2.IMWRITE_JPEG_QUALITY, HIGHRES_JPEG_QUALITY])
+        if not ok:
+            return None
+        jpeg = buffer.tobytes()
+        self._record_highres_encoded(len(jpeg), (time.monotonic() - started) * 1000.0)
+        with self._condition:
+            self._highres_jpeg, self._highres_sequence = jpeg, self._highres_sequence + 1
+            self._condition.notify_all()
+        return jpeg
 
     def iter_mjpeg(self) -> Iterator[bytes]:
         last = -1
@@ -597,9 +638,25 @@ class CameraStreamer:
             self._client_stopped()
 
     def latest_highres_jpeg(self) -> bytes | None:
-        """Return the latest 2 FPS JPEG without storing it on the Pi filesystem."""
+        """Return a recent high-resolution JPEG without writing to disk."""
         with self._condition:
-            return self._highres_jpeg
+            cached = self._highres_jpeg
+        with self._metrics_lock:
+            cache_age = time.monotonic() - self._last_highres_at if self._last_highres_at else float("inf")
+        if cached is not None and cache_age <= HIGHRES_CACHE_MAX_AGE:
+            return cached
+        try:
+            with self._camera_lock:
+                if self._picam2 is None:
+                    return cached
+                request = self._picam2.capture_request()
+                try:
+                    frame = request.make_array("main")
+                finally:
+                    request.release()
+            return self._publish_highres_frame(frame) or cached
+        except Exception:
+            return cached
 
     def iter_highres_mjpeg(self) -> Iterator[bytes]:
         """Share one 2 FPS high-resolution JPEG encoder between all clients."""

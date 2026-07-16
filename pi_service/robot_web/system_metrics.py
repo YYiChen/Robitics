@@ -48,6 +48,7 @@ class SystemMetrics:
         return None
 
     def status_dict(self) -> dict:
+        errors: list[str] = []
         ticks = self._cpu_ticks()
         cpu_percent = None
         if ticks is not None and self._previous_cpu is not None:
@@ -56,23 +57,34 @@ class SystemMetrics:
             if total_delta > 0:
                 cpu_percent = max(0.0, min(100.0, (1.0 - idle_delta / total_delta) * 100.0))
         self._previous_cpu = ticks
+        if ticks is None:
+            errors.append("无法读取 /proc/stat")
         memory = self._memory_bytes()
+        if memory is None:
+            errors.append("无法读取 /proc/meminfo")
         try:
             disk = shutil.disk_usage("/")
             disk_total, disk_used = disk.total, disk.used
         except OSError:
             disk_total = disk_used = None
+            errors.append("无法读取根目录磁盘信息")
         try:
             load_1m = os.getloadavg()[0]
         except (AttributeError, OSError):
             load_1m = None
+            errors.append("无法读取系统负载")
+        temperature = self._temperature_c()
+        if temperature is None:
+            errors.append("无法读取 CPU 温度")
         return {
+            "available": not errors,
+            "error": "；".join(errors),
             "cpu_percent": cpu_percent,
             "load_1m": load_1m,
             "memory_total_bytes": memory[0] if memory else None,
             "memory_used_bytes": memory[1] if memory else None,
             "disk_total_bytes": disk_total,
             "disk_used_bytes": disk_used,
-            "cpu_temperature_c": self._temperature_c(),
+            "cpu_temperature_c": temperature,
             "uptime_seconds": time.monotonic() - self._started_at,
         }

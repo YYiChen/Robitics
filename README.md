@@ -12,6 +12,8 @@
 2. 将 `pi_service/` 复制到树莓派，执行 `./install_dependencies.sh` 一次。
 3. 执行 `chmod +x start_robot.sh && ./start_robot.sh`，随后打开输出的网址。脚本使用 Bash，不能用 `sh start_robot.sh` 启动。
 
+`start_robot.sh` 是日常正式入口：`camera.py` 同时配置 CSI 主画面与 640×480 lores 输出，低延迟 MJPEG 直接读取 lores。高清 JPEG 默认 `2 FPS / 质量 75`，可在网页调为 `1–15 FPS`；关闭高清预览时不持续编码该通道。
+
 ## 低延迟 H.264 / WebRTC 视频
 
 默认 `start_robot.sh` 仍是 MJPEG 兼容模式。需要低延迟连续视频时，使用 H.264/WebRTC：CSI 由 `rpicam-vid` 独占并以 H.264 编码，MediaMTX 分发 WebRTC 给网页、RTSP 给电脑 DL；Flask 只保留控制、串口和状态 API。
@@ -51,7 +53,7 @@ WebRTC 模式不能同时运行 `start_robot.sh`，也不会支持现有 MJPEG �
 - SG90 舵机信号线使用 Mega D22，网页滑块控制 `0–180°`；舵机必须独立稳定供电并与 Mega 共地。舵机命令不会延长电机心跳。
 - 网页“轮速配置”、PWM 与 PID 参数保存在树莓派独立的 `drive_config.json`；该文件不进入 Git，也不会被后续代码更新覆盖。首次升级会从旧 `robot_config.json` 自动复制现有调参值。`drive_config.example.json` 仅是可提交的默认模板。
 - 网页相机支持自动曝光 EV 和固定快门；快门以 `1/xx` 秒输入。自动曝光模式下 EV 生效，固定快门模式下关闭自动曝光。
-- 日常网页预览的“低延迟”档位为最大 `640×480`、JPEG 质量 60。高清 JPEG 通道独立以 2 FPS、质量 75 编码，不在树莓派保存文件；DL 或电脑可用 `/highres_feed` 获取连续图片，或用 `/api/camera/highres/latest` 拉取最新单张。高清通道可在网页选择原始尺寸、最大 1640 px 或最大 1280 px，切换不重启相机。
+- 日常网页预览的“低延迟”档位为 `640×480`、JPEG 质量 60，直接使用相机 lores 输出。高清 JPEG 通道默认 `2 FPS`、质量 75，可在网页调为 `1–15 FPS`，不在树莓派保存文件；DL 或电脑可用 `/highres_feed` 获取连续图片，或用 `/api/camera/highres/latest` 拉取最新单张。高清通道可在网页选择原始尺寸、最大 1640 px 或最大 1280 px，切换不重启相机。
 - 网页采用“按住才动、松开即停”的按键状态协议：浏览器每 180 ms 经 HTTP/TCP 发送按键集合，树莓派每 200 ms 向 Arduino 发送电机命令。网页失焦、网络断开和 Arduino 1 秒收不到命令都会停车。
 - 网页 CSI 视频卡片会显示实时分辨率、采集/发送 FPS、JPEG 单帧大小、编码耗时、最新帧延迟以及 MJPEG 实际发送带宽；带宽同时显示十进制 `kB/s` 和 `kbps`。
 - 网页“传输档位”与“相机读取档位”分开：相机仍以选择的 CSI 分辨率和 30 FPS 采集，树莓派只将缩放后的 JPEG 最新帧发给网页。默认“低延迟”为 `640×480`、JPEG 质量 60，显著降低热点带宽且不新增队列/缓存；需要高清图片时使用独立的 2 FPS 高清 JPEG 通道。上述档位会保存到 `camera_config.json`。

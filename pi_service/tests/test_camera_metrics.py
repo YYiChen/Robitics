@@ -59,6 +59,26 @@ class CameraMetricsTests(unittest.TestCase):
         self.assertEqual(status["highres_profile"]["quality"], 75)
         self.assertEqual(status["highres_profile"]["target_fps"], 2.0)
 
+    def test_mjpeg_highres_fps_is_configurable_and_persisted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "camera_config.json"
+            first = CameraStreamer(config_path=config_path)
+            status = first.set_highres_fps(5)
+            self.assertEqual(status["highres"]["target_fps"], 5.0)
+            self.assertEqual(status["highres_profile"]["target_fps"], 5.0)
+            second = CameraStreamer(config_path=config_path)
+            self.assertEqual(second.highres_fps, 5.0)
+            with self.assertRaises(ValueError):
+                second.set_highres_fps(16)
+
+    def test_mjpeg_highres_work_requires_an_active_preview_client(self) -> None:
+        camera = CameraStreamer()
+        self.assertFalse(camera._highres_is_due(1.0))
+        camera._highres_client_started()
+        self.assertTrue(camera._highres_is_due(1.0))
+        self.assertFalse(camera._highres_is_due(1.0))
+        camera._highres_client_stopped()
+
     def test_exposure_uses_one_over_n_shutter_unit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             camera = CameraStreamer(config_path=Path(directory) / "camera_config.json")
@@ -128,6 +148,22 @@ class CameraMetricsTests(unittest.TestCase):
         client = app.test_client()
         self.assertEqual(client.get("/video_feed").status_code, 409)
         self.assertEqual(client.post("/api/camera/mode", json={"mode": "fast_1640"}).status_code, 409)
+
+    @unittest.skipUnless(importlib.util.find_spec("flask"), "Flask is installed on the Raspberry Pi deployment target")
+    def test_mjpeg_status_declares_metrics_and_highres_fps_capabilities(self) -> None:
+        from app import create_app
+
+        class Controller:
+            def status(self):
+                return {"arduino_online": False, "serial": False, "action": "STOP", "config": {}}
+
+        app = create_app(Controller(), CameraStreamer())
+        response = app.test_client().get("/api/status")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertEqual(body["api_version"], "mjpeg-console-2026-07-16")
+        self.assertTrue(body["capabilities"]["system_metrics"])
+        self.assertTrue(body["capabilities"]["highres_fps_control"])
 
 
 if __name__ == "__main__":

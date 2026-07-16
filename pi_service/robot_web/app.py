@@ -114,7 +114,15 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
         except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
     @app.get("/api/status")
-    def status(): return jsonify(robot=controller.status(), camera=camera.status_dict(), system=system_metrics.status_dict(), oled=oled.status_dict() if oled else {"online": False, "disabled": True, "error": "已通过启动参数关闭"})
+    def status():
+        return jsonify(
+            api_version="mjpeg-console-2026-07-16",
+            capabilities={"system_metrics": True, "highres_fps_control": hasattr(camera, "set_highres_fps")},
+            robot=controller.status(),
+            camera=camera.status_dict(),
+            system=system_metrics.status_dict(),
+            oled=oled.status_dict() if oled else {"online": False, "disabled": True, "error": "已通过启动参数关闭"},
+        )
     return app
 
 def main() -> None:

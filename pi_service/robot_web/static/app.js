@@ -420,7 +420,7 @@ function streamDiagnosis(camera) {
   }
   return ["未发现明显传输瓶颈", `树莓派编码 ${fixed(capture)} FPS、本浏览器收到 ${fixed(browserReceiveFps)} FPS、RTT ${fixed(statusRttMs)} ms；若操作仍卡，重点检查控制请求和浏览器负载。`];
 }
-async function refreshStatus() { try { const statusStartedAt = performance.now(); const response = await fetch("/api/status", {cache:"no-store"}), data = await response.json(), robot = data.robot, system = data.system || {}, oled = data.oled || {}; statusRttMs = performance.now() - statusStartedAt;
+async function refreshStatus() { try { const statusStartedAt = performance.now(); const response = await fetch("/api/status", {cache:"no-store"}), data = await response.json(), robot = data.robot, system = data.system || {}, oled = data.oled || {}, capabilities = data.capabilities || {}; statusRttMs = performance.now() - statusStartedAt;
     const camera = data.camera || {};
     setVideoTransport(camera);
     $("#cameraState").innerHTML = dot(camera.online, camera.online ? "在线" : camera.status); $("#arduinoState").innerHTML = dot(robot.arduino_online, robot.arduino_online ? "在线" : robot.serial ? "无响应" : "离线", robot.serial);
@@ -453,6 +453,8 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     const highres = camera.highres || {}, highresProfile = camera.highres_profile || {};
     if (!highresProfileDirty && !highresProfileBusy && highresProfile.key) $("#highresProfile").value = highresProfile.key;
     if (!highresFpsDirty && !highresFpsBusy && highres.target_fps != null) $("#highresFps").value = highres.target_fps;
+    const highresFpsSupported = capabilities.highres_fps_control === true;
+    if (!highresFpsBusy) { $("#highresFps").disabled = !highresFpsSupported; $("#applyHighresFps").disabled = !highresFpsSupported; }
     const highresAvailable = isMjpeg() || !!camera.highres_available;
     $("#highresStats").textContent = highresAvailable
       ? `${highresProfile.resolution || "—"} · ${fixed(highres.capture_fps)} / ${fixed(highres.target_fps)} FPS · 发送 ${fixed(highres.stream_kBps)} kB/s`
@@ -483,12 +485,13 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     const [diagnosis, diagnosisDetail] = streamDiagnosis(camera);
     $("#streamDiagnosis").textContent = diagnosis;
     $("#streamDiagnosisDetail").textContent = diagnosisDetail;
-    $("#systemCpu").textContent = system.cpu_percent == null ? "测量中…" : `${fixed(system.cpu_percent)}%`;
-    $("#systemLoad").textContent = fixed(system.load_1m, 2);
-    $("#systemMemory").textContent = system.memory_total_bytes == null ? "—" : `${bytes(system.memory_used_bytes)} / ${bytes(system.memory_total_bytes)}`;
-    $("#systemTemperature").textContent = system.cpu_temperature_c == null ? "—" : `${fixed(system.cpu_temperature_c)} °C`;
-    $("#systemDisk").textContent = system.disk_total_bytes == null ? "—" : `${bytes(system.disk_used_bytes)} / ${bytes(system.disk_total_bytes)}`;
-    $("#systemUptime").textContent = duration(system.uptime_seconds);
+    const systemMetricsSupported = capabilities.system_metrics === true && Object.keys(system).length > 0;
+    $("#systemCpu").textContent = !systemMetricsSupported ? "后端未更新" : system.cpu_percent == null ? "测量中…" : `${fixed(system.cpu_percent)}%`;
+    $("#systemLoad").textContent = !systemMetricsSupported ? "后端未更新" : fixed(system.load_1m, 2);
+    $("#systemMemory").textContent = !systemMetricsSupported ? "后端未更新" : system.memory_total_bytes == null ? "不可用" : `${bytes(system.memory_used_bytes)} / ${bytes(system.memory_total_bytes)}`;
+    $("#systemTemperature").textContent = !systemMetricsSupported ? "后端未更新" : system.cpu_temperature_c == null ? "不可用" : `${fixed(system.cpu_temperature_c)} °C`;
+    $("#systemDisk").textContent = !systemMetricsSupported ? "后端未更新" : system.disk_total_bytes == null ? "不可用" : `${bytes(system.disk_used_bytes)} / ${bytes(system.disk_total_bytes)}`;
+    $("#systemUptime").textContent = !systemMetricsSupported ? "后端未更新" : duration(system.uptime_seconds);
     $("#oledState").textContent = oled.online ? `在线 · ${oled.address || "I2C"}` : oled.disabled ? "已关闭" : "不可用";
     $("#oledHint").textContent = oled.online ? `I2C-${oled.i2c_port ?? 1} · 每秒刷新状态` : (oled.error || "检查 I2C、地址和 luma.oled 依赖");
     $("#controlState").innerHTML = dot(robot.client_online, robot.client_online ? "在线" : "已超时停车"); $("#action").textContent = robot.action; $("#keys").textContent = robot.keys?.join("+") || "—"; $("#distance").textContent = distance(robot.ultrasonic); $("#lastReply").textContent = robot.reply || "等待 Arduino 回包";
@@ -497,7 +500,7 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     if (robot.speed) { $("#wheelSpeed").textContent = `${robot.speed[0].toFixed(1)} / ${robot.speed[1].toFixed(1)} pps`; $("#targetWheelSpeed").textContent = `${robot.speed[2].toFixed(1)} / ${robot.speed[3].toFixed(1)} pps`; }
     if (!configLoaded) { fillConfig(robot.config); configLoaded = true; }
     const age = robot.last_rx_age == null ? "—" : `${robot.last_rx_age.toFixed(2)} s`;
-    $("#status").textContent = [`Arduino: ${robot.arduino_online ? "在线" : robot.serial ? "无响应" : "离线"}`, `串口: ${robot.serial ? "已打开" : "未打开"}`, `最近回包: ${age}`, `动作: ${robot.action}`, `按键: ${robot.keys?.join("+") || "—"}`, `回复: ${robot.reply || "—"}`, `错误: ${robot.error || "—"}`].join("\n");
+    $("#status").textContent = [`后端: ${data.api_version || "旧版本，需同步 app.py"}`, `系统指标: ${systemMetricsSupported ? (system.error || "正常") : "当前后端未提供 system/capabilities"}`, `高清帧率: ${highresFpsSupported ? `${fixed(highres.target_fps)} FPS，可调整` : "当前后端不支持，需同步 camera.py"}`, `Arduino: ${robot.arduino_online ? "在线" : robot.serial ? "无响应" : "离线"}`, `串口: ${robot.serial ? "已打开" : "未打开"}`, `最近回包: ${age}`, `动作: ${robot.action}`, `按键: ${robot.keys?.join("+") || "—"}`, `回复: ${robot.reply || "—"}`, `错误: ${robot.error || "—"}`].join("\n");
   } catch (error) { $("#status").textContent = `网页后端连接失败：${error}`; $("#arduinoState").innerHTML = dot(false, "网页服务异常"); }
 }
 addEventListener("beforeunload", stopWebrtc);
