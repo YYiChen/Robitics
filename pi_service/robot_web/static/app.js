@@ -369,18 +369,19 @@ $("#servoSlider").addEventListener("input", () => {
 
 function updateSteeringDial(angle, known) {
   const numeric = Number(angle);
-  const dial = $("#steeringDial"), text = $("#steeringDialText"), axle = $("#vehicleFrontAxle"), turnLabel = $("#vehicleTurnLabel");
+  const dial = $("#steeringDial"), text = $("#steeringDialText"), cameraGimbal = $("#vehicleCameraGimbal"), turnLabel = $("#vehicleTurnLabel");
   if (!Number.isFinite(numeric) || !known) {
-    dial.classList.add("steering-unknown"); text.textContent = "舵机状态未知"; turnLabel.textContent = "等待 Arduino 回包"; axle.style.transform = "rotate(0deg)"; return;
+    dial.classList.add("steering-unknown"); text.textContent = "云台状态未知"; turnLabel.textContent = "等待 Arduino 回包"; cameraGimbal.style.transform = "rotate(0deg)"; return;
   }
   const denominator = Math.max(1, numeric >= steeringCenterAngle ? 180 - steeringCenterAngle : steeringCenterAngle);
   let ratio = clamp((numeric - steeringCenterAngle) / denominator, -1, 1);
   // The reverse switch tells the visualizer which physical angle is left.
   if (steeringReversed) ratio = -ratio;
   const turn = ratio * 38, direction = Math.abs(ratio) < .02 ? "回正" : ratio < 0 ? "左转" : "右转";
-  dial.classList.remove("steering-unknown"); axle.style.transform = `rotate(${turn}deg)`;
-  text.textContent = `${Math.round(numeric)}° · ${direction}`;
-  turnLabel.textContent = `${direction} · 偏角 ${Math.abs(turn).toFixed(0)}°`;
+  dial.classList.remove("steering-unknown");
+  text.textContent = `云台指令 ${Math.round(numeric)}° · ${direction}`;
+  cameraGimbal.style.transform = `rotate(${turn}deg)`;
+  turnLabel.textContent = `摄像头${direction} · 指令行程 ${Math.abs(ratio * 100).toFixed(0)}%`;
 }
 
 function centerServo() {
