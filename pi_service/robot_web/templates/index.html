@@ -40,16 +40,6 @@
   </section>
 
   <aside class="control-rail">
-    <section class="control-card drive-pad">
-      <div class="card-heading"><div><span class="eyebrow">终端同款控制</span><h2>即时遥控</h2></div><button class="danger compact-button" id="stopButton">紧急停止</button></div>
-      <div class="controls">
-        <button class="move" data-action="FL">Q<small>前左</small></button><button class="move" data-action="F">W / ↑<small>前进</small></button><button class="move" data-action="FR">E<small>前右</small></button>
-        <button class="move" data-action="PL">A / ←<small>原地左转</small></button><button class="move stop" data-action="STOP">STOP<small>空格</small></button><button class="move" data-action="PR">D / →<small>原地右转</small></button>
-        <button class="move" data-action="BL">Z<small>后左</small></button><button class="move" data-action="B">S / ↓<small>后退</small></button><button class="move" data-action="BR">C<small>后右</small></button>
-      </div>
-      <div class="action-line">动作 <strong id="action">STOP</strong> · 按键 <strong id="keys">—</strong></div>
-    </section>
-
     <nav class="section-tabs" aria-label="控制台设置">
       <button class="section-tab active" data-panel="cameraPanel">相机</button>
       <button class="section-tab" data-panel="drivePanel">驱动</button>
@@ -87,6 +77,7 @@
       </div>
       <div class="setting-block pid-block"><div class="card-heading"><h2>后轮速度 PID</h2><label class="switch-label"><input id="speedMode" type="checkbox">速度模式</label></div><div class="settings-grid"><label>目标 pps<input id="targetSpeed" type="number" min="0" max="200" step="1"></label><label>Kp<input id="kp" type="number" min="0" step=".1"></label><label>Ki<input id="ki" type="number" min="0" step=".1"></label><label>Kd<input id="kd" type="number" min="0" step=".01"></label></div><button class="primary full-button" id="applyPid">应用 PID 参数</button></div>
       <div class="setting-block servo-block"><div class="card-heading"><h2>SG90 舵机</h2><span id="servoAngleDisplay">90°</span></div><input type="range" id="servoSlider" min="0" max="180" value="90" step="1" class="full-input"><small>拖动即下发，传输繁忙时只保留最新角度。</small></div>
+      <details class="remote-tools"><summary>附加：即时遥控与紧急停止</summary><div class="drive-pad"><div class="card-heading"><span class="eyebrow">终端同款控制</span><button class="danger compact-button" id="stopButton">紧急停止</button></div><div class="controls"><button class="move" data-action="FL">Q<small>前左</small></button><button class="move" data-action="F">W / ↑<small>前进</small></button><button class="move" data-action="FR">E<small>前右</small></button><button class="move" data-action="PL">A / ←<small>原地左转</small></button><button class="move stop" data-action="STOP">STOP<small>空格</small></button><button class="move" data-action="PR">D / →<small>原地右转</small></button><button class="move" data-action="BL">Z<small>后左</small></button><button class="move" data-action="B">S / ↓<small>后退</small></button><button class="move" data-action="BR">C<small>后右</small></button></div><div class="action-line">动作 <strong id="action">STOP</strong> · 按键 <strong id="keys">—</strong></div></div></details>
     </section>
 
     <section class="tab-panel" id="statusPanel">
