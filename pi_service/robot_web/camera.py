@@ -52,6 +52,10 @@ DEFAULT_HIGHRES_PROFILE = "source"
 # wall reference.  RGB888 arrays arrive in OpenCV BGR order, hence B/G/R.
 DEFAULT_COLOR_CORRECTION = {"enabled": True, "strength": 1.0}
 EDGE_BGR_GAINS = (0.92, 1.06, 0.78)
+# The supplied flat-wall reference needs most correction before reaching the
+# rim.  r² left the half-radius area at only 25% correction; r^0.55 reaches
+# about 68% while preserving the calibrated 100% correction at the edge.
+RADIAL_FALLOFF_EXPONENT = 0.55
 
 
 class CameraStreamer:
@@ -417,7 +421,7 @@ class CameraStreamer:
         x = np.linspace(-1.0, 1.0, int(width), dtype=np.float32)
         y = np.linspace(-1.0, 1.0, int(height), dtype=np.float32)
         radius = np.minimum(1.0, np.sqrt(y[:, None] ** 2 + x[None, :] ** 2) / np.sqrt(2.0))
-        falloff = radius ** 2
+        falloff = radius ** RADIAL_FALLOFF_EXPONENT
         edge = np.asarray(EDGE_BGR_GAINS, dtype=np.float32).reshape(1, 1, 3)
         gain = 1.0 + (edge - 1.0) * (falloff[..., None] * self.color_correction_strength)
         self._color_gain_maps[key] = gain.astype(np.float32)
