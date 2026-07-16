@@ -51,6 +51,24 @@ class ControllerPersistenceTests(unittest.TestCase):
             self.assertIn('"target_speed": 57.0', drive_path.read_text(encoding="utf-8"))
             self.assertIn('"target_speed": 57', legacy_path.read_text(encoding="utf-8"))
 
+    def test_parses_one_front_sensor_and_servo_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = RobotController("unused", Path(directory) / "drive_config.json")
+            controller._parse("US,31.5")
+            controller._parse("OK:SV,125")
+            self.assertEqual(controller.ultrasonic, 31.5)
+            self.assertEqual(controller.servo_angle, 125)
+
+    def test_servo_command_is_validated_without_touching_drive_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = RobotController("unused", Path(directory) / "drive_config.json")
+            commands: list[str] = []
+            controller._write = commands.append
+            self.assertEqual(controller.set_servo_angle(42), 42)
+            self.assertEqual(commands, ["SV,42"])
+            self.assertEqual(controller.servo_angle, 42)
+            with self.assertRaises(ValueError): controller.set_servo_angle(181)
+
 
 if __name__ == "__main__":
     unittest.main()

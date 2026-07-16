@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <Wire.h>
+#include <Servo.h>
 
 // ============================================================
 // Raspberry Pi -> Arduino motor bridge  +  IMU  +  Speed PID
@@ -24,7 +25,8 @@
 //     STOP | S                 stop + disable speed control
 //     IMU                      query Euler angles
 //     SPD                      query wheel speeds + PID state
-//     US                       query ultrasonic distances: right,front,left
+//     US                       query the front ultrasonic distance
+//     SV,angle                 set SG90 servo angle (0..180)
 //
 //   Motor mapping:
 //     M1 = right front   M2 = left front
@@ -62,9 +64,7 @@ const unsigned long REVERSE_PAUSE_MS = 80;
 // ============================================================
 // One forward-facing ultrasonic sensor.  It stops forward travel only.
 //
-// Logical order is always RIGHT, FRONT, LEFT.  The physical pin pairs are
-// intentionally written in that order to match the robot's wiring record.
-// Set to true only after a dedicated obstacle-avoidance hardware validation.
+// Only the front TRIG/ECHO pin pair is used by this firmware.
 // ============================================================
 
 constexpr bool ULTRASONIC_BLOCKING_ENABLED = true;
@@ -73,8 +73,6 @@ constexpr uint8_t FRONT_ECHO_PIN = 27;
 
 constexpr unsigned long ULTRASONIC_ECHO_TIMEOUT_US = 30000UL;
 constexpr unsigned long ULTRASONIC_BETWEEN_SENSORS_MS = 35UL;
-constexpr unsigned long ULTRASONIC_REPORT_INTERVAL_MS = 100UL;
-constexpr unsigned long OBSTACLE_HOLD_MS = 800UL;
 // Only the single centre/front sensor is safety active.  A distance at or
 // below this threshold blocks forward wheel commands; pivots and reverse are
 // intentionally left available.
@@ -94,7 +92,6 @@ UltrasonicState ultrasonicState = ULTRASONIC_IDLE;
 unsigned long ultrasonicPhaseStartUs = 0;
 unsigned long ultrasonicEchoRiseUs = 0;
 unsigned long lastUltrasonicStartMs = 0;
-unsigned long lastUltrasonicReportTime = 0;
 
 // ============================================================
 // MPU-6500 IMU constants and configuration
@@ -148,6 +145,12 @@ const float PULSES_PER_REVOLUTION = 4.0f;
 // Encoder input pins (Arduino Mega external interrupt pins).
 const uint8_t ENCODER_LEFT_PIN  = 18;  // INT3 — left rear motor (M3)
 const uint8_t ENCODER_RIGHT_PIN = 19;  // INT2 — right rear motor (M4)
+
+// SG90 signal wire.  Power the servo from a suitable 5 V supply with a
+// common ground to the Mega; do not power it from the Mega's 5 V pin.
+constexpr uint8_t SERVO_PIN = 22;
+constexpr int SERVO_CENTER_ANGLE = 90;
+Servo panServo;
 
 // Speed is computed from pulse counts at this interval (ms).
 const unsigned long SPEED_CALC_INTERVAL_MS = 50;   // 20 Hz
@@ -597,136 +600,6 @@ void reportStoppedState() {
   }
 }
 
-// Active ultrasonic implementation lives in ultrasonic_avoidance.h.
-#if 0
-// Print ultrasonic readings in the project's agreed logical order:
-// US,rightCm,frontCm,leftCm.  -1 means no valid echo yet / timeout.
-void printUltrasonic() {
-  Serial.print(F("US,"));
-  Serial.print(ultrasonicCm[ULTRASONIC_RIGHT], 1);
-  Serial.print(',');
-  Serial.print(ultrasonicCm[ULTRASONIC_FRONT], 1);
-  Serial.print(',');
-  Serial.println(ultrasonicCm[ULTRASONIC_LEFT], 1);
-}
-
-void printUltrasonicDebug() {
-  Serial.print(F("US:RIGHT="));
-  Serial.print(ultrasonicCm[ULTRASONIC_RIGHT], 1);
-  Serial.print(F(",FRONT="));
-  Serial.print(ultrasonicCm[ULTRASONIC_FRONT], 1);
-  Serial.print(F(",LEFT="));
-  Serial.println(ultrasonicCm[ULTRASONIC_LEFT], 1);
-}
-
-// Poll one ultrasonic sensor at a time.  Unlike pulseIn(), this state machine
-// never waits for an echo, so serial remote control, encoders, and IMU service
-// continue to run while a sensor is being measured.
-void updateUltrasonic() {
-  const unsigned long nowUs = micros();
-
-  switch (ultrasonicState) {
-    case ULTRASONIC_IDLE:
-      if (millis() - lastUltrasonicStartMs >= ULTRASONIC_BETWEEN_SENSORS_MS) {
-        digitalWrite(ultrasonicTrigPins[ultrasonicSensorIndex], LOW);
-        ultrasonicPhaseStartUs = nowUs;
-        ultrasonicState = ULTRASONIC_TRIGGER_LOW;
-      }
-      break;
-
-    case ULTRASONIC_TRIGGER_LOW:
-      if (nowUs - ultrasonicPhaseStartUs >= 3UL) {
-        digitalWrite(ultrasonicTrigPins[ultrasonicSensorIndex], HIGH);
-        ultrasonicPhaseStartUs = nowUs;
-        ultrasonicState = ULTRASONIC_TRIGGER_HIGH;
-      }
-      break;
-
-    case ULTRASONIC_TRIGGER_HIGH:
-      if (nowUs - ultrasonicPhaseStartUs >= 10UL) {
-        digitalWrite(ultrasonicTrigPins[ultrasonicSensorIndex], LOW);
-        ultrasonicPhaseStartUs = nowUs;
-        ultrasonicState = ULTRASONIC_WAIT_RISE;
-      }
-      break;
-
-    case ULTRASONIC_WAIT_RISE:
-      if (digitalRead(ultrasonicEchoPins[ultrasonicSensorIndex]) == HIGH) {
-        ultrasonicEchoRiseUs = nowUs;
-        ultrasonicState = ULTRASONIC_WAIT_FALL;
-      } else if (nowUs - ultrasonicPhaseStartUs >= ULTRASONIC_ECHO_TIMEOUT_US) {
-        ultrasonicCm[ultrasonicSensorIndex] = -1.0F;
-        lastUltrasonicStartMs = millis();
-        ultrasonicSensorIndex = (ultrasonicSensorIndex + 1) % 3;
-        ultrasonicState = ULTRASONIC_IDLE;
-      }
-      break;
-
-    case ULTRASONIC_WAIT_FALL:
-      if (digitalRead(ultrasonicEchoPins[ultrasonicSensorIndex]) == LOW) {
-        const unsigned long echoUs = nowUs - ultrasonicEchoRiseUs;
-        const float distanceCm = (echoUs * 0.0343F) / 2.0F;
-        ultrasonicCm[ultrasonicSensorIndex] =
-          (distanceCm >= 5.0F && distanceCm <= 400.0F) ? distanceCm : -1.0F;
-        lastUltrasonicStartMs = millis();
-        ultrasonicSensorIndex = (ultrasonicSensorIndex + 1) % 3;
-        ultrasonicState = ULTRASONIC_IDLE;
-      } else if (nowUs - ultrasonicEchoRiseUs >= ULTRASONIC_ECHO_TIMEOUT_US) {
-        ultrasonicCm[ultrasonicSensorIndex] = -1.0F;
-        lastUltrasonicStartMs = millis();
-        ultrasonicSensorIndex = (ultrasonicSensorIndex + 1) % 3;
-        ultrasonicState = ULTRASONIC_IDLE;
-      }
-      break;
-  }
-}
-
-bool distanceBlocked(float distanceCm, float thresholdCm) {
-  // -1 means no valid echo (for example, an open area beyond the sensor's
-  // usable range).  It is not an obstacle on this robot.
-  return distanceCm >= 0.0F && distanceCm <= thresholdCm;
-}
-
-const char *forwardBlockReason(int m1, int m2, int m3, int m4) {
-  // M1/M4 are the right side; M2/M3 are the left side.  Only positive wheel
-  // commands move the vehicle forward, so reverse and pivot are never blocked.
-  const int rightForward = (m1 > 0 ? m1 : 0) + (m4 > 0 ? m4 : 0);
-  const int leftForward = (m2 > 0 ? m2 : 0) + (m3 > 0 ? m3 : 0);
-
-  if (rightForward == 0 && leftForward == 0) {
-    return nullptr;
-  }
-  if (distanceBlocked(ultrasonicCm[ULTRASONIC_FRONT], FRONT_STOP_DISTANCE_CM)) {
-    return "FRONT";
-  }
-
-  // Stronger right-side forward power means a left curve; stronger left-side
-  // power means a right curve.  Block only the threatened turn direction.
-  if (rightForward > leftForward &&
-      distanceBlocked(ultrasonicCm[ULTRASONIC_LEFT], SIDE_TURN_STOP_DISTANCE_CM)) {
-    return "LEFT";
-  }
-  if (leftForward > rightForward &&
-      distanceBlocked(ultrasonicCm[ULTRASONIC_RIGHT], SIDE_TURN_STOP_DISTANCE_CM)) {
-    return "RIGHT";
-  }
-  return nullptr;
-}
-
-void stopForObstacle(const char *reason) {
-  releaseAllMotors();
-  timeoutStopped = true;
-  Serial.print(F("BLOCK:"));
-  Serial.print(reason);
-  Serial.print(F(",US:RIGHT="));
-  Serial.print(ultrasonicCm[ULTRASONIC_RIGHT], 1);
-  Serial.print(F(",FRONT="));
-  Serial.print(ultrasonicCm[ULTRASONIC_FRONT], 1);
-  Serial.print(F(",LEFT="));
-  Serial.println(ultrasonicCm[ULTRASONIC_LEFT], 1);
-}
-
-#endif
 #include "ultrasonic_avoidance.h"
 
 bool needsReversePause(const int nextCommands[4]) {
@@ -920,10 +793,25 @@ void executeLine(char *line) {
     return;
   }
 
-  // Query ultrasonic readings: US,rightCm,frontCm,leftCm.
+  // Query the one front ultrasonic reading: US,frontCm.
   if (strcmp(line, "US") == 0) {
     printUltrasonic();
     lastValidCommandTime = millis();
+    return;
+  }
+
+  // Servo commands deliberately do not refresh lastValidCommandTime: moving
+  // the camera/accessory must never keep a driving motor command alive.
+  if (strncmp(line, "SV,", 3) == 0) {
+    int angle;
+    if (parseIntegerStrict(line + 3, angle)) {
+      angle = constrain(angle, 0, 180);
+      panServo.write(angle);
+      Serial.print(F("OK:SV,"));
+      Serial.println(angle);
+    } else {
+      Serial.println(F("ERR:BAD_COMMAND"));
+    }
     return;
   }
 
@@ -1041,6 +929,9 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ENCODER_RIGHT_PIN),
                   encoderRightISR, RISING);
 
+  panServo.attach(SERVO_PIN);
+  panServo.write(SERVO_CENTER_ANGLE);
+
   // Initialise speed timestamps so the first dt is sane.
   lastSpeedCalcTime = millis();
 
@@ -1051,9 +942,9 @@ void setup() {
   imuPresent = initMPU6500();
 
   if (imuPresent) {
-    Serial.println(F("READY:MOTOR_BRIDGE,MAX=255,TIMEOUT=1000,IMU=OK,ENC=18,19,US=FRONT(26,27)"));
+    Serial.println(F("READY:MOTOR_BRIDGE,MAX=255,TIMEOUT=1000,SERVO=22,IMU=OK,ENC=18,19,US=FRONT(26,27)"));
   } else {
-    Serial.println(F("READY:MOTOR_BRIDGE,MAX=255,TIMEOUT=1000,IMU=ABSENT,ENC=18,19,US=FRONT(26,27)"));
+    Serial.println(F("READY:MOTOR_BRIDGE,MAX=255,TIMEOUT=1000,SERVO=22,IMU=ABSENT,ENC=18,19,US=FRONT(26,27)"));
   }
 }
 
@@ -1096,12 +987,6 @@ void loop() {
 
   // Keep sensor sampling independent from remote-control command timing.
   updateUltrasonic();
-
-  // Continuously expose the front sensor for Serial Monitor debug.
-  if (millis() - lastUltrasonicReportTime >= ULTRASONIC_REPORT_INTERVAL_MS) {
-    printUltrasonicDebug();
-    lastUltrasonicReportTime = millis();
-  }
 
   // An obstacle may appear after a previously safe forward command.  Stop it
   // here instead of waiting for the next remote heartbeat.

@@ -26,6 +26,12 @@ def create_app(controller: RobotController, camera: CameraStreamer, system_metri
     def heartbeat(): controller.heartbeat(); return jsonify(ok=True)
     @app.post("/api/stop")
     def stop(): controller.stop_now(); return jsonify(ok=True)
+    @app.post("/api/servo")
+    def servo():
+        payload = request.get_json(silent=True) or {}
+        try: return jsonify(ok=True, requested_angle=controller.set_servo_angle(payload.get("angle")))
+        except ValueError as exc: return jsonify(ok=False, error=str(exc)), 400
+        except RuntimeError as exc: return jsonify(ok=False, error=str(exc)), 503
     @app.post("/api/reconnect")
     def reconnect():
         status = controller.reconnect()

@@ -3,6 +3,7 @@ const video = $("#video"), save = $("#save");
 const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:false});
 let folder, aborter, count = 0, profiles = {}, activeMode = "all", configLoaded = false, keysSending = false, keysQueued = false;
 let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, exposureDirty = false, exposureBusy = false, videoRetryTimer;
+let servoTimer = null, servoBusy = false;
 let receivedFrameCount = 0, receivedFrameWindowAt = performance.now(), browserReceiveFps = 0, statusRttMs = null;
 const wheelNames = ["rf", "lf", "lr", "rr"];
 const actionKeys = {FL:"q", F:"w", FR:"e", PL:"a", PR:"d", BL:"z", B:"s", BR:"c"};
@@ -166,6 +167,23 @@ async function sendHeartbeat() { try { await requestJson("/api/heartbeat", {meth
 setInterval(sendHeartbeat, 180);
 $("#stopButton").onclick = releaseKeys;
 
+// Send only after the slider has paused briefly. This keeps camera pan
+// responsive without flooding the 9600-baud Arduino serial link.
+$("#servoSlider").addEventListener("input", () => {
+  const angle = Number($("#servoSlider").value);
+  $("#servoAngleDisplay").textContent = `${angle}°`;
+  clearTimeout(servoTimer);
+  servoTimer = setTimeout(async () => {
+    servoBusy = true;
+    try {
+      const response = await fetch("/api/servo", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({angle})});
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw Error(data.error || "舵机指令失败");
+    } catch (error) { note(error.message); }
+    finally { servoBusy = false; }
+  }, 80);
+});
+
 function profileFor(action) { return profiles[action] || {rf:0, lf:0, lr:0, rr:0}; }
 function signedMagnitude(value, sign) { return Math.round(Math.abs(Number(value) || 0)) * (sign < 0 ? -1 : 1); }
 function fillProfileEditor() {
@@ -202,7 +220,12 @@ function dot(online, text, warning = false) { return `<i class="dot ${online ? "
 function fixed(value, digits = 1) { const number = Number(value); return Number.isFinite(number) ? number.toFixed(digits) : "—"; }
 function bytes(value) { const number = Number(value); if (!Number.isFinite(number)) return "—"; return number >= 1e9 ? `${fixed(number / 1e9)} GB` : `${fixed(number / 1e6)} MB`; }
 function duration(seconds) { const whole = Math.max(0, Math.floor(Number(seconds) || 0)); return `${Math.floor(whole / 60)} 分 ${whole % 60} 秒`; }
-function distance(value) { if (!value) return "等待传感器数据…"; if (value[1] === -1) return "无有效回波（-1）"; return `${value[1].toFixed(1)} cm`; }
+function distance(value) {
+  if (value == null) return "等待传感器数据…";
+  const front = Number(value);
+  if (!Number.isFinite(front) || front < 0) return "无有效回波（-1）";
+  return `${front.toFixed(1)} cm`;
+}
 function streamDiagnosis(camera) {
   if (!camera.online) return ["树莓派相机服务离线", "请先处理相机状态或服务错误；网络判断暂不可用。"];
   const target = Number(camera.target_fps) || Number(camera.sensor_target_fps) || 0;
@@ -259,6 +282,7 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     $("#systemDisk").textContent = system.disk_total_bytes == null ? "—" : `${bytes(system.disk_used_bytes)} / ${bytes(system.disk_total_bytes)}`;
     $("#systemUptime").textContent = duration(system.uptime_seconds);
     $("#controlState").innerHTML = dot(robot.client_online, robot.client_online ? "在线" : "已超时停车"); $("#action").textContent = robot.action; $("#keys").textContent = robot.keys?.join("+") || "—"; $("#distance").textContent = distance(robot.ultrasonic); $("#lastReply").textContent = robot.reply || "等待 Arduino 回包";
+    if (!servoBusy && robot.servo_angle != null) { $("#servoSlider").value = robot.servo_angle; $("#servoAngleDisplay").textContent = `${robot.servo_angle}°`; }
     if (robot.imu) { $("#roll").textContent = `${robot.imu[0].toFixed(2)}°`; $("#pitch").textContent = `${robot.imu[1].toFixed(2)}°`; $("#yaw").textContent = `${robot.imu[2].toFixed(2)}°`; }
     if (robot.speed) { $("#wheelSpeed").textContent = `${robot.speed[0].toFixed(1)} / ${robot.speed[1].toFixed(1)} pps`; $("#targetWheelSpeed").textContent = `${robot.speed[2].toFixed(1)} / ${robot.speed[3].toFixed(1)} pps`; }
     if (!configLoaded) { fillConfig(robot.config); configLoaded = true; }

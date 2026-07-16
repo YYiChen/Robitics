@@ -67,7 +67,7 @@ class RobotController:
             self._save_config()
         self.serial_lock = threading.RLock()
         self.serial = None; self.action = "STOP"; self.held_keys: set[str] = set(); self.last_client_seen = 0.0
-        self.imu = self.speed = self.ultrasonic = None; self.reply = self.error = ""; self.last_rx = 0.0
+        self.imu = self.speed = self.ultrasonic = None; self.servo_angle: int | None = None; self.reply = self.error = ""; self.last_rx = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._shutdown_lock = threading.Lock()
@@ -192,6 +192,18 @@ class RobotController:
     def stop_now(self) -> None:
         with self.lock: self.held_keys.clear(); self.action = "STOP"
         self._write("STOP")
+    def set_servo_angle(self, raw_angle: object) -> int:
+        """Move the SG90 without changing the drive action or drive config."""
+        try: angle = int(raw_angle)
+        except (TypeError, ValueError): raise ValueError("舵机角度必须是 0 到 180 的整数") from None
+        if not 0 <= angle <= 180: raise ValueError("舵机角度必须在 0 到 180 之间")
+        self._write(f"SV,{angle}")
+        if self.error: raise RuntimeError(f"发送舵机命令失败：{self.error}")
+        # Keep the web slider at the requested position immediately. The
+        # Arduino's later OK:SV reply confirms the same value, but this is
+        # intentionally not saved in drive_config.json.
+        with self.lock: self.servo_angle = angle
+        return angle
     def reconnect(self) -> dict:
         """Drop the current USB serial session and open it again.
 
@@ -223,14 +235,10 @@ class RobotController:
             parts = text.split(",")
             if text.startswith("IMU,") and len(parts) == 4: self.imu = [float(x) for x in parts[1:]]
             elif text.startswith("SPD,") and len(parts) == 7: self.speed = [float(x) for x in parts[1:]]
-            elif text.startswith("US,") and len(parts) == 4:
-                self.ultrasonic = [float(x) for x in parts[1:]]
             elif text.startswith("US,") and len(parts) == 2:
-                # Older one-sensor firmware: US,<frontCm>
-                self.ultrasonic = [-1.0, float(parts[1]), -1.0]
-            elif text.startswith("US:FRONT="):
-                # Periodic debug output from the one-sensor firmware.
-                self.ultrasonic = [-1.0, float(text.split("=", 1)[1]), -1.0]
+                self.ultrasonic = float(parts[1])
+            elif text.startswith("OK:SV,"):
+                self.servo_angle = int(text.split(",", 1)[1])
         except ValueError: pass
     def _run(self) -> None:
         next_query = 0.0
@@ -257,4 +265,4 @@ class RobotController:
     def status(self) -> dict:
         with self.lock: cfg, action, seen = asdict(self.config), self.action, self.last_client_seen
         serial_open = bool(self.serial and self.serial.is_open); age = time.monotonic() - self.last_rx if self.last_rx else None
-        return {"serial":serial_open,"arduino_online":serial_open and age is not None and age <= 1.5,"last_rx_age":age,"error":self.error,"reply":self.reply,"config":cfg,"action":action,"keys":sorted(self.held_keys),"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic}
+        return {"serial":serial_open,"arduino_online":serial_open and age is not None and age <= 1.5,"last_rx_age":age,"error":self.error,"reply":self.reply,"config":cfg,"action":action,"keys":sorted(self.held_keys),"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic,"servo_angle":self.servo_angle}

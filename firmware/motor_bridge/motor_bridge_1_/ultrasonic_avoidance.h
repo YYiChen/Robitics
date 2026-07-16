@@ -1,14 +1,9 @@
 // Non-blocking centre/front ultrasonic sensor: TRIG 26, ECHO 27.
-// The US wire format stays three columns for web compatibility: -1,front,-1.
+// The project has one physical ultrasonic sensor, so its wire format is
+// simply US,frontCm. -1 means no valid echo.
 
 void printUltrasonic() {
-  Serial.print(F("US,-1,"));
-  Serial.print(frontDistanceCm, 1);
-  Serial.println(F(",-1"));
-}
-
-void printUltrasonicDebug() {
-  Serial.print(F("US:FRONT="));
+  Serial.print(F("US,"));
   Serial.println(frontDistanceCm, 1);
 }
 
