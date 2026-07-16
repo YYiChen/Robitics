@@ -13,6 +13,12 @@ from controller import RobotController
 
 
 class ControllerPersistenceTests(unittest.TestCase):
+    def test_default_camera_gimbal_settings_match_driving_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = RobotController("unused", Path(directory) / "drive_config.json")
+            self.assertEqual(controller.config.servo_speed_dps, 30.0)
+            self.assertTrue(controller.config.servo_qe_reversed)
+
     def test_profiles_and_pid_survive_new_controller(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "robot_config.json"
@@ -40,6 +46,8 @@ class ControllerPersistenceTests(unittest.TestCase):
             controller = RobotController("unused", Path(directory) / "drive_config.json")
             self.assertEqual(controller.update_keys({"keys": ["r"]}), "SF")
             self.assertEqual(controller.config.profiles["SF"], {"rf": 100, "lf": 100, "lr": 100, "rr": 100})
+            self.assertEqual(controller.update_keys({"keys": ["w", "a"]}), "FL")
+            self.assertEqual(controller.update_keys({"keys": ["w", "d"]}), "FR")
             self.assertEqual(controller.update_keys({"keys": [], "steering": -1}), "STOP")
             self.assertEqual(controller.steering_direction, -1)
 
@@ -53,9 +61,9 @@ class ControllerPersistenceTests(unittest.TestCase):
             controller._last_servo_motion_at = 10.0
             controller.last_steering_seen = 10.0
             controller._advance_steering(10.5, controller.config)
-            self.assertEqual(commands, ["SV,95"])
+            self.assertEqual(commands, ["SV,75"])
             controller._advance_steering(11.0, controller.config)
-            self.assertEqual(commands, ["SV,95"])
+            self.assertEqual(commands, ["SV,75"])
 
     def test_shutdown_flushes_latest_in_memory_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

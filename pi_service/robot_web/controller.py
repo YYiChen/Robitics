@@ -50,8 +50,8 @@ class Config:
     curve_outer_pwm: int = 160
     curve_inner_pwm: int = 60
     servo_center_angle: int = 90
-    servo_speed_dps: float = 10.0
-    servo_qe_reversed: bool = False
+    servo_speed_dps: float = 30.0
+    servo_qe_reversed: bool = True
     profiles: dict[str, dict[str, int]] = field(default_factory=default_profiles)
 
 class RobotController:

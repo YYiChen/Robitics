@@ -3,7 +3,7 @@ const video = $("#video"), webrtcVideo = $("#webrtcVideo"), highresVideo = $("#h
 const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:false});
 let folder, aborter, count = 0, profiles = {}, activeMode = "all", configLoaded = false, keysSending = false, keysQueued = false;
 let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, highresProfileDirty = false, highresProfileBusy = false, highresFpsDirty = false, highresFpsBusy = false, exposureDirty = false, exposureBusy = false, videoRetryTimer;
-let servoBusy = false, queuedServoAngle = null, steeringCenterAngle = 90, steeringReversed = false;
+let servoBusy = false, queuedServoAngle = null, steeringCenterAngle = 90, steeringReversed = true;
 let receivedFrameCount = 0, receivedFrameWindowAt = performance.now(), browserReceiveFps = 0, statusRttMs = null;
 let activeVideoTransport = "mjpeg", currentWebrtcUrl = "";
 let highresPreviewEnabled = false, highresPreviewAvailable = false;
@@ -373,15 +373,16 @@ function updateSteeringDial(angle, known) {
   if (!Number.isFinite(numeric) || !known) {
     dial.classList.add("steering-unknown"); text.textContent = "云台状态未知"; turnLabel.textContent = "等待 Arduino 回包"; cameraGimbal.style.transform = "rotate(0deg)"; return;
   }
-  const denominator = Math.max(1, numeric >= steeringCenterAngle ? 180 - steeringCenterAngle : steeringCenterAngle);
-  let ratio = clamp((numeric - steeringCenterAngle) / denominator, -1, 1);
-  // The reverse switch tells the visualizer which physical angle is left.
-  if (steeringReversed) ratio = -ratio;
-  const turn = ratio * 38, direction = Math.abs(ratio) < .02 ? "回正" : ratio < 0 ? "左转" : "右转";
+  // Render the complete physical travel relative to the configured centre.
+  // This is intentionally not scaled for visual layout: 0° versus a 90°
+  // centre is displayed as a full 90° camera rotation.
+  const servoOffset = numeric - steeringCenterAngle;
+  const cameraOffset = steeringReversed ? -servoOffset : servoOffset;
+  const direction = Math.abs(cameraOffset) < .5 ? "回正" : cameraOffset < 0 ? "左转" : "右转";
   dial.classList.remove("steering-unknown");
   text.textContent = `云台指令 ${Math.round(numeric)}° · ${direction}`;
-  cameraGimbal.style.transform = `rotate(${turn}deg)`;
-  turnLabel.textContent = `摄像头${direction} · 指令行程 ${Math.abs(ratio * 100).toFixed(0)}%`;
+  cameraGimbal.style.transform = `rotate(${cameraOffset}deg)`;
+  turnLabel.textContent = `摄像头${direction} · 相对中位 ${Math.abs(cameraOffset).toFixed(0)}°`;
 }
 
 function centerServo() {
@@ -428,7 +429,7 @@ $("#applyProfile").onclick = async () => { profiles[$("#profileAction").value] =
 function fillConfig(config) {
   profiles = config.profiles || profiles; $("#speedMode").checked = !!config.speed_mode; $("#targetSpeed").value = config.target_speed; $("#kp").value = config.kp; $("#ki").value = config.ki; $("#kd").value = config.kd;
   steeringCenterAngle = Number(config.servo_center_angle ?? 90); steeringReversed = !!config.servo_qe_reversed;
-  $("#servoCenterAngle").value = steeringCenterAngle; $("#servoSpeedDps").value = config.servo_speed_dps ?? 10; $("#servoQeReversed").checked = steeringReversed;
+  $("#servoCenterAngle").value = steeringCenterAngle; $("#servoSpeedDps").value = config.servo_speed_dps ?? 30; $("#servoQeReversed").checked = steeringReversed;
   fillProfileEditor(); updateSteeringDial($("#servoSlider").value, true);
 }
 $("#applyPid").onclick = async () => { const payload = {speed_mode:$("#speedMode").checked, target_speed:Number($("#targetSpeed").value), kp:Number($("#kp").value), ki:Number($("#ki").value), kd:Number($("#kd").value)};
