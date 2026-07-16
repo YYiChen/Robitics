@@ -23,7 +23,7 @@ chmod +x install_webrtc.sh start_webrtc.sh
 ./start_webrtc.sh
 ```
 
-默认采用单 CSI 相机双输出：`1640×1232` 主画面每秒编码 2 张 JPEG 75，`640×480 / 30 FPS / 1.5 Mbps` 低分辨率画面编码为 H.264/WebRTC。网页仍访问 `http://树莓派IP:5000`，左侧为 `http://树莓派IP:8889/cam/` 的 WebRTC 预览，右侧为高清 JPEG；电脑端 DL 可读取 `rtsp://树莓派IP:8554/cam`。按 `Ctrl+C` 会停止 Flask、Picamera2 双输出和 MediaMTX。日志保存在 `pi_service/logs/`。
+默认采用单 CSI 相机双输出：`1640×1232` 主画面每秒编码 2 张 JPEG 75，`640×480 / 30 FPS / 1.5 Mbps` 低分辨率画面编码为 H.264/WebRTC。实时 H.264 使用 Baseline、每 8 帧一个关键帧（30 FPS 时约 267 ms）和立即刷包的 MPEG-TS 输出，以缩短固定缓冲。网页仍访问 `http://树莓派IP:5000`，左侧为 `http://树莓派IP:8889/cam/` 的 WebRTC 预览，右侧为高清 JPEG；电脑端 DL 可读取 `rtsp://树莓派IP:8554/cam`。按 `Ctrl+C` 会停止 Flask、Picamera2 双输出和 MediaMTX。日志保存在 `pi_service/logs/`。
 
 服务启动约 3 秒后，执行自动验收：
 
@@ -37,7 +37,7 @@ chmod +x verify_webrtc.sh
 可在启动前调节参数，例如：
 
 ```bash
-ROBOT_WEBRTC_WIDTH=640 ROBOT_WEBRTC_HEIGHT=480 ROBOT_WEBRTC_BITRATE=1500000 \
+ROBOT_WEBRTC_WIDTH=640 ROBOT_WEBRTC_HEIGHT=480 ROBOT_WEBRTC_BITRATE=1500000 ROBOT_WEBRTC_GOP_FRAMES=8 \
 ROBOT_HIGHRES_WIDTH=1640 ROBOT_HIGHRES_HEIGHT=1232 ./start_webrtc.sh
 ```
 

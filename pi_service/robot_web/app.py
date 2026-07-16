@@ -115,6 +115,7 @@ def main() -> None:
     parser.add_argument("--webrtc-height", type=int, default=720)
     parser.add_argument("--webrtc-fps", type=float, default=30.0)
     parser.add_argument("--webrtc-bitrate", type=int, default=2_500_000)
+    parser.add_argument("--webrtc-gop-frames", type=int, default=8)
     parser.add_argument("--webrtc-port", type=int, default=8889)
     parser.add_argument("--webrtc-path", default="cam")
     parser.add_argument("--highres-width", type=int, default=1640)
@@ -130,6 +131,7 @@ def main() -> None:
         else DualStreamCamera(
             video_width=args.webrtc_width, video_height=args.webrtc_height,
             video_fps=args.webrtc_fps, video_bitrate=args.webrtc_bitrate,
+            webrtc_gop_frames=args.webrtc_gop_frames,
             highres_width=args.highres_width, highres_height=args.highres_height,
             webrtc_port=args.webrtc_port, webrtc_path=args.webrtc_path,
             udp_output=args.webrtc_udp_output,

@@ -8,6 +8,7 @@ width="${ROBOT_WEBRTC_WIDTH:-640}"
 height="${ROBOT_WEBRTC_HEIGHT:-480}"
 fps="${ROBOT_WEBRTC_FPS:-30}"
 bitrate="${ROBOT_WEBRTC_BITRATE:-1500000}"
+gop_frames="${ROBOT_WEBRTC_GOP_FRAMES:-8}"
 highres_width="${ROBOT_HIGHRES_WIDTH:-1640}"
 highres_height="${ROBOT_HIGHRES_HEIGHT:-1232}"
 web_port="${ROBOT_WEB_PORT:-5000}"
@@ -30,5 +31,5 @@ trap cleanup EXIT INT TERM
 cd "$root/robot_web"
 python3 -u app.py --port "$serial_port" --web-port "$web_port" \
   --video-backend webrtc --webrtc-width "$width" --webrtc-height "$height" \
-  --webrtc-fps "$fps" --webrtc-bitrate "$bitrate" --webrtc-port 8889 --webrtc-path cam \
+  --webrtc-fps "$fps" --webrtc-bitrate "$bitrate" --webrtc-gop-frames "$gop_frames" --webrtc-port 8889 --webrtc-path cam \
   --highres-width "$highres_width" --highres-height "$highres_height"

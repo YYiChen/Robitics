@@ -33,6 +33,7 @@ class DualStreamCamera:
         video_height: int = 480,
         video_fps: float = 30.0,
         video_bitrate: int = 1_500_000,
+        webrtc_gop_frames: int = 8,
         highres_width: int = 1640,
         highres_height: int = 1232,
         webrtc_port: int = 8889,
@@ -42,6 +43,10 @@ class DualStreamCamera:
     ) -> None:
         self.video_width, self.video_height = int(video_width), int(video_height)
         self.video_fps, self.video_bitrate = float(video_fps), int(video_bitrate)
+        # A short GOP bounds the time a new WebRTC consumer can wait for an
+        # independently decodable frame.  Baseline profile also excludes
+        # B-frames, which prevents encoder reordering delay.
+        self.webrtc_gop_frames = max(1, int(webrtc_gop_frames))
         self.width, self.height = int(highres_width), int(highres_height)
         self.port, self.path = int(webrtc_port), str(webrtc_path).strip("/") or "cam"
         self.udp_output = str(udp_output)
@@ -155,8 +160,18 @@ class DualStreamCamera:
                 buffer_count=4,
             )
             self._picam2.configure(config)
-            self._encoder = Encoder(bitrate=self.video_bitrate)
-            self._output = FfmpegOutput(f"-f mpegts {self.udp_output}")
+            self._encoder = Encoder(
+                bitrate=self.video_bitrate,
+                repeat=True,
+                iperiod=self.webrtc_gop_frames,
+                framerate=self.video_fps,
+                profile="baseline",
+            )
+            # These are output-side FFmpeg options.  They avoid the default
+            # MPEG-TS mux delay before MediaMTX forwards packets to WebRTC.
+            self._output = FfmpegOutput(
+                f"-flush_packets 1 -muxdelay 0 -muxpreload 0 -f mpegts {self.udp_output}"
+            )
             self._picam2.start_recording(self._encoder, self._output, name="lores")
             self._stop.clear()
             self._running = True
@@ -258,7 +273,16 @@ class DualStreamCamera:
             "frame_age_ms": None,
             "active_clients": None,
             "jpeg_quality": None,
-            "stream_profile": {"key": "h264_webrtc", "label": f"H.264 · {self.video_bitrate / 1_000_000:.1f} Mbps · WebRTC", "resolution": f"{self.video_width}x{self.video_height}", "encoder": self.encoder_name},
+            "stream_profile": {
+                "key": "h264_webrtc",
+                "label": f"H.264 · {self.video_bitrate / 1_000_000:.1f} Mbps · WebRTC",
+                "resolution": f"{self.video_width}x{self.video_height}",
+                "encoder": self.encoder_name,
+                "gop_frames": self.webrtc_gop_frames,
+                "keyframe_interval_ms": round(self.webrtc_gop_frames / self.video_fps * 1000),
+                "profile": "baseline",
+                "low_latency_mux": True,
+            },
             "highres_profile": self._highres_profile_status(),
             "highres": {"target_fps": HIGHRES_FPS, "capture_fps": frame_count, "stream_fps": stream_count, "jpeg_bytes": last_size, "kBps": frame_bytes / 1000.0, "kbps": frame_bytes * 8.0 / 1000.0, "stream_kBps": stream_bytes / 1000.0, "stream_kbps": stream_bytes * 8.0 / 1000.0, "encode_ms": last_encode, "encode_ms_avg": encode_average, "frame_age_ms": (now - last_at) * 1000.0 if last_at else None, "active_clients": clients},
             "available_modes": [],
