@@ -16,7 +16,7 @@ class ControllerPersistenceTests(unittest.TestCase):
     def test_default_camera_gimbal_settings_match_driving_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             controller = RobotController("unused", Path(directory) / "drive_config.json")
-            self.assertEqual(controller.config.servo_speed_dps, 30.0)
+            self.assertEqual(controller.config.servo_speed_dps, 45.0)
             self.assertTrue(controller.config.servo_qe_reversed)
 
     def test_profiles_and_pid_survive_new_controller(self) -> None:
@@ -63,9 +63,9 @@ class ControllerPersistenceTests(unittest.TestCase):
             controller._last_servo_motion_at = 10.0
             controller.last_steering_seen = 10.0
             controller._advance_steering(10.5, controller.config)
-            self.assertEqual(commands, ["SV,75"])
+            self.assertEqual(commands, ["SV,68"])
             controller._advance_steering(11.0, controller.config)
-            self.assertEqual(commands, ["SV,75"])
+            self.assertEqual(commands, ["SV,68"])
 
     def test_shutdown_flushes_latest_in_memory_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -106,9 +106,10 @@ class ControllerPersistenceTests(unittest.TestCase):
             controller._parse("US,31.5")
             controller._parse("OK:SV,125")
             controller._parse("OK:M,120,-80,-75,110")
+            controller._parse("OUT,121,-81,-76,111")
             self.assertEqual(controller.ultrasonic, 31.5)
             self.assertEqual(controller.servo_angle, 125)
-            self.assertEqual(controller.motor_output, [120, -80, -75, 110])
+            self.assertEqual(controller.motor_output, [121, -81, -76, 111])
 
     def test_servo_command_is_validated_without_touching_drive_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

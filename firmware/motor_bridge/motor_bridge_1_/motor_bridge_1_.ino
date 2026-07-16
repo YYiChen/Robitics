@@ -25,6 +25,7 @@
 //     STOP | S                 stop + disable speed control
 //     IMU                      query Euler angles
 //     SPD                      query wheel speeds + PID state
+//     OUT                      query actual PWM applied to M1..M4
 //     US                       query the front ultrasonic distance
 //     SV,angle                 set SG90 servo angle (0..180)
 //
@@ -583,6 +584,19 @@ void printSpeed() {
   Serial.println(pidOutputRight);
 }
 
+// Print the exact four PWM values currently applied after PID, reverse-pause
+// and obstacle handling.  Unlike OK:M this is emitted even when unchanged.
+void printMotorOutputs() {
+  Serial.print(F("OUT,"));
+  Serial.print(currentMotorCommands[0]);
+  Serial.print(',');
+  Serial.print(currentMotorCommands[1]);
+  Serial.print(',');
+  Serial.print(currentMotorCommands[2]);
+  Serial.print(',');
+  Serial.println(currentMotorCommands[3]);
+}
+
 // Emit a periodic idle heartbeat.  This is intentionally independent of the
 // remote-control watchdog: after power-up, or whenever all motors are stopped,
 // the Serial Monitor can visibly confirm the safe state.
@@ -789,6 +803,12 @@ void executeLine(char *line) {
   // Query current wheel speeds.
   if (strcmp(line, "SPD") == 0) {
     printSpeed();
+    lastValidCommandTime = millis();
+    return;
+  }
+
+  if (strcmp(line, "OUT") == 0) {
+    printMotorOutputs();
     lastValidCommandTime = millis();
     return;
   }

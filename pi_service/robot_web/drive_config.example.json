@@ -9,7 +9,7 @@
   "curve_outer_pwm": 160,
   "curve_inner_pwm": 60,
   "servo_center_angle": 90,
-  "servo_speed_dps": 30.0,
+  "servo_speed_dps": 45.0,
   "servo_qe_reversed": true,
   "profiles": {
     "F": {"rf": 80, "lf": 80, "lr": 80, "rr": 80},

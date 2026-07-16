@@ -51,7 +51,7 @@ class Config:
     curve_outer_pwm: int = 160
     curve_inner_pwm: int = 60
     servo_center_angle: int = 90
-    servo_speed_dps: float = 30.0
+    servo_speed_dps: float = 45.0
     servo_qe_reversed: bool = True
     profiles: dict[str, dict[str, int]] = field(default_factory=default_profiles)
 
@@ -229,7 +229,7 @@ class RobotController:
             for key in ("straight_pwm", "pivot_pwm", "curve_outer_pwm", "curve_inner_pwm"):
                 setattr(self.config, key, max(0, min(255, getattr(self.config, key))))
             self.config.servo_center_angle = max(0, min(180, self.config.servo_center_angle))
-            self.config.servo_speed_dps = max(1.0, min(30.0, self.config.servo_speed_dps))
+            self.config.servo_speed_dps = max(1.0, min(45.0, self.config.servo_speed_dps))
             result = asdict(self.config)
         # SD-card I/O must not hold the control/heartbeat lock.
         self._save_config(result)
@@ -301,7 +301,7 @@ class RobotController:
             parts = text.split(",")
             if text.startswith("IMU,") and len(parts) == 4: self.imu = [float(x) for x in parts[1:]]
             elif text.startswith("SPD,") and len(parts) == 7: self.speed = [float(x) for x in parts[1:]]
-            elif text.startswith("OK:M,") and len(parts) == 5: self.motor_output = [int(x) for x in parts[1:]]
+            elif (text.startswith("OK:M,") or text.startswith("OUT,")) and len(parts) == 5: self.motor_output = [int(x) for x in parts[1:]]
             elif text.startswith("US,") and len(parts) == 2:
                 self.ultrasonic = float(parts[1])
             elif text.startswith("OK:SV,"):
@@ -334,7 +334,7 @@ class RobotController:
                         line = port.readline().decode("ascii", "ignore").strip()
                         if line: self._parse(line)
             if now >= next_query:
-                for command in ("IMU", "SPD", "US"): self._write(command)
+                for command in ("IMU", "SPD", "US", "OUT"): self._write(command)
                 next_query = now + .5
     def status(self) -> dict:
         with self.lock: cfg, action, seen = asdict(self.config), self.action, self.last_client_seen
