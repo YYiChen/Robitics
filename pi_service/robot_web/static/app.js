@@ -3,6 +3,7 @@ const video = $("#video"), save = $("#save");
 const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:false});
 let folder, aborter, count = 0, profiles = {}, activeMode = "all", configLoaded = false, keysSending = false, keysQueued = false;
 let cameraModeDirty = false, cameraModeBusy = false, exposureDirty = false, exposureBusy = false, videoRetryTimer;
+let receivedFrameCount = 0, receivedFrameWindowAt = performance.now(), browserReceiveFps = 0, statusRttMs = null;
 const wheelNames = ["rf", "lf", "lr", "rr"];
 const actionKeys = {FL:"q", F:"w", FR:"e", PL:"a", PR:"d", BL:"z", B:"s", BR:"c"};
 const keyboardKeys = {w:"w", a:"a", s:"s", d:"d", q:"q", e:"e", z:"z", c:"c", ArrowUp:"w", ArrowDown:"s", ArrowLeft:"a", ArrowRight:"d"};
@@ -67,6 +68,16 @@ function reloadVideo() {
   videoRetryTimer = setTimeout(() => { video.src = `/video_feed?ts=${Date.now()}`; }, 800);
 }
 video.addEventListener("error", reloadVideo);
+video.addEventListener("load", () => {
+  const now = performance.now();
+  receivedFrameCount += 1;
+  const elapsed = now - receivedFrameWindowAt;
+  if (elapsed >= 1000) {
+    browserReceiveFps = receivedFrameCount * 1000 / elapsed;
+    receivedFrameCount = 0;
+    receivedFrameWindowAt = now;
+  }
+});
 $("#cameraMode").onchange = () => { cameraModeDirty = true; };
 $("#applyCameraMode").onclick = async () => {
   if (cameraModeBusy) return;
@@ -173,8 +184,31 @@ $("#reconnect").onclick = async () => { const button = $("#reconnect"); button.d
 
 function dot(online, text, warning = false) { return `<i class="dot ${online ? "online" : warning ? "warn" : "offline"}"></i>${text}`; }
 function fixed(value, digits = 1) { const number = Number(value); return Number.isFinite(number) ? number.toFixed(digits) : "—"; }
+function bytes(value) { const number = Number(value); if (!Number.isFinite(number)) return "—"; return number >= 1e9 ? `${fixed(number / 1e9)} GB` : `${fixed(number / 1e6)} MB`; }
+function duration(seconds) { const whole = Math.max(0, Math.floor(Number(seconds) || 0)); return `${Math.floor(whole / 60)} 分 ${whole % 60} 秒`; }
 function distance(value) { if (!value) return "等待传感器数据…"; if (value[1] === -1) return "无有效回波（-1）"; return `${value[1].toFixed(1)} cm`; }
-async function refreshStatus() { try { const response = await fetch("/api/status", {cache:"no-store"}), data = await response.json(), robot = data.robot;
+function streamDiagnosis(camera) {
+  if (!camera.online) return ["树莓派相机服务离线", "请先处理相机状态或服务错误；网络判断暂不可用。"];
+  const target = Number(camera.target_fps) || Number(camera.sensor_target_fps) || 0;
+  const capture = Number(camera.capture_fps) || 0;
+  const encode = Number(camera.encode_ms) || 0;
+  const frameBudget = target > 0 ? 1000 / target : Infinity;
+  if (target > 0 && capture < target * 0.7) {
+    return ["更像树莓派采集/编码瓶颈", `相机只编码 ${fixed(capture)} FPS，低于目标 ${fixed(target)} FPS；先检查相机模式、CPU 占用和编码耗时。`];
+  }
+  if (encode > frameBudget * 0.7) {
+    return ["更像树莓派 JPEG 编码压力", `单帧编码 ${fixed(encode)} ms，接近 ${fixed(frameBudget)} ms 的帧预算；降低分辨率或 JPEG 质量再比较。`];
+  }
+  if (statusRttMs != null && statusRttMs > 120) {
+    return ["更像网络往返延迟", `状态请求 RTT ${fixed(statusRttMs)} ms 偏高；检查 Wi-Fi 信号、同网段/中继和其他网络占用。`];
+  }
+  if (browserReceiveFps > 0 && capture > 0 && browserReceiveFps < capture * 0.7) {
+    const reason = statusRttMs != null && statusRttMs > 50 ? "网络传输或浏览器解码" : "浏览器解码/渲染";
+    return [`更像${reason}瓶颈`, `树莓派编码 ${fixed(capture)} FPS，但本浏览器只收到 ${fixed(browserReceiveFps)} FPS；尝试关闭其他视频客户端、降低分辨率后复测。`];
+  }
+  return ["未发现明显传输瓶颈", `树莓派编码 ${fixed(capture)} FPS、本浏览器收到 ${fixed(browserReceiveFps)} FPS、RTT ${fixed(statusRttMs)} ms；若操作仍卡，重点检查控制请求和浏览器负载。`];
+}
+async function refreshStatus() { try { const statusStartedAt = performance.now(); const response = await fetch("/api/status", {cache:"no-store"}), data = await response.json(), robot = data.robot, system = data.system || {}; statusRttMs = performance.now() - statusStartedAt;
     const camera = data.camera || {};
     $("#cameraState").innerHTML = dot(camera.online, camera.online ? "在线" : camera.status); $("#arduinoState").innerHTML = dot(robot.arduino_online, robot.arduino_online ? "在线" : robot.serial ? "无响应" : "离线", robot.serial);
     const resolution = camera.resolution || (camera.width && camera.height ? `${camera.width}×${camera.height}` : "—");
@@ -194,6 +228,17 @@ async function refreshStatus() { try { const response = await fetch("/api/status
     $("#cameraEncode").textContent = `${fixed(camera.encode_ms)} ms（平均 ${fixed(camera.encode_ms_avg)} ms）`;
     $("#cameraAge").textContent = camera.frame_age_ms == null ? "—" : `${fixed(camera.frame_age_ms)} ms`;
     $("#cameraClients").textContent = `${camera.active_clients ?? 0}`;
+    $("#browserReceiveFps").textContent = browserReceiveFps > 0 ? `${fixed(browserReceiveFps)} FPS` : "测量中…";
+    $("#statusRtt").textContent = statusRttMs == null ? "测量中…" : `${fixed(statusRttMs)} ms`;
+    const [diagnosis, diagnosisDetail] = streamDiagnosis(camera);
+    $("#streamDiagnosis").textContent = diagnosis;
+    $("#streamDiagnosisDetail").textContent = diagnosisDetail;
+    $("#systemCpu").textContent = system.cpu_percent == null ? "测量中…" : `${fixed(system.cpu_percent)}%`;
+    $("#systemLoad").textContent = fixed(system.load_1m, 2);
+    $("#systemMemory").textContent = system.memory_total_bytes == null ? "—" : `${bytes(system.memory_used_bytes)} / ${bytes(system.memory_total_bytes)}`;
+    $("#systemTemperature").textContent = system.cpu_temperature_c == null ? "—" : `${fixed(system.cpu_temperature_c)} °C`;
+    $("#systemDisk").textContent = system.disk_total_bytes == null ? "—" : `${bytes(system.disk_used_bytes)} / ${bytes(system.disk_total_bytes)}`;
+    $("#systemUptime").textContent = duration(system.uptime_seconds);
     $("#controlState").innerHTML = dot(robot.client_online, robot.client_online ? "在线" : "已超时停车"); $("#action").textContent = robot.action; $("#keys").textContent = robot.keys?.join("+") || "—"; $("#distance").textContent = distance(robot.ultrasonic); $("#lastReply").textContent = robot.reply || "等待 Arduino 回包";
     if (robot.imu) { $("#roll").textContent = `${robot.imu[0].toFixed(2)}°`; $("#pitch").textContent = `${robot.imu[1].toFixed(2)}°`; $("#yaw").textContent = `${robot.imu[2].toFixed(2)}°`; }
     if (robot.speed) { $("#wheelSpeed").textContent = `${robot.speed[0].toFixed(1)} / ${robot.speed[1].toFixed(1)} pps`; $("#targetWheelSpeed").textContent = `${robot.speed[2].toFixed(1)} / ${robot.speed[3].toFixed(1)} pps`; }

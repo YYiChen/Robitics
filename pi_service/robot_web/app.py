@@ -4,9 +4,11 @@ import atexit
 from flask import Flask, Response, jsonify, request, render_template
 from camera import CameraStreamer
 from controller import RobotController
+from system_metrics import SystemMetrics
 
-def create_app(controller: RobotController, camera: CameraStreamer) -> Flask:
+def create_app(controller: RobotController, camera: CameraStreamer, system_metrics: SystemMetrics | None = None) -> Flask:
     app = Flask(__name__)
+    system_metrics = system_metrics or SystemMetrics()
     @app.get("/")
     def index(): return render_template("index.html")
     @app.get("/video_feed")
@@ -48,7 +50,7 @@ def create_app(controller: RobotController, camera: CameraStreamer) -> Flask:
         except RuntimeError as exc:
             return jsonify(ok=False, error=str(exc), camera=camera.status_dict()), 503
     @app.get("/api/status")
-    def status(): return jsonify(robot=controller.status(), camera=camera.status_dict())
+    def status(): return jsonify(robot=controller.status(), camera=camera.status_dict(), system=system_metrics.status_dict())
     return app
 
 def main() -> None:

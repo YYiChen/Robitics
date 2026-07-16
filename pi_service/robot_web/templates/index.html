@@ -76,6 +76,18 @@
         <div class="metric"><span>编码耗时</span><strong id="cameraEncode">—</strong></div>
         <div class="metric"><span>最新帧延迟</span><strong id="cameraAge">—</strong></div>
         <div class="metric"><span>视频客户端</span><strong id="cameraClients">—</strong></div>
+        <div class="metric"><span>本浏览器实际收到 FPS</span><strong id="browserReceiveFps">测量中…</strong><small>由当前页面的 MJPEG 图片加载事件统计</small></div>
+        <div class="metric"><span>网页状态 RTT</span><strong id="statusRtt">测量中…</strong><small>浏览器到树莓派 `/api/status` 的往返时间</small></div>
+        <div class="metric wide"><span>卡顿诊断</span><strong id="streamDiagnosis">正在收集样本…</strong><small id="streamDiagnosisDetail">请至少观察 5 秒；该结论区分树莓派采集/编码、网络往返和浏览器接收，不等同于电机控制延迟。</small></div>
+      </div>
+      <div class="card-heading system-heading"><h3>树莓派资源</h3><span>由树莓派自身 `/proc` 实时采样</span></div>
+      <div class="stream-metrics" aria-label="树莓派系统资源">
+        <div class="metric"><span>CPU 使用率</span><strong id="systemCpu">测量中…</strong></div>
+        <div class="metric"><span>1 分钟负载</span><strong id="systemLoad">—</strong></div>
+        <div class="metric"><span>内存</span><strong id="systemMemory">—</strong></div>
+        <div class="metric"><span>CPU 温度</span><strong id="systemTemperature">—</strong></div>
+        <div class="metric"><span>根分区磁盘</span><strong id="systemDisk">—</strong></div>
+        <div class="metric"><span>网页服务运行时长</span><strong id="systemUptime">—</strong></div>
       </div>
     </div>
 
