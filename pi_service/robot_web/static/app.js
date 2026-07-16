@@ -3,7 +3,7 @@ const video = $("#video"), webrtcVideo = $("#webrtcVideo"), save = $("#save");
 const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:false});
 let folder, aborter, count = 0, profiles = {}, activeMode = "all", configLoaded = false, keysSending = false, keysQueued = false;
 let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, exposureDirty = false, exposureBusy = false, videoRetryTimer;
-let servoTimer = null, servoBusy = false;
+let servoBusy = false, queuedServoAngle = null;
 let receivedFrameCount = 0, receivedFrameWindowAt = performance.now(), browserReceiveFps = 0, statusRttMs = null;
 let activeVideoTransport = "mjpeg", currentWebrtcUrl = "";
 const wheelNames = ["rf", "lf", "lr", "rr"];
@@ -190,21 +190,37 @@ async function sendHeartbeat() { try { await requestJson("/api/heartbeat", {meth
 setInterval(sendHeartbeat, 180);
 $("#stopButton").onclick = releaseKeys;
 
-// Send only after the slider has paused briefly. This keeps camera pan
-// responsive without flooding the 9600-baud Arduino serial link.
+// Send the first slider update immediately. While a request is in flight, keep
+// only the newest angle so a rapid drag cannot build up stale serial commands.
+async function flushServoQueue() {
+  if (servoBusy) return;
+  servoBusy = true;
+  try {
+    while (queuedServoAngle !== null) {
+      const angle = queuedServoAngle;
+      queuedServoAngle = null;
+      const response = await fetch("/api/servo", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({angle}),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw Error(data.error || "舵机指令失败");
+    }
+  } catch (error) {
+    queuedServoAngle = null;
+    note(error.message);
+  } finally {
+    servoBusy = false;
+    if (queuedServoAngle !== null) void flushServoQueue();
+  }
+}
+
 $("#servoSlider").addEventListener("input", () => {
   const angle = Number($("#servoSlider").value);
   $("#servoAngleDisplay").textContent = `${angle}°`;
-  clearTimeout(servoTimer);
-  servoTimer = setTimeout(async () => {
-    servoBusy = true;
-    try {
-      const response = await fetch("/api/servo", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({angle})});
-      const data = await response.json();
-      if (!response.ok || !data.ok) throw Error(data.error || "舵机指令失败");
-    } catch (error) { note(error.message); }
-    finally { servoBusy = false; }
-  }, 80);
+  queuedServoAngle = angle;
+  void flushServoQueue();
 });
 
 function profileFor(action) { return profiles[action] || {rf:0, lf:0, lr:0, rr:0}; }
