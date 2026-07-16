@@ -58,6 +58,7 @@ WebRTC 模式不能同时运行 `start_robot.sh`，也不会支持现有 MJPEG �
 - 视频卡片中的“电脑端辅助画面”使用浏览器 Canvas 复用当前视频帧，可完整缩放或中心裁切到 640×480；它不创建第二条视频连接，不增加树莓派网络带宽和编码负载。
 - 网页可在 `1640×1232` 与 `3280×2464` 两个 CSI 读取档位之间切换；两个档位都请求 30 FPS 传感器帧时长，切换会短暂重启视频流，实际采集/编码帧率以网页指标为准。
 - 本地图片保存需要 Chrome/Edge 的 HTTPS 或 localhost 安全上下文，并由用户选择文件夹授权。
+- OLED 为可选的 SSD1306 `64×48` I2C 模块：GND→pin 6、VCC→pin 1（3.3V，推荐）或 pin 2（5V）、SDA→GPIO2/pin 3、SCL→GPIO3/pin 5；先用 `sudo raspi-config` 开启 I2C。默认地址为 `0x3C`、总线 1，服务启动后每秒显示 Arduino、相机和前向距离。OLED 缺失、I2C 未开或依赖未装不会阻止控制服务启动，网页“状态”标签会显示错误原因。可用 `--disable-oled` 关闭，或以 `--oled-address 0x3D --oled-i2c-port 1` 修改参数。
 
 ## Git 工作流
 

@@ -4,10 +4,11 @@ import atexit
 from flask import Flask, Response, jsonify, request, render_template
 from camera import CameraStreamer
 from controller import RobotController
+from oled_status import OledStatusService
 from system_metrics import SystemMetrics
 from webrtc_stream import WebRTCStreamer
 
-def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStreamer, system_metrics: SystemMetrics | None = None) -> Flask:
+def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStreamer, system_metrics: SystemMetrics | None = None, oled: OledStatusService | None = None) -> Flask:
     app = Flask(__name__)
     system_metrics = system_metrics or SystemMetrics()
     def mjpeg_only():
@@ -98,7 +99,7 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
         except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
     @app.get("/api/status")
-    def status(): return jsonify(robot=controller.status(), camera=camera.status_dict(), system=system_metrics.status_dict())
+    def status(): return jsonify(robot=controller.status(), camera=camera.status_dict(), system=system_metrics.status_dict(), oled=oled.status_dict() if oled else {"online": False, "disabled": True, "error": "已通过启动参数关闭"})
     return app
 
 def main() -> None:
@@ -112,6 +113,9 @@ def main() -> None:
     parser.add_argument("--webrtc-bitrate", type=int, default=2_500_000)
     parser.add_argument("--webrtc-port", type=int, default=8889)
     parser.add_argument("--webrtc-path", default="cam")
+    parser.add_argument("--disable-oled", action="store_true")
+    parser.add_argument("--oled-address", type=lambda value: int(value, 0), default=0x3C)
+    parser.add_argument("--oled-i2c-port", type=int, default=1)
     args = parser.parse_args()
     camera = (
         CameraStreamer()
@@ -119,14 +123,18 @@ def main() -> None:
         else WebRTCStreamer(args.webrtc_width, args.webrtc_height, args.webrtc_fps, args.webrtc_bitrate, args.webrtc_port, args.webrtc_path)
     )
     camera.start(); controller = RobotController(args.port); controller.start()
+    oled = None if args.disable_oled else OledStatusService(controller, camera, address=args.oled_address, i2c_port=args.oled_i2c_port)
+    if oled: oled.start()
     # Persist the current wheel profiles on normal process exit as well as
     # when the browser clicks the save button.  This covers Ctrl+C and service
     # shutdown, while RobotController.stop() remains idempotent.
     atexit.register(controller.stop)
     atexit.register(camera.stop)
+    if oled: atexit.register(oled.stop)
     try:
-        create_app(controller,camera).run(host="0.0.0.0",port=args.web_port,threaded=True,use_reloader=False)
+        create_app(controller,camera,oled=oled).run(host="0.0.0.0",port=args.web_port,threaded=True,use_reloader=False)
     finally:
         controller.stop()
         camera.stop()
+        if oled: oled.stop()
 if __name__ == "__main__": main()
