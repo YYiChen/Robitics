@@ -66,6 +66,9 @@
       <div class="setting-block exposure-block" id="mjpegExposureControls">
         <label>曝光</label><div class="exposure-grid"><select id="exposureMode"><option value="auto">自动曝光</option><option value="manual">固定快门</option></select><label>EV <input id="cameraEv" type="number" min="-8" max="8" step="0.1" value="0"></label><label>1 / <input id="shutterDenominator" type="number" min="30" max="10000" step="1" value="200"> 秒</label><button class="primary" id="applyExposure">应用</button></div><small id="exposureHint">自动模式下 EV 生效。</small>
       </div>
+      <div class="setting-block" id="mjpegColorCorrectionControls">
+        <label class="switch-label"><input id="colorCorrectionEnabled" type="checkbox" checked>边缘偏色校正</label><div class="inline-control"><input id="colorCorrectionStrength" type="number" min="0" max="1.5" step="0.05" value="1"><button class="primary" id="applyColorCorrection">应用</button></div><small id="colorCorrectionHint">中心不变；边缘逐渐降低偏红/偏蓝并补偿绿色。建议从 1.00 开始。</small>
+      </div>
       <div class="setting-block save-block" id="mjpegCaptureControls">
         <label>电脑端保存</label><div class="save-actions"><button class="primary" id="choose">选择 Pic 文件夹</button><button id="snapshot">保存当前画面</button><button id="record">连续保存 5 FPS</button><button id="stopRecord" disabled>停止</button></div><small id="save">图片只写入浏览器授权的电脑文件夹；需要 HTTPS 或 localhost。</small>
       </div>

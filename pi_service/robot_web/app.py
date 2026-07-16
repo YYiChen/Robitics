@@ -115,6 +115,14 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
             return jsonify(ok=True, camera=camera.set_highres_fps(payload.get("fps")))
         except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
+    @app.post("/api/camera/color-correction")
+    def camera_color_correction():
+        unavailable = mjpeg_only()
+        if unavailable is not None: return unavailable
+        try:
+            return jsonify(ok=True, camera=camera.set_color_correction(request.get_json(silent=True) or {}))
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
     @app.get("/api/status")
     def status():
         return jsonify(

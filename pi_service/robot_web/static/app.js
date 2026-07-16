@@ -2,7 +2,7 @@ const $ = selector => document.querySelector(selector);
 const video = $("#video"), webrtcVideo = $("#webrtcVideo"), highresVideo = $("#highresVideo"), save = $("#save");
 const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:false});
 let folder, aborter, count = 0, profiles = {}, activeMode = "all", configLoaded = false, keysSending = false, keysQueued = false;
-let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, highresProfileDirty = false, highresProfileBusy = false, highresFpsDirty = false, highresFpsBusy = false, exposureDirty = false, exposureBusy = false, videoRetryTimer;
+let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, highresProfileDirty = false, highresProfileBusy = false, highresFpsDirty = false, highresFpsBusy = false, exposureDirty = false, exposureBusy = false, colorCorrectionDirty = false, colorCorrectionBusy = false, videoRetryTimer;
 let servoBusy = false, queuedServoAngle = null, steeringCenterAngle = 90, steeringReversed = true;
 let receivedFrameCount = 0, receivedFrameWindowAt = performance.now(), browserReceiveFps = 0, statusRttMs = null;
 let activeVideoTransport = "mjpeg", currentWebrtcUrl = "";
@@ -293,6 +293,22 @@ $("#applyExposure").onclick = async () => {
   finally { exposureBusy = false; button.disabled = false; mode.disabled = false; updateExposureUi(); }
 };
 
+for (const input of [$("#colorCorrectionEnabled"), $("#colorCorrectionStrength")]) input.addEventListener("input", () => { colorCorrectionDirty = true; });
+$("#applyColorCorrection").onclick = async () => {
+  if (colorCorrectionBusy) return;
+  colorCorrectionBusy = true;
+  const button = $("#applyColorCorrection"), enabled = $("#colorCorrectionEnabled"), strength = $("#colorCorrectionStrength");
+  button.disabled = true; enabled.disabled = true; strength.disabled = true;
+  try {
+    const response = await fetch("/api/camera/color-correction", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({enabled:enabled.checked, strength:Number(strength.value)})});
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw Error(data.error || "颜色校正设置失败");
+    colorCorrectionDirty = false;
+    note(data.camera.color_correction.enabled ? `已开启边缘偏色校正，强度 ${fixed(data.camera.color_correction.strength, 2)}` : "已关闭边缘偏色校正");
+  } catch (error) { note(error.message); }
+  finally { colorCorrectionBusy = false; button.disabled = false; enabled.disabled = false; strength.disabled = false; }
+};
+
 function editing(event) { return ["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName); }
 function steeringDirection() {
   if (heldSteeringKeys.has("q") === heldSteeringKeys.has("e")) return 0;
@@ -487,6 +503,10 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
         $("#cameraEv").value = camera.exposure.ev;
         $("#shutterDenominator").value = camera.exposure.shutter_denominator;
         updateExposureUi();
+      }
+      if (!colorCorrectionDirty && !colorCorrectionBusy && camera.color_correction) {
+        $("#colorCorrectionEnabled").checked = !!camera.color_correction.enabled;
+        $("#colorCorrectionStrength").value = camera.color_correction.strength;
       }
     }
     const streamResolution = camera.stream_profile?.resolution || resolution;

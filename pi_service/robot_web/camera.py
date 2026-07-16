@@ -48,6 +48,10 @@ HIGHRES_PROFILES = {
     "compact_1280": {"label": "高清轻量 · 最宽 1280 px · JPEG 75", "max_width": 1280},
 }
 DEFAULT_HIGHRES_PROFILE = "source"
+# The CSI module's outer image area is visibly magenta in the supplied flat
+# wall reference.  RGB888 arrays arrive in OpenCV BGR order, hence B/G/R.
+DEFAULT_COLOR_CORRECTION = {"enabled": True, "strength": 1.0}
+EDGE_BGR_GAINS = (0.92, 1.06, 0.78)
 
 
 class CameraStreamer:
@@ -80,6 +84,9 @@ class CameraStreamer:
         self.stream_profile_key = saved["stream_profile"]
         self.highres_profile_key = saved["highres_profile"]
         self.highres_fps = float(saved["highres_fps"])
+        self.color_correction_enabled = bool(saved["color_correction"]["enabled"])
+        self.color_correction_strength = float(saved["color_correction"]["strength"])
+        self._color_gain_maps: dict[tuple[int, int, float], np.ndarray] = {}
         self._condition = threading.Condition()
         self._jpeg: bytes | None = None
         self._sequence = 0
@@ -116,6 +123,7 @@ class CameraStreamer:
             "stream_profile": DEFAULT_STREAM_PROFILE,
             "highres_profile": DEFAULT_HIGHRES_PROFILE,
             "highres_fps": DEFAULT_HIGHRES_FPS,
+            "color_correction": dict(DEFAULT_COLOR_CORRECTION),
         }
         try:
             data = json.loads(self.config_path.read_text(encoding="utf-8"))
@@ -132,6 +140,10 @@ class CameraStreamer:
                 defaults["exposure"]["auto"] = bool(exposure.get("auto", defaults["exposure"]["auto"]))
                 defaults["exposure"]["ev"] = max(-8.0, min(8.0, float(exposure.get("ev", defaults["exposure"]["ev"]))))
                 defaults["exposure"]["shutter_denominator"] = max(1, int(exposure.get("shutter_denominator", defaults["exposure"]["shutter_denominator"])))
+            correction = data.get("color_correction", {})
+            if isinstance(correction, dict):
+                defaults["color_correction"]["enabled"] = bool(correction.get("enabled", defaults["color_correction"]["enabled"]))
+                defaults["color_correction"]["strength"] = max(0.0, min(1.5, float(correction.get("strength", defaults["color_correction"]["strength"]))))
         except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError, ValueError):
             pass
         return defaults
@@ -144,6 +156,10 @@ class CameraStreamer:
             "stream_profile": self.stream_profile_key,
             "highres_profile": self.highres_profile_key,
             "highres_fps": self.highres_fps,
+            "color_correction": {
+                "enabled": self.color_correction_enabled,
+                "strength": self.color_correction_strength,
+            },
             "exposure": {
                 "auto": self.auto_exposure,
                 "ev": self.exposure_ev,
@@ -374,6 +390,50 @@ class CameraStreamer:
             self._save_settings()
         return self.status_dict()
 
+    def set_color_correction(self, payload: dict) -> dict:
+        """Set persisted radial edge colour correction for BGR preview/JPEG frames."""
+        if not isinstance(payload, dict):
+            raise ValueError("颜色校正参数格式错误")
+        try:
+            enabled = payload.get("enabled", self.color_correction_enabled)
+            if not isinstance(enabled, bool):
+                raise ValueError
+            strength = max(0.0, min(1.5, float(payload.get("strength", self.color_correction_strength))))
+        except (TypeError, ValueError):
+            raise ValueError("颜色校正强度必须是 0 到 1.5 的数字") from None
+        with self._lifecycle_lock:
+            self.color_correction_enabled, self.color_correction_strength = enabled, strength
+            self._color_gain_maps.clear()
+            self._save_settings()
+        return self.status_dict()
+
+    def _radial_color_gain_map(self, width: int, height: int):
+        """Return a cached BGR gain map whose centre is exactly unchanged."""
+        import numpy as np
+        key = (int(width), int(height), round(self.color_correction_strength, 3))
+        cached = self._color_gain_maps.get(key)
+        if cached is not None:
+            return cached
+        x = np.linspace(-1.0, 1.0, int(width), dtype=np.float32)
+        y = np.linspace(-1.0, 1.0, int(height), dtype=np.float32)
+        radius = np.minimum(1.0, np.sqrt(y[:, None] ** 2 + x[None, :] ** 2) / np.sqrt(2.0))
+        falloff = radius ** 2
+        edge = np.asarray(EDGE_BGR_GAINS, dtype=np.float32).reshape(1, 1, 3)
+        gain = 1.0 + (edge - 1.0) * (falloff[..., None] * self.color_correction_strength)
+        self._color_gain_maps[key] = gain.astype(np.float32)
+        return self._color_gain_maps[key]
+
+    def _correct_edge_color(self, frame):
+        if not self.color_correction_enabled or self.color_correction_strength <= 0.0:
+            return frame
+        try:
+            gain = self._radial_color_gain_map(frame.shape[1], frame.shape[0])
+            return self._cv2.multiply(frame, gain, dtype=self._cv2.CV_8U)
+        except ImportError:
+            # Development PCs may run the control service without OpenCV's
+            # NumPy dependency. Keep the camera usable and leave the frame raw.
+            return frame
+
     def status_dict(self) -> dict:
         now = time.monotonic()
         with self._metrics_lock:
@@ -411,6 +471,11 @@ class CameraStreamer:
                 "ev": self.exposure_ev,
                 "shutter_denominator": self.shutter_denominator,
                 "shutter_us": self.shutter_us,
+            },
+            "color_correction": {
+                "enabled": self.color_correction_enabled,
+                "strength": self.color_correction_strength,
+                "edge_bgr_gains": EDGE_BGR_GAINS,
             },
             "available_modes": [self._mode_status_for(key) for key in CAMERA_MODES],
             "stream_profile": self._stream_profile_status(),
@@ -588,6 +653,7 @@ class CameraStreamer:
                 stream_width, stream_height = self._stream_dimensions()
                 if (frame.shape[1], frame.shape[0]) != (stream_width, stream_height):
                     frame = self._cv2.resize(frame, (stream_width, stream_height), interpolation=self._cv2.INTER_AREA)
+                frame = self._correct_edge_color(frame)
                 ok, buffer = self._cv2.imencode(
                     ".jpg", frame, [self._cv2.IMWRITE_JPEG_QUALITY, int(profile["quality"])]
                 )
@@ -611,6 +677,7 @@ class CameraStreamer:
         highres_width, highres_height = self._highres_dimensions()
         if (frame.shape[1], frame.shape[0]) != (highres_width, highres_height):
             frame = self._cv2.resize(frame, (highres_width, highres_height), interpolation=self._cv2.INTER_AREA)
+        frame = self._correct_edge_color(frame)
         ok, buffer = self._cv2.imencode(".jpg", frame, [self._cv2.IMWRITE_JPEG_QUALITY, HIGHRES_JPEG_QUALITY])
         if not ok:
             return None

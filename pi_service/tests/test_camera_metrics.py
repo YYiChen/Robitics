@@ -53,6 +53,17 @@ class CameraMetricsTests(unittest.TestCase):
             self.assertEqual(second.shutter_denominator, 250)
             self.assertEqual(second.stream_profile_key, "balanced")
 
+    def test_edge_color_correction_is_persisted_and_clamped(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "camera_config.json"
+            first = CameraStreamer(config_path=config_path)
+            status = first.set_color_correction({"enabled": True, "strength": 9})
+            self.assertTrue(status["color_correction"]["enabled"])
+            self.assertEqual(status["color_correction"]["strength"], 1.5)
+            second = CameraStreamer(config_path=config_path)
+            self.assertTrue(second.color_correction_enabled)
+            self.assertEqual(second.color_correction_strength, 1.5)
+
     def test_low_latency_profile_downscales_transport_not_sensor_mode(self) -> None:
         camera = CameraStreamer(width=1640, height=1232)
         status = camera.set_stream_profile("low_latency")
