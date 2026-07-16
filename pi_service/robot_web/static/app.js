@@ -367,16 +367,18 @@ $("#servoSlider").addEventListener("input", () => {
 
 function updateSteeringDial(angle, known) {
   const numeric = Number(angle);
-  const dial = $("#steeringDial"), text = $("#steeringDialText");
+  const dial = $("#steeringDial"), text = $("#steeringDialText"), axle = $("#vehicleFrontAxle"), turnLabel = $("#vehicleTurnLabel");
   if (!Number.isFinite(numeric) || !known) {
-    dial.classList.add("steering-unknown"); text.textContent = "舵机状态未知"; return;
+    dial.classList.add("steering-unknown"); text.textContent = "舵机状态未知"; turnLabel.textContent = "等待 Arduino 回包"; axle.style.transform = "rotate(0deg)"; return;
   }
   const denominator = Math.max(1, numeric >= steeringCenterAngle ? 180 - steeringCenterAngle : steeringCenterAngle);
   let ratio = clamp((numeric - steeringCenterAngle) / denominator, -1, 1);
   // The reverse switch tells the visualizer which physical angle is left.
   if (steeringReversed) ratio = -ratio;
-  dial.classList.remove("steering-unknown"); dial.style.setProperty("--turn", `${ratio * 58}deg`);
-  text.textContent = `${Math.round(numeric)}° · ${Math.abs(ratio) < .02 ? "回正" : ratio < 0 ? "左转" : "右转"}`;
+  const turn = ratio * 38, direction = Math.abs(ratio) < .02 ? "回正" : ratio < 0 ? "左转" : "右转";
+  dial.classList.remove("steering-unknown"); axle.style.transform = `rotate(${turn}deg)`;
+  text.textContent = `${Math.round(numeric)}° · ${direction}`;
+  turnLabel.textContent = `${direction} · 偏角 ${Math.abs(turn).toFixed(0)}°`;
 }
 
 $("#servoCenter").onclick = () => {
@@ -495,6 +497,10 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     $("#cameraFrameSize").textContent = isMjpeg() ? (camera.jpeg_bytes ? `${fixed(camera.jpeg_bytes / 1000)} KB` : "—") : "连续 H.264 帧";
     $("#cameraEncode").textContent = isMjpeg() ? `${fixed(camera.encode_ms)} ms（平均 ${fixed(camera.encode_ms_avg)} ms）` : (camera.stream_profile?.encoder || "H.264 encoder");
     $("#cameraAge").textContent = isMjpeg() ? (camera.frame_age_ms == null ? "—" : `${fixed(camera.frame_age_ms)} ms`) : "由 WebRTC 自适应";
+    $("#dashboardFps").textContent = isMjpeg() ? `${fixed(camera.capture_fps)} / ${fixed(camera.stream_fps)} FPS` : `${fixed(webrtcMetrics.fps)} / ${fixed(camera.sensor_target_fps)} FPS`;
+    $("#dashboardFrameAge").textContent = isMjpeg() ? (camera.frame_age_ms == null ? "—" : `${fixed(camera.frame_age_ms)} ms`) : (webrtcMetrics.jitterBufferMs == null ? "—" : `${fixed(webrtcMetrics.jitterBufferMs)} ms`);
+    $("#dashboardEncode").textContent = isMjpeg() ? `${fixed(camera.encode_ms)} ms` : (camera.stream_profile?.encoder || "H.264");
+    $("#dashboardBandwidth").textContent = isMjpeg() ? `${fixed(camera.stream_kbps)} kbps` : (webrtcMetrics.kbps == null ? "—" : `${fixed(webrtcMetrics.kbps)} kbps`);
     const highres = camera.highres || {}, highresProfile = camera.highres_profile || {};
     if (!highresProfileDirty && !highresProfileBusy && highresProfile.key) $("#highresProfile").value = highresProfile.key;
     if (!highresFpsDirty && !highresFpsBusy && highres.target_fps != null) $("#highresFps").value = highres.target_fps;
@@ -530,6 +536,7 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     const [diagnosis, diagnosisDetail] = streamDiagnosis(camera);
     $("#streamDiagnosis").textContent = diagnosis;
     $("#streamDiagnosisDetail").textContent = diagnosisDetail;
+    $("#dashboardFlowState").textContent = diagnosis;
     const systemMetricsSupported = capabilities.system_metrics === true && Object.keys(system).length > 0;
     $("#systemCpu").textContent = !systemMetricsSupported ? "后端未更新" : system.cpu_percent == null ? "测量中…" : `${fixed(system.cpu_percent)}%`;
     $("#systemLoad").textContent = !systemMetricsSupported ? "后端未更新" : fixed(system.load_1m, 2);
@@ -540,6 +547,10 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     $("#oledState").textContent = oled.online ? `在线 · ${oled.address || "I2C"}` : oled.disabled ? "已关闭" : "不可用";
     $("#oledHint").textContent = oled.online ? `I2C-${oled.i2c_port ?? 1} · 每秒刷新状态` : (oled.error || "检查 I2C、地址和 luma.oled 依赖");
     $("#controlState").innerHTML = dot(robot.client_online, robot.client_online ? "在线" : "已超时停车"); $("#action").textContent = robot.action; $("#keys").textContent = robot.keys?.join("+") || "—"; $("#distance").textContent = distance(robot.ultrasonic); $("#lastReply").textContent = robot.reply || "等待 Arduino 回包";
+    const frontDistance = Number(robot.ultrasonic), validDistance = Number.isFinite(frontDistance) && frontDistance >= 0, blocked = validDistance && frontDistance <= 30;
+    $("#dashboardDistance").textContent = distance(robot.ultrasonic); $("#dashboardDistanceState").textContent = !validDistance ? "无有效回波" : blocked ? "前进限位" : "通行";
+    $("#dashboardDistanceHint").textContent = !validDistance ? "请检查前向超声波回波" : blocked ? `距障碍 ${fixed(frontDistance)} cm · 前进已限制` : `安全距离 ${fixed(frontDistance)} cm`;
+    const marker = $("#distanceMarker"); marker.style.left = validDistance ? `${Math.min(frontDistance, 100)}%` : "100%"; marker.style.background = blocked ? "var(--red)" : "var(--green)"; marker.style.boxShadow = blocked ? "0 0 9px rgb(222 89 101)" : "0 0 9px rgb(71 201 140)";
     if (!servoBusy && robot.servo_angle != null) { $("#servoSlider").value = robot.servo_angle; $("#servoAngleDisplay").textContent = `${robot.servo_angle}°`; updateSteeringDial(robot.servo_angle, true); }
     else if (robot.servo_angle == null) updateSteeringDial(null, false);
     if (robot.imu) { $("#roll").textContent = `${robot.imu[0].toFixed(2)}°`; $("#pitch").textContent = `${robot.imu[1].toFixed(2)}°`; $("#yaw").textContent = `${robot.imu[2].toFixed(2)}°`; }
