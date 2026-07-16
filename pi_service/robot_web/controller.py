@@ -13,16 +13,17 @@ import serial
 HEARTBEAT_SECONDS = 0.20
 SERVO_TICK_SECONDS = 0.05
 CLIENT_TIMEOUT_SECONDS = 0.80
-ACTIONS = {"STOP", "F", "SF", "B", "PL", "PR", "FL", "FR", "BL", "BR"}
+ACTIONS = {"STOP", "F", "SF", "B", "PL", "PR", "SPL", "SPR", "FL", "FR", "BL", "BR"}
 # Q/E are steering-servo controls rather than motor profiles.
-KEY_ACTIONS = {"w": "F", "r": "SF", "a": "PL", "d": "PR", "s": "B", "c": "BR"}
-PROFILE_ACTIONS = ("F", "SF", "B", "PL", "PR", "FL", "FR", "BL", "BR")
+KEY_ACTIONS = {"w": "F", "r": "SF", "a": "PL", "d": "PR", "s": "B", "x": "SPL", "c": "SPR"}
+PROFILE_ACTIONS = ("F", "SF", "B", "PL", "PR", "SPL", "SPR", "FL", "FR", "BL", "BR")
 WHEELS = ("rf", "lf", "lr", "rr")
 
 def default_profiles() -> dict[str, dict[str, int]]:
     return {
         "F": {"rf": 80, "lf": 80, "lr": 80, "rr": 80}, "SF": {"rf": 100, "lf": 100, "lr": 100, "rr": 100}, "B": {"rf": -80, "lf": -80, "lr": -80, "rr": -80},
         "PL": {"rf": 150, "lf": -150, "lr": -150, "rr": 150}, "PR": {"rf": -150, "lf": 150, "lr": 150, "rr": -150},
+        "SPL": {"rf": 100, "lf": -100, "lr": -100, "rr": 100}, "SPR": {"rf": -100, "lf": 100, "lr": 100, "rr": -100},
         "FL": {"rf": 160, "lf": 60, "lr": 60, "rr": 160}, "FR": {"rf": 60, "lf": 160, "lr": 160, "rr": 60},
         "BL": {"rf": -60, "lf": -160, "lr": -160, "rr": -60}, "BR": {"rf": -160, "lf": -60, "lr": -60, "rr": -160},
     }
@@ -197,8 +198,8 @@ class RobotController:
         return action
     @staticmethod
     def _action_from_keys(keys: set[str]) -> str:
-        for key in ("c",):
-            if key in keys: return KEY_ACTIONS[key]
+        if "x" in keys: return "SPL"
+        if "c" in keys: return "SPR"
         forward, turn = int("w" in keys) - int("s" in keys), int("d" in keys) - int("a" in keys)
         if forward > 0: return "FL" if turn < 0 else "FR" if turn > 0 else "F"
         if forward < 0: return "BL" if turn < 0 else "BR" if turn > 0 else "B"
@@ -275,7 +276,7 @@ class RobotController:
     @staticmethod
     def _speed(action: str, cfg: Config) -> tuple[float, float, int, int]:
         t, h = cfg.target_speed, cfg.target_speed * .5
-        return {"F":(t,t,0,0),"SF":(t*.5,t*.5,0,0),"B":(-t,-t,0,0),"PL":(-t,t,-cfg.pivot_pwm,cfg.pivot_pwm),"PR":(t,-t,cfg.pivot_pwm,-cfg.pivot_pwm),"FL":(h,t,cfg.curve_inner_pwm,cfg.curve_outer_pwm),"FR":(t,h,cfg.curve_outer_pwm,cfg.curve_inner_pwm),"BL":(-t,-h,-cfg.curve_inner_pwm,-cfg.curve_outer_pwm),"BR":(-h,-t,-cfg.curve_outer_pwm,-cfg.curve_inner_pwm),"STOP":(0,0,0,0)}[action]
+        return {"F":(t,t,0,0),"SF":(t*.5,t*.5,0,0),"B":(-t,-t,0,0),"PL":(-t,t,-cfg.pivot_pwm,cfg.pivot_pwm),"PR":(t,-t,cfg.pivot_pwm,-cfg.pivot_pwm),"SPL":(-h,h,-cfg.pivot_pwm,cfg.pivot_pwm),"SPR":(h,-h,cfg.pivot_pwm,-cfg.pivot_pwm),"FL":(h,t,cfg.curve_inner_pwm,cfg.curve_outer_pwm),"FR":(t,h,cfg.curve_outer_pwm,cfg.curve_inner_pwm),"BL":(-t,-h,-cfg.curve_inner_pwm,-cfg.curve_outer_pwm),"BR":(-h,-t,-cfg.curve_outer_pwm,-cfg.curve_inner_pwm),"STOP":(0,0,0,0)}[action]
 
     def _advance_steering(self, now: float, cfg: Config) -> None:
         """Move by the Pi's monotonic clock while a browser steering heartbeat exists."""

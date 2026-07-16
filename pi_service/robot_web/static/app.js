@@ -10,8 +10,8 @@ let highresPreviewEnabled = false, highresPreviewAvailable = false;
 let webrtcPeer = null, webrtcSessionUrl = "", webrtcStatsTimer = null, webrtcStatsPrevious = null;
 const webrtcMetrics = {state:"未连接", fps:null, kbps:null, jitterMs:null, jitterBufferMs:null, packetsLost:null, framesDropped:null};
 const wheelNames = ["rf", "lf", "lr", "rr"];
-const actionKeys = {F:"w", SF:"r", PL:"a", PR:"d", B:"s", BR:"c"};
-const keyboardKeys = {w:"w", r:"r", a:"a", s:"s", d:"d", c:"c", ArrowUp:"w", ArrowDown:"s", ArrowLeft:"a", ArrowRight:"d"};
+const actionKeys = {F:"w", SF:"r", PL:"a", PR:"d", SPL:"x", SPR:"c", B:"s"};
+const keyboardKeys = {w:"w", r:"r", a:"a", s:"s", d:"d", x:"x", c:"c", ArrowUp:"w", ArrowDown:"s", ArrowLeft:"a", ArrowRight:"d"};
 const heldKeys = new Set();
 const heldSteeringKeys = new Set();
 

@@ -48,6 +48,8 @@ class ControllerPersistenceTests(unittest.TestCase):
             self.assertEqual(controller.config.profiles["SF"], {"rf": 100, "lf": 100, "lr": 100, "rr": 100})
             self.assertEqual(controller.update_keys({"keys": ["w", "a"]}), "FL")
             self.assertEqual(controller.update_keys({"keys": ["w", "d"]}), "FR")
+            self.assertEqual(controller.update_keys({"keys": ["x"]}), "SPL")
+            self.assertEqual(controller.update_keys({"keys": ["c"]}), "SPR")
             self.assertEqual(controller.update_keys({"keys": [], "steering": -1}), "STOP")
             self.assertEqual(controller.steering_direction, -1)
 
