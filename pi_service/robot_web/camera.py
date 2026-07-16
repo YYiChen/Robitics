@@ -27,6 +27,15 @@ CAMERA_MODES = {
 }
 DEFAULT_CAMERA_MODE = "fast_1640"
 DEFAULT_EXPOSURE = {"auto": True, "ev": 0.0, "shutter_denominator": 200}
+STREAM_PROFILES = {
+    # Keep the camera running at the selected sensor mode, but constrain the
+    # image which leaves the Pi.  MJPEG browsers always receive the newest
+    # encoded frame, so no extra buffering is introduced by these profiles.
+    "low_latency": {"label": "低延迟 · 最宽 820 px · JPEG 70", "max_width": 820, "quality": 70},
+    "balanced": {"label": "平衡 · 最宽 1230 px · JPEG 70", "max_width": 1230, "quality": 70},
+    "source": {"label": "原始尺寸 · JPEG 70", "max_width": None, "quality": 70},
+}
+DEFAULT_STREAM_PROFILE = "low_latency"
 
 
 class CameraStreamer:
@@ -34,7 +43,7 @@ class CameraStreamer:
         self,
         width: int | None = None,
         height: int | None = None,
-        quality: int = 80,
+        quality: int = 70,
         fps: float | None = None,
         mode_key: str | None = None,
         config_path: Path | None = None,
@@ -54,6 +63,7 @@ class CameraStreamer:
         self.auto_exposure = bool(saved["exposure"]["auto"])
         self.exposure_ev = float(saved["exposure"]["ev"])
         self.shutter_denominator = int(saved["exposure"]["shutter_denominator"])
+        self.stream_profile_key = saved["stream_profile"]
         self._condition = threading.Condition()
         self._jpeg: bytes | None = None
         self._sequence = 0
@@ -74,12 +84,18 @@ class CameraStreamer:
         self._active_clients = 0
 
     def _load_saved_settings(self) -> dict:
-        defaults = {"mode": DEFAULT_CAMERA_MODE, "exposure": dict(DEFAULT_EXPOSURE)}
+        defaults = {
+            "mode": DEFAULT_CAMERA_MODE,
+            "exposure": dict(DEFAULT_EXPOSURE),
+            "stream_profile": DEFAULT_STREAM_PROFILE,
+        }
         try:
             data = json.loads(self.config_path.read_text(encoding="utf-8"))
             if not isinstance(data, dict): return defaults
             mode = data.get("mode")
             if mode in CAMERA_MODES: defaults["mode"] = mode
+            stream_profile = data.get("stream_profile")
+            if stream_profile in STREAM_PROFILES: defaults["stream_profile"] = stream_profile
             exposure = data.get("exposure", {})
             if isinstance(exposure, dict):
                 defaults["exposure"]["auto"] = bool(exposure.get("auto", defaults["exposure"]["auto"]))
@@ -94,6 +110,7 @@ class CameraStreamer:
         temporary = self.config_path.with_name(f".{self.config_path.name}.tmp")
         payload = {
             "mode": self.mode_key,
+            "stream_profile": self.stream_profile_key,
             "exposure": {
                 "auto": self.auto_exposure,
                 "ev": self.exposure_ev,
@@ -102,6 +119,27 @@ class CameraStreamer:
         }
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         temporary.replace(self.config_path)
+
+    def _stream_dimensions(self) -> tuple[int, int]:
+        max_width = STREAM_PROFILES[self.stream_profile_key]["max_width"]
+        if max_width is None or self.width <= max_width:
+            return self.width, self.height
+        stream_width = int(max_width)
+        stream_height = max(1, round(self.height * stream_width / self.width))
+        return stream_width, stream_height
+
+    def _stream_profile_status(self) -> dict:
+        profile = STREAM_PROFILES[self.stream_profile_key]
+        stream_width, stream_height = self._stream_dimensions()
+        return {
+            "key": self.stream_profile_key,
+            "label": profile["label"],
+            "max_width": profile["max_width"],
+            "quality": profile["quality"],
+            "width": stream_width,
+            "height": stream_height,
+            "resolution": f"{stream_width}x{stream_height}",
+        }
 
     def _mode_status(self) -> dict:
         mode = CAMERA_MODES[self.mode_key]
@@ -210,6 +248,15 @@ class CameraStreamer:
             self._save_settings()
         return self.status_dict()
 
+    def set_stream_profile(self, profile_key: str) -> dict:
+        """Change only the browser transport image; do not restart the sensor."""
+        if profile_key not in STREAM_PROFILES:
+            raise ValueError("未知视频传输档位")
+        with self._lifecycle_lock:
+            self.stream_profile_key = profile_key
+            self._save_settings()
+        return self.status_dict()
+
     def status_dict(self) -> dict:
         now = time.monotonic()
         with self._metrics_lock:
@@ -237,6 +284,11 @@ class CameraStreamer:
                 "shutter_us": self.shutter_us,
             },
             "available_modes": [self._mode_status_for(key) for key in CAMERA_MODES],
+            "stream_profile": self._stream_profile_status(),
+            "available_stream_profiles": [
+                {"key": key, "label": profile["label"], "max_width": profile["max_width"], "quality": profile["quality"]}
+                for key, profile in STREAM_PROFILES.items()
+            ],
             "width": self.width,
             "height": self.height,
             "resolution": f"{self.width}x{self.height}",
@@ -371,7 +423,13 @@ class CameraStreamer:
                 with self._camera_lock:
                     if self._picam2 is None: break
                     frame = self._picam2.capture_array()
-                ok, buffer = self._cv2.imencode(".jpg", frame, [self._cv2.IMWRITE_JPEG_QUALITY, self.quality])
+                profile = STREAM_PROFILES[self.stream_profile_key]
+                stream_width, stream_height = self._stream_dimensions()
+                if (stream_width, stream_height) != (self.width, self.height):
+                    frame = self._cv2.resize(frame, (stream_width, stream_height), interpolation=self._cv2.INTER_AREA)
+                ok, buffer = self._cv2.imencode(
+                    ".jpg", frame, [self._cv2.IMWRITE_JPEG_QUALITY, int(profile["quality"])]
+                )
                 if ok:
                     jpeg = buffer.tobytes()
                     self._record_encoded(len(jpeg), (time.monotonic() - started) * 1000.0)

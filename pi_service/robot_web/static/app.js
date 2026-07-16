@@ -2,7 +2,7 @@ const $ = selector => document.querySelector(selector);
 const video = $("#video"), save = $("#save");
 const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:false});
 let folder, aborter, count = 0, profiles = {}, activeMode = "all", configLoaded = false, keysSending = false, keysQueued = false;
-let cameraModeDirty = false, cameraModeBusy = false, exposureDirty = false, exposureBusy = false, videoRetryTimer;
+let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, exposureDirty = false, exposureBusy = false, videoRetryTimer;
 let receivedFrameCount = 0, receivedFrameWindowAt = performance.now(), browserReceiveFps = 0, statusRttMs = null;
 const wheelNames = ["rf", "lf", "lr", "rr"];
 const actionKeys = {FL:"q", F:"w", FR:"e", PL:"a", PR:"d", BL:"z", B:"s", BR:"c"};
@@ -91,6 +91,22 @@ $("#applyCameraMode").onclick = async () => {
     cameraModeDirty = false; note(`相机已切换到 ${data.camera.mode_label}，传感器目标 ${fixed(data.camera.sensor_target_fps)} FPS`); reloadVideo();
   } catch (error) { note(error.message); }
   finally { cameraModeBusy = false; button.disabled = false; select.disabled = false; }
+};
+
+$("#streamProfile").onchange = () => { streamProfileDirty = true; };
+$("#applyStreamProfile").onclick = async () => {
+  if (streamProfileBusy) return;
+  streamProfileBusy = true;
+  const button = $("#applyStreamProfile"), select = $("#streamProfile");
+  button.disabled = true; select.disabled = true;
+  try {
+    const response = await fetch("/api/camera/stream-profile", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({profile:select.value})});
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw Error(data.error || "视频传输档位切换失败");
+    streamProfileDirty = false;
+    note(`已应用 ${data.camera.stream_profile.label}；采集不重启，网页将在下一帧使用新压缩画面。`);
+  } catch (error) { note(error.message); }
+  finally { streamProfileBusy = false; button.disabled = false; select.disabled = false; }
 };
 
 function updateExposureUi() {
@@ -213,6 +229,7 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     $("#cameraState").innerHTML = dot(camera.online, camera.online ? "在线" : camera.status); $("#arduinoState").innerHTML = dot(robot.arduino_online, robot.arduino_online ? "在线" : robot.serial ? "无响应" : "离线", robot.serial);
     const resolution = camera.resolution || (camera.width && camera.height ? `${camera.width}×${camera.height}` : "—");
     if (!cameraModeDirty && !cameraModeBusy && camera.mode) $("#cameraMode").value = camera.mode;
+    if (!streamProfileDirty && !streamProfileBusy && camera.stream_profile?.key) $("#streamProfile").value = camera.stream_profile.key;
     if (camera.width && camera.height) { $("#auxCropWidth").max = camera.width; $("#auxCropHeight").max = camera.height; }
     if (!exposureDirty && !exposureBusy && camera.exposure) {
       $("#exposureMode").value = camera.exposure.auto ? "auto" : "manual";
@@ -220,8 +237,10 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
       $("#shutterDenominator").value = camera.exposure.shutter_denominator;
       updateExposureUi();
     }
-    $("#cameraMeta").textContent = `${resolution} · 传感器目标 ${fixed(camera.sensor_target_fps)} FPS · 实际编码 ${fixed(camera.capture_fps)} FPS`;
-    $("#cameraResolution").textContent = resolution;
+    const streamResolution = camera.stream_profile?.resolution || resolution;
+    $("#cameraMeta").textContent = `采集 ${resolution} → 网页 ${streamResolution} · 传感器目标 ${fixed(camera.sensor_target_fps)} FPS · 实际编码 ${fixed(camera.capture_fps)} FPS`;
+    $("#cameraResolution").textContent = `${resolution} → ${streamResolution}`;
+    $("#streamProfileState").textContent = camera.stream_profile?.label || "—";
     $("#cameraFps").textContent = `${fixed(camera.capture_fps)} / ${fixed(camera.stream_fps)} FPS`;
     $("#cameraBandwidth").textContent = `${fixed(camera.stream_kBps)} kB/s · ${fixed(camera.stream_kbps)} kbps`;
     $("#cameraFrameSize").textContent = camera.jpeg_bytes ? `${fixed(camera.jpeg_bytes / 1000)} KB` : "—";

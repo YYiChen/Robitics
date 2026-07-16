@@ -31,6 +31,7 @@ class CameraMetricsTests(unittest.TestCase):
             first.auto_exposure = False
             first.exposure_ev = 1.2
             first.shutter_denominator = 250
+            first.stream_profile_key = "balanced"
             first._save_settings()
             second = CameraStreamer(config_path=config_path)
             self.assertEqual(second.mode_key, "full_3280")
@@ -38,6 +39,14 @@ class CameraMetricsTests(unittest.TestCase):
             self.assertFalse(second.auto_exposure)
             self.assertEqual(second.exposure_ev, 1.2)
             self.assertEqual(second.shutter_denominator, 250)
+            self.assertEqual(second.stream_profile_key, "balanced")
+
+    def test_low_latency_profile_downscales_transport_not_sensor_mode(self) -> None:
+        camera = CameraStreamer(width=1640, height=1232)
+        status = camera.set_stream_profile("low_latency")
+        self.assertEqual(status["resolution"], "1640x1232")
+        self.assertEqual(status["stream_profile"]["resolution"], "820x616")
+        self.assertEqual(status["stream_profile"]["quality"], 70)
 
     def test_exposure_uses_one_over_n_shutter_unit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

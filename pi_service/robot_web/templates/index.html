@@ -29,6 +29,16 @@
         <button class="primary" id="applyCameraMode">应用分辨率</button>
         <span class="hint">切换会短暂重启视频流；实际 FPS 以状态数据为准。</span>
       </div>
+      <div class="camera-mode-bar">
+        <label for="streamProfile">网页传输档位</label>
+        <select id="streamProfile">
+          <option value="low_latency">低延迟 · 最宽 820 px · JPEG 70</option>
+          <option value="balanced">平衡 · 最宽 1230 px · JPEG 70</option>
+          <option value="source">原始尺寸 · JPEG 70</option>
+        </select>
+        <button class="primary" id="applyStreamProfile">应用传输档位</button>
+        <span class="hint">相机仍按上方档位采集；这里只压缩发往网页的画面，不增加缓存。</span>
+      </div>
       <div class="camera-exposure-bar">
         <label for="exposureMode">曝光模式</label>
         <select id="exposureMode">
@@ -69,7 +79,8 @@
       </div>
       <div class="hint" id="save">图片只写入浏览器授权的电脑文件夹；浏览器保存需要 HTTPS 或 localhost。</div>
       <div class="stream-metrics" aria-label="视频流参数">
-        <div class="metric"><span>分辨率</span><strong id="cameraResolution">—</strong></div>
+        <div class="metric"><span>采集 → 网页分辨率</span><strong id="cameraResolution">—</strong></div>
+        <div class="metric"><span>网页传输档位</span><strong id="streamProfileState">—</strong></div>
         <div class="metric"><span>采集 / 发送 FPS</span><strong id="cameraFps">—</strong></div>
         <div class="metric wide"><span>MJPEG 发送带宽（所有网页合计）</span><strong id="cameraBandwidth">—</strong><small>同时显示 kB/s 和 kbps，包含 MJPEG 分片头；单个网页时就是当前流量</small></div>
         <div class="metric"><span>单帧 JPEG</span><strong id="cameraFrameSize">—</strong></div>

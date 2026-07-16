@@ -49,6 +49,13 @@ def create_app(controller: RobotController, camera: CameraStreamer, system_metri
             return jsonify(ok=False, error=str(exc)), 400
         except RuntimeError as exc:
             return jsonify(ok=False, error=str(exc), camera=camera.status_dict()), 503
+    @app.post("/api/camera/stream-profile")
+    def camera_stream_profile():
+        payload = request.get_json(silent=True) or {}
+        try:
+            return jsonify(ok=True, camera=camera.set_stream_profile(str(payload.get("profile", ""))))
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
     @app.get("/api/status")
     def status(): return jsonify(robot=controller.status(), camera=camera.status_dict(), system=system_metrics.status_dict())
     return app
