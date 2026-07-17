@@ -52,6 +52,7 @@ class Config:
     curve_inner_pwm: int = 60
     servo_center_angle: int = 90
     servo_speed_dps: float = 45.0
+    servo_acceleration_dps2: float = 120.0
     servo_qe_reversed: bool = True
     profiles: dict[str, dict[str, int]] = field(default_factory=default_profiles)
 
@@ -94,7 +95,10 @@ class RobotController:
             self._save_config()
         self.serial_lock = threading.RLock()
         self.serial = None; self.action = "STOP"; self.held_keys: set[str] = set(); self.last_client_seen = 0.0
-        self.steering_direction = 0; self.last_steering_seen = 0.0; self._last_servo_motion_at = time.monotonic()
+        self.steering_direction = 0; self.last_steering_seen = 0.0
+        self._last_sent_steering_direction: int | None = None
+        self._last_steering_sent_at = 0.0
+        self._last_sent_servo_limits: tuple[float, float] | None = None
         self._servo_target_angle: float | None = None
         self.imu = self.speed = self.ultrasonic = None; self.servo_angle: int | None = None; self.motor_output: list[int] | None = None; self.reply = self.error = ""; self.last_rx = 0.0
         self._stop = threading.Event()
@@ -106,7 +110,7 @@ class RobotController:
     def _read_config(path: Path) -> tuple[Config | None, str]:
         try:
             data = json.loads(path.read_text(encoding="utf-8")); config = Config()
-            for key in ("speed_mode", "target_speed", "kp", "ki", "kd", "straight_pwm", "pivot_pwm", "curve_outer_pwm", "curve_inner_pwm", "servo_center_angle", "servo_speed_dps", "servo_qe_reversed"):
+            for key in ("speed_mode", "target_speed", "kp", "ki", "kd", "straight_pwm", "pivot_pwm", "curve_outer_pwm", "curve_inner_pwm", "servo_center_angle", "servo_speed_dps", "servo_acceleration_dps2", "servo_qe_reversed"):
                 if key in data: setattr(config, key, type(getattr(config, key))(data[key]))
             raw_profiles = data.get("profiles")
             config.profiles = normalize_profiles(raw_profiles) if isinstance(raw_profiles, dict) else legacy_scalar_profiles(config)
@@ -177,6 +181,9 @@ class RobotController:
     def _close_serial(self, send_stop: bool = False) -> None:
         with self.serial_lock:
             port, self.serial = self.serial, None
+            self._last_sent_steering_direction = None
+            self._last_sent_servo_limits = None
+            self._last_steering_sent_at = 0.0
             if port:
                 try:
                     if send_stop and port.is_open: port.write(b"STOP\n"); port.flush()
@@ -230,6 +237,7 @@ class RobotController:
                 setattr(self.config, key, max(0, min(255, getattr(self.config, key))))
             self.config.servo_center_angle = max(0, min(180, self.config.servo_center_angle))
             self.config.servo_speed_dps = max(1.0, min(45.0, self.config.servo_speed_dps))
+            self.config.servo_acceleration_dps2 = max(20.0, min(360.0, self.config.servo_acceleration_dps2))
             result = asdict(self.config)
         # SD-card I/O must not hold the control/heartbeat lock.
         self._save_config(result)
@@ -278,23 +286,29 @@ class RobotController:
         t, h = cfg.target_speed, cfg.target_speed * .5
         return {"F":(t,t,0,0),"SF":(t*.5,t*.5,0,0),"B":(-t,-t,0,0),"PL":(-t,t,-cfg.pivot_pwm,cfg.pivot_pwm),"PR":(t,-t,cfg.pivot_pwm,-cfg.pivot_pwm),"SPL":(-h,h,-cfg.pivot_pwm,cfg.pivot_pwm),"SPR":(h,-h,cfg.pivot_pwm,-cfg.pivot_pwm),"FL":(h,t,cfg.curve_inner_pwm,cfg.curve_outer_pwm),"FR":(t,h,cfg.curve_outer_pwm,cfg.curve_inner_pwm),"BL":(-t,-h,-cfg.curve_inner_pwm,-cfg.curve_outer_pwm),"BR":(-h,-t,-cfg.curve_outer_pwm,-cfg.curve_inner_pwm),"STOP":(0,0,0,0)}[action]
 
-    def _advance_steering(self, now: float, cfg: Config) -> None:
-        """Move by the Pi's monotonic clock while a browser steering heartbeat exists."""
+    def _sync_steering(self, now: float, cfg: Config) -> None:
+        """Keep Arduino's local smooth steering state in sync with the browser."""
         with self.lock:
-            elapsed = max(0.0, now - self._last_servo_motion_at)
-            self._last_servo_motion_at = now
             direction = self.steering_direction if now - self.last_steering_seen <= CLIENT_TIMEOUT_SECONDS else 0
             if cfg.servo_qe_reversed:
                 direction = -direction
-            current = self.servo_angle if self.servo_angle is not None else cfg.servo_center_angle
-            target = self._servo_target_angle if self._servo_target_angle is not None else float(current)
-        if not direction or elapsed <= 0:
-            return
-        target = max(0.0, min(180.0, target + direction * cfg.servo_speed_dps * elapsed))
-        with self.lock: self._servo_target_angle = target
-        requested = round(target)
-        if requested != current:
-            self.set_servo_angle(requested, track_target=False)
+            limits = (cfg.servo_speed_dps, cfg.servo_acceleration_dps2)
+            send_limits = limits != self._last_sent_servo_limits
+            send_direction = (
+                direction != self._last_sent_steering_direction
+                or (direction != 0 and now - self._last_steering_sent_at >= HEARTBEAT_SECONDS)
+            )
+            if send_limits:
+                self._last_sent_servo_limits = limits
+            if send_direction:
+                self._last_sent_steering_direction = direction
+                self._last_steering_sent_at = now
+        if send_limits:
+            self._write(f"SVC,{limits[0]:.1f},{limits[1]:.1f}")
+        if send_direction:
+            # Refresh a held direction at the browser heartbeat rate. Arduino
+            # stops it smoothly if this heartbeat disappears.
+            self._write(f"SVD,{direction}")
     def _parse(self, text: str) -> None:
         self.reply, self.last_rx = text, time.monotonic()
         try:
@@ -317,7 +331,7 @@ class RobotController:
                 action = self.action if now - self.last_client_seen <= CLIENT_TIMEOUT_SECONDS else "STOP"
                 if action == "STOP": self.held_keys.clear(); self.action = "STOP"
                 cfg = Config(**asdict(self.config))
-            self._advance_steering(now, cfg)
+            self._sync_steering(now, cfg)
             if now < next_motor:
                 continue
             if cfg.speed_mode:

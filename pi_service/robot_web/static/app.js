@@ -420,12 +420,12 @@ function centerServo() {
 }
 $("#servoCenter").onclick = centerServo;
 $("#applyServoSettings").onclick = async () => {
-  const payload = {servo_center_angle:Number($("#servoCenterAngle").value), servo_speed_dps:Number($("#servoSpeedDps").value), servo_qe_reversed:$("#servoQeReversed").checked};
+  const payload = {servo_center_angle:Number($("#servoCenterAngle").value), servo_speed_dps:Number($("#servoSpeedDps").value), servo_acceleration_dps2:Number($("#servoAccelerationDps2").value), servo_qe_reversed:$("#servoQeReversed").checked};
   try {
     const response = await fetch("/api/config", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
     const data = await response.json(); if (!response.ok || !data.ok) throw Error(data.error || "转向设置保存失败");
     steeringCenterAngle = data.config.servo_center_angle; steeringReversed = !!data.config.servo_qe_reversed;
-    $("#servoCenterAngle").value = steeringCenterAngle; $("#servoSpeedDps").value = data.config.servo_speed_dps; $("#servoQeReversed").checked = steeringReversed;
+    $("#servoCenterAngle").value = steeringCenterAngle; $("#servoSpeedDps").value = data.config.servo_speed_dps; $("#servoAccelerationDps2").value = data.config.servo_acceleration_dps2; $("#servoQeReversed").checked = steeringReversed;
     updateSteeringDial($("#servoSlider").value, true); note("转向设置已保存");
   } catch (error) { note(error.message); }
 };
@@ -457,7 +457,7 @@ $("#applyProfile").onclick = async () => { profiles[$("#profileAction").value] =
 function fillConfig(config) {
   profiles = config.profiles || profiles; $("#speedMode").checked = !!config.speed_mode; $("#targetSpeed").value = config.target_speed; $("#kp").value = config.kp; $("#ki").value = config.ki; $("#kd").value = config.kd;
   steeringCenterAngle = Number(config.servo_center_angle ?? 90); steeringReversed = !!config.servo_qe_reversed;
-  $("#servoCenterAngle").value = steeringCenterAngle; $("#servoSpeedDps").value = config.servo_speed_dps ?? 45; $("#servoQeReversed").checked = steeringReversed;
+  $("#servoCenterAngle").value = steeringCenterAngle; $("#servoSpeedDps").value = config.servo_speed_dps ?? 45; $("#servoAccelerationDps2").value = config.servo_acceleration_dps2 ?? 120; $("#servoQeReversed").checked = steeringReversed;
   fillProfileEditor(); updateSteeringDial($("#servoSlider").value, true);
 }
 $("#applyPid").onclick = async () => { const payload = {speed_mode:$("#speedMode").checked, target_speed:Number($("#targetSpeed").value), kp:Number($("#kp").value), ki:Number($("#ki").value), kd:Number($("#kd").value)};

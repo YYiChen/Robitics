@@ -27,7 +27,9 @@
 //     SPD                      query wheel speeds + PID state
 //     OUT                      query actual PWM applied to M1..M4
 //     US                       query the front ultrasonic distance
-//     SV,angle                 set SG90 servo angle (0..180)
+//     SV,angle                 set SG90 servo target angle (0..180)
+//     SVD,direction            manual servo direction (-1, 0, 1)
+//     SVC,speed,acceleration   set servo motion limits (degrees/s, degrees/s^2)
 //
 //   Motor mapping:
 //     M1 = right front   M2 = left front
@@ -151,7 +153,23 @@ const uint8_t ENCODER_RIGHT_PIN = 19;  // INT2 — right rear motor (M4)
 // common ground to the Mega; do not power it from the Mega's 5 V pin.
 constexpr uint8_t SERVO_PIN = 22;
 constexpr int SERVO_CENTER_ANGLE = 90;
+constexpr unsigned long SERVO_UPDATE_INTERVAL_MS = 20;
+constexpr unsigned long SERVO_DIRECTION_TIMEOUT_MS = 450;
+constexpr float SERVO_DEFAULT_SPEED_DPS = 30.0F;
+constexpr float SERVO_DEFAULT_ACCELERATION_DPS2 = 120.0F;
 Servo panServo;
+
+// Servo motion is generated on the Arduino, not by bursty browser/serial
+// angle updates.  This keeps Q/E motion smooth even when Wi-Fi timing varies.
+float servoCurrentAngle = SERVO_CENTER_ANGLE;
+float servoTargetAngle = SERVO_CENTER_ANGLE;
+float servoVelocityDps = 0.0F;
+float servoMaxSpeedDps = SERVO_DEFAULT_SPEED_DPS;
+float servoAccelerationDps2 = SERVO_DEFAULT_ACCELERATION_DPS2;
+int8_t servoManualDirection = 0;
+unsigned long lastServoUpdateMs = 0;
+unsigned long lastServoDirectionCommandMs = 0;
+int lastServoWrittenAngle = SERVO_CENTER_ANGLE;
 
 // Speed is computed from pulse counts at this interval (ms).
 const unsigned long SPEED_CALC_INTERVAL_MS = 50;   // 20 Hz
@@ -729,6 +747,72 @@ bool parseFloat(const char *text, float &result) {
   return true;
 }
 
+float approachFloat(float current, float target, float maximumDelta) {
+  if (current < target) {
+    return min(target, current + maximumDelta);
+  }
+  return max(target, current - maximumDelta);
+}
+
+void stopServoDirectionSmoothly() {
+  servoManualDirection = 0;
+  const float brakingDistance =
+    servoVelocityDps * fabsf(servoVelocityDps) / (2.0F * servoAccelerationDps2);
+  servoTargetAngle = constrain(servoCurrentAngle + brakingDistance, 0.0F, 180.0F);
+}
+
+void updateServoMotion() {
+  const unsigned long now = millis();
+  if (now - lastServoUpdateMs < SERVO_UPDATE_INTERVAL_MS) {
+    return;
+  }
+  const float dt = (now - lastServoUpdateMs) / 1000.0F;
+  lastServoUpdateMs = now;
+
+  if (servoManualDirection != 0 &&
+      now - lastServoDirectionCommandMs > SERVO_DIRECTION_TIMEOUT_MS) {
+    stopServoDirectionSmoothly();
+  }
+
+  float requestedVelocity = 0.0F;
+  if (servoManualDirection != 0) {
+    requestedVelocity = servoManualDirection * servoMaxSpeedDps;
+  } else {
+    const float remaining = servoTargetAngle - servoCurrentAngle;
+    if (fabsf(remaining) > 0.05F) {
+      // Start braking early enough to stop at the requested angle.
+      const float brakingSpeed = sqrtf(2.0F * servoAccelerationDps2 * fabsf(remaining));
+      requestedVelocity = (remaining > 0.0F ? 1.0F : -1.0F) *
+        min(servoMaxSpeedDps, brakingSpeed);
+    }
+  }
+
+  servoVelocityDps = approachFloat(
+    servoVelocityDps, requestedVelocity, servoAccelerationDps2 * dt
+  );
+  float nextAngle = servoCurrentAngle + servoVelocityDps * dt;
+
+  if (servoManualDirection == 0) {
+    const float before = servoTargetAngle - servoCurrentAngle;
+    const float after = servoTargetAngle - nextAngle;
+    if ((before >= 0.0F && after <= 0.0F) || (before <= 0.0F && after >= 0.0F)) {
+      nextAngle = servoTargetAngle;
+      servoVelocityDps = 0.0F;
+    }
+  }
+
+  if (nextAngle <= 0.0F || nextAngle >= 180.0F) {
+    nextAngle = constrain(nextAngle, 0.0F, 180.0F);
+    servoVelocityDps = 0.0F;
+  }
+  servoCurrentAngle = nextAngle;
+  const int commandedAngle = constrain((int)roundf(servoCurrentAngle), 0, 180);
+  if (commandedAngle != lastServoWrittenAngle) {
+    panServo.write(commandedAngle);
+    lastServoWrittenAngle = commandedAngle;
+  }
+}
+
 // Parse a speed-control command:  V,leftTarget,rightTarget
 // Both values are in pulses per second (signed).
 bool parseSpeedCommand(char *line, float &leftTarget, float &rightTarget) {
@@ -826,9 +910,47 @@ void executeLine(char *line) {
     int angle;
     if (parseIntegerStrict(line + 3, angle)) {
       angle = constrain(angle, 0, 180);
-      panServo.write(angle);
+      servoManualDirection = 0;
+      servoTargetAngle = angle;
       Serial.print(F("OK:SV,"));
       Serial.println(angle);
+    } else {
+      Serial.println(F("ERR:BAD_COMMAND"));
+    }
+    return;
+  }
+
+  if (strncmp(line, "SVD,", 4) == 0) {
+    int direction;
+    if (parseIntegerStrict(line + 4, direction) && direction >= -1 && direction <= 1) {
+      if (direction == 0) {
+        stopServoDirectionSmoothly();
+      } else {
+        servoManualDirection = (int8_t)direction;
+        lastServoDirectionCommandMs = millis();
+      }
+      Serial.print(F("OK:SVD,"));
+      Serial.println(direction);
+    } else {
+      Serial.println(F("ERR:BAD_COMMAND"));
+    }
+    return;
+  }
+
+  if (strncmp(line, "SVC,", 4) == 0) {
+    char *separator = strchr(line + 4, ',');
+    float speed, acceleration;
+    if (separator != nullptr) {
+      *separator = '\0';
+    }
+    if (separator != nullptr && parseFloat(line + 4, speed) &&
+        parseFloat(separator + 1, acceleration)) {
+      servoMaxSpeedDps = constrain(speed, 1.0F, 45.0F);
+      servoAccelerationDps2 = constrain(acceleration, 20.0F, 360.0F);
+      Serial.print(F("OK:SVC,"));
+      Serial.print(servoMaxSpeedDps, 1);
+      Serial.print(',');
+      Serial.println(servoAccelerationDps2, 1);
     } else {
       Serial.println(F("ERR:BAD_COMMAND"));
     }
@@ -951,6 +1073,8 @@ void setup() {
 
   panServo.attach(SERVO_PIN);
   panServo.write(SERVO_CENTER_ANGLE);
+  lastServoUpdateMs = millis();
+  lastServoDirectionCommandMs = lastServoUpdateMs;
 
   // Initialise speed timestamps so the first dt is sane.
   lastSpeedCalcTime = millis();
@@ -1007,6 +1131,7 @@ void loop() {
 
   // Keep sensor sampling independent from remote-control command timing.
   updateUltrasonic();
+  updateServoMotion();
 
   // An obstacle may appear after a previously safe forward command.  Stop it
   // here instead of waiting for the next remote heartbeat.
