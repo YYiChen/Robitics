@@ -155,7 +155,7 @@ constexpr uint8_t SERVO_PIN = 22;
 constexpr int SERVO_CENTER_ANGLE = 90;
 constexpr unsigned long SERVO_UPDATE_INTERVAL_MS = 20;
 constexpr unsigned long SERVO_DIRECTION_TIMEOUT_MS = 450;
-constexpr float SERVO_DEFAULT_SPEED_DPS = 30.0F;
+constexpr float SERVO_DEFAULT_SPEED_DPS = 45.0F;
 constexpr float SERVO_DEFAULT_ACCELERATION_DPS2 = 120.0F;
 Servo panServo;
 
