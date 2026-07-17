@@ -246,12 +246,12 @@ class RobotController:
         with self.lock:
             self.held_keys.clear(); self.action = "STOP"; self.steering_direction = 0
         self._write("STOP")
-    def set_servo_angle(self, raw_angle: object, *, track_target: bool = True) -> int:
-        """Move the SG90 without changing the drive action or drive config."""
+    def set_servo_angle(self, raw_angle: object, *, fast: bool = False, track_target: bool = True) -> int:
+        """Set a smooth target or request a mechanical-speed SG90 return."""
         try: angle = int(raw_angle)
         except (TypeError, ValueError): raise ValueError("舵机角度必须是 0 到 180 的整数") from None
         if not 0 <= angle <= 180: raise ValueError("舵机角度必须在 0 到 180 之间")
-        self._write(f"SV,{angle}")
+        self._write(f"SVF,{angle}" if fast else f"SV,{angle}")
         if self.error: raise RuntimeError(f"发送舵机命令失败：{self.error}")
         # Keep the web slider at the requested position immediately. The
         # Arduino's later OK:SV reply confirms the same value, but this is

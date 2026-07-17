@@ -56,7 +56,7 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
     @app.post("/api/servo")
     def servo():
         payload = request.get_json(silent=True) or {}
-        try: return jsonify(ok=True, requested_angle=controller.set_servo_angle(payload.get("angle")))
+        try: return jsonify(ok=True, requested_angle=controller.set_servo_angle(payload.get("angle"), fast=bool(payload.get("fast", False))))
         except ValueError as exc: return jsonify(ok=False, error=str(exc)), 400
         except RuntimeError as exc: return jsonify(ok=False, error=str(exc)), 503
     @app.post("/api/reconnect")

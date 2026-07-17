@@ -121,6 +121,8 @@ class ControllerPersistenceTests(unittest.TestCase):
             self.assertEqual(controller.set_servo_angle(42), 42)
             self.assertEqual(commands, ["SV,42"])
             self.assertEqual(controller.servo_angle, 42)
+            self.assertEqual(controller.set_servo_angle(90, fast=True), 90)
+            self.assertEqual(commands, ["SV,42", "SVF,90"])
             with self.assertRaises(ValueError): controller.set_servo_angle(181)
 
 

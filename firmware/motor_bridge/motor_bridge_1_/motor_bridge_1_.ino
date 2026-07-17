@@ -28,6 +28,7 @@
 //     OUT                      query actual PWM applied to M1..M4
 //     US                       query the front ultrasonic distance
 //     SV,angle                 set SG90 servo target angle (0..180)
+//     SVF,angle                move SG90 at its mechanical maximum speed
 //     SVD,direction            manual servo direction (-1, 0, 1)
 //     SVC,speed,acceleration   set servo motion limits (degrees/s, degrees/s^2)
 //
@@ -913,6 +914,26 @@ void executeLine(char *line) {
       servoManualDirection = 0;
       servoTargetAngle = angle;
       Serial.print(F("OK:SV,"));
+      Serial.println(angle);
+    } else {
+      Serial.println(F("ERR:BAD_COMMAND"));
+    }
+    return;
+  }
+
+  // Fast return deliberately bypasses the smooth profile.  Servo.write()
+  // still generates normal servo pulses; the physical SG90 limits the speed.
+  if (strncmp(line, "SVF,", 4) == 0) {
+    int angle;
+    if (parseIntegerStrict(line + 4, angle)) {
+      angle = constrain(angle, 0, 180);
+      servoManualDirection = 0;
+      servoVelocityDps = 0.0F;
+      servoCurrentAngle = angle;
+      servoTargetAngle = angle;
+      panServo.write(angle);
+      lastServoWrittenAngle = angle;
+      Serial.print(F("OK:SVF,"));
       Serial.println(angle);
     } else {
       Serial.println(F("ERR:BAD_COMMAND"));

@@ -413,10 +413,17 @@ function updateWheelOutputs(output, known) {
   }
 }
 
-function centerServo() {
-  heldSteeringKeys.clear(); sendKeys();
+async function centerServo() {
+  heldSteeringKeys.clear(); sendKeys(); queuedServoAngle = null;
   $("#servoSlider").value = steeringCenterAngle;
-  $("#servoSlider").dispatchEvent(new Event("input"));
+  $("#servoAngleDisplay").textContent = `${steeringCenterAngle}°`;
+  updateSteeringDial(steeringCenterAngle, true);
+  try {
+    const response = await fetch("/api/servo", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({angle:steeringCenterAngle, fast:true})});
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw Error(data.error || "摄像头快速回正失败");
+    note("摄像头正在快速回正");
+  } catch (error) { note(error.message); }
 }
 $("#servoCenter").onclick = centerServo;
 $("#applyServoSettings").onclick = async () => {
