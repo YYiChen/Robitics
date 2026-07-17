@@ -4,6 +4,7 @@ const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:f
 let folder, aborter, count = 0, profiles = {}, activeMode = "all", configLoaded = false, keysSending = false, keysQueued = false;
 let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, highresProfileDirty = false, highresProfileBusy = false, highresFpsDirty = false, highresFpsBusy = false, exposureDirty = false, exposureBusy = false, colorCorrectionDirty = false, colorCorrectionBusy = false, videoRetryTimer;
 let servoBusy = false, queuedServoAngle = null, steeringCenterAngle = 90, steeringReversed = true;
+let visualServoAngle = 90, visualServoVelocity = 0, visualSteeringDirection = 0, visualServoLastAt = performance.now();
 let receivedFrameCount = 0, receivedFrameWindowAt = performance.now(), browserReceiveFps = 0, statusRttMs = null;
 let activeVideoTransport = "mjpeg", currentWebrtcUrl = "";
 let highresPreviewEnabled = false, highresPreviewAvailable = false;
@@ -314,6 +315,24 @@ function steeringDirection() {
   if (heldSteeringKeys.has("q") === heldSteeringKeys.has("e")) return 0;
   return heldSteeringKeys.has("q") ? -1 : 1;
 }
+function syncVisualSteeringDirection() {
+  visualSteeringDirection = steeringDirection() * (steeringReversed ? -1 : 1);
+}
+function animateServoIndicator(now) {
+  const elapsed = Math.max(0, Math.min(.1, (now - visualServoLastAt) / 1000));
+  visualServoLastAt = now;
+  const speed = Number($("#servoSpeedDps")?.value) || 45;
+  const acceleration = Number($("#servoAccelerationDps2")?.value) || 120;
+  const wantedVelocity = visualSteeringDirection * speed;
+  const maximumDelta = acceleration * elapsed;
+  visualServoVelocity += Math.max(-maximumDelta, Math.min(maximumDelta, wantedVelocity - visualServoVelocity));
+  if (Number.isFinite(visualServoAngle) && (visualSteeringDirection !== 0 || Math.abs(visualServoVelocity) > .01)) {
+    visualServoAngle = clamp(visualServoAngle + visualServoVelocity * elapsed, 0, 180);
+    $("#servoAngleDisplay").textContent = `${Math.round(visualServoAngle)}°`;
+    updateSteeringDial(visualServoAngle, true);
+  }
+  requestAnimationFrame(animateServoIndicator);
+}
 async function sendKeys() {
   if (keysSending) { keysQueued = true; return; }
   keysSending = true;
@@ -324,8 +343,8 @@ async function sendKeys() {
   keysSending = false;
 }
 function setKey(key, pressed) { if (pressed) heldKeys.add(key); else heldKeys.delete(key); sendKeys(); }
-function setSteeringKey(key, pressed) { if (pressed) heldSteeringKeys.add(key); else heldSteeringKeys.delete(key); sendKeys(); }
-function releaseKeys() { heldKeys.clear(); heldSteeringKeys.clear(); sendKeys(); }
+function setSteeringKey(key, pressed) { if (pressed) heldSteeringKeys.add(key); else heldSteeringKeys.delete(key); syncVisualSteeringDirection(); sendKeys(); }
+function releaseKeys() { heldKeys.clear(); heldSteeringKeys.clear(); syncVisualSteeringDirection(); sendKeys(); }
 for (const button of document.querySelectorAll("[data-action]")) {
   const key = actionKeys[button.dataset.action];
   if (!key) { button.onclick = releaseKeys; continue; }
@@ -415,6 +434,7 @@ function updateWheelOutputs(output, known) {
 
 async function centerServo() {
   heldSteeringKeys.clear(); sendKeys(); queuedServoAngle = null;
+  visualSteeringDirection = 0; visualServoVelocity = 0; visualServoAngle = steeringCenterAngle;
   $("#servoSlider").value = steeringCenterAngle;
   $("#servoAngleDisplay").textContent = `${steeringCenterAngle}°`;
   updateSteeringDial(steeringCenterAngle, true);
@@ -596,7 +616,7 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     $("#dashboardDistance").textContent = distance(robot.ultrasonic); $("#dashboardDistanceState").textContent = !validDistance ? "无有效回波" : blocked ? "前进限位" : "通行";
     $("#dashboardDistanceHint").textContent = !validDistance ? "请检查前向超声波回波" : blocked ? `距障碍 ${fixed(frontDistance)} cm · 前进已限制` : `安全距离 ${fixed(frontDistance)} cm`;
     const marker = $("#distanceMarker"); marker.style.left = validDistance ? `${Math.min(frontDistance, 100)}%` : "100%"; marker.style.background = blocked ? "var(--red)" : "var(--green)"; marker.style.boxShadow = blocked ? "0 0 9px rgb(222 89 101)" : "0 0 9px rgb(71 201 140)";
-    if (!servoBusy && robot.servo_angle != null) { $("#servoSlider").value = robot.servo_angle; $("#servoAngleDisplay").textContent = `${robot.servo_angle}°`; updateSteeringDial(robot.servo_angle, true); }
+    if (!servoBusy && robot.servo_angle != null) { visualServoAngle = Number(robot.servo_angle); $("#servoSlider").value = robot.servo_angle; $("#servoAngleDisplay").textContent = `${robot.servo_angle}°`; updateSteeringDial(visualServoAngle, true); }
     else if (robot.servo_angle == null) updateSteeringDial(null, false);
     updateWheelOutputs(robot.motor_output, robot.arduino_online);
     if (robot.imu) { $("#roll").textContent = `${robot.imu[0].toFixed(2)}°`; $("#pitch").textContent = `${robot.imu[1].toFixed(2)}°`; $("#yaw").textContent = `${robot.imu[2].toFixed(2)}°`; }
@@ -607,4 +627,5 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
   } catch (error) { $("#status").textContent = `网页后端连接失败：${error}`; $("#arduinoState").innerHTML = dot(false, "网页服务异常"); }
 }
 addEventListener("beforeunload", stopWebrtc);
-refreshStatus(); setInterval(refreshStatus, 500);
+requestAnimationFrame(animateServoIndicator);
+refreshStatus(); setInterval(refreshStatus, 200);

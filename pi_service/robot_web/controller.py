@@ -320,11 +320,13 @@ class RobotController:
                 self.ultrasonic = float(parts[1])
             elif text.startswith("OK:SV,"):
                 self.servo_angle = int(text.split(",", 1)[1])
+            elif text.startswith("SVP,"):
+                self.servo_angle = int(text.split(",", 1)[1])
             elif text in {"OK:STOP", "STATUS:STOPPED", "TIMEOUT:STOP"} or text.startswith("BLOCK:"):
                 self.motor_output = [0, 0, 0, 0]
         except ValueError: pass
     def _run(self) -> None:
-        next_motor, next_query = 0.0, 0.0
+        next_motor, next_query, next_servo_query = 0.0, 0.0, 0.0
         while not self._stop.wait(SERVO_TICK_SECONDS):
             now = time.monotonic()
             with self.lock:
@@ -332,6 +334,9 @@ class RobotController:
                 if action == "STOP": self.held_keys.clear(); self.action = "STOP"
                 cfg = Config(**asdict(self.config))
             self._sync_steering(now, cfg)
+            if now >= next_servo_query:
+                self._write("SVP")
+                next_servo_query = now + HEARTBEAT_SECONDS
             if now < next_motor:
                 continue
             if cfg.speed_mode:

@@ -29,6 +29,7 @@
 //     US                       query the front ultrasonic distance
 //     SV,angle                 set SG90 servo target angle (0..180)
 //     SVF,angle                move SG90 at its mechanical maximum speed
+//     SVP                      query current SG90 angle
 //     SVD,direction            manual servo direction (-1, 0, 1)
 //     SVC,speed,acceleration   set servo motion limits (degrees/s, degrees/s^2)
 //
@@ -938,6 +939,12 @@ void executeLine(char *line) {
     } else {
       Serial.println(F("ERR:BAD_COMMAND"));
     }
+    return;
+  }
+
+  if (strcmp(line, "SVP") == 0) {
+    Serial.print(F("SVP,"));
+    Serial.println(constrain((int)roundf(servoCurrentAngle), 0, 180));
     return;
   }
 

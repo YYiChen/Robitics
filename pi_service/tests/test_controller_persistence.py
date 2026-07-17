@@ -107,10 +107,11 @@ class ControllerPersistenceTests(unittest.TestCase):
             controller = RobotController("unused", Path(directory) / "drive_config.json")
             controller._parse("US,31.5")
             controller._parse("OK:SV,125")
+            controller._parse("SVP,124")
             controller._parse("OK:M,120,-80,-75,110")
             controller._parse("OUT,121,-81,-76,111")
             self.assertEqual(controller.ultrasonic, 31.5)
-            self.assertEqual(controller.servo_angle, 125)
+            self.assertEqual(controller.servo_angle, 124)
             self.assertEqual(controller.motor_output, [121, -81, -76, 111])
 
     def test_servo_command_is_validated_without_touching_drive_profiles(self) -> None:
