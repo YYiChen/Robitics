@@ -9,10 +9,13 @@
 <body>
 <header class="topbar">
   <div class="brand"><h1>Robitics 控制台</h1><p>树莓派网页服务 · Arduino Mega 实时控制</p></div>
-  <div class="status-strip">
-    <div class="status-pill"><span>摄像头</span><strong id="cameraState"><i class="dot"></i>读取中</strong></div>
-    <div class="status-pill"><span>Arduino</span><strong id="arduinoState"><i class="dot"></i>读取中</strong></div>
-    <div class="status-pill"><span>网页控制</span><strong id="controlState"><i class="dot"></i>读取中</strong></div>
+  <div class="topbar-actions">
+    <div class="status-strip">
+      <div class="status-pill"><span>摄像头</span><strong id="cameraState"><i class="dot"></i>读取中</strong></div>
+      <div class="status-pill"><span>Arduino</span><strong id="arduinoState"><i class="dot"></i>读取中</strong></div>
+      <div class="status-pill"><span>网页控制</span><strong id="controlState"><i class="dot"></i>读取中</strong></div>
+    </div>
+    <button id="languageToggle" class="language-toggle" type="button" aria-label="切换为英文">EN</button>
   </div>
 </header>
 
@@ -100,6 +103,7 @@
     </section>
   </aside>
 </main>
+<script src="/static/i18n.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>
