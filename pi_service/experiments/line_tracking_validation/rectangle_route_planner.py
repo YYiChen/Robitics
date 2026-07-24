@@ -50,6 +50,7 @@ class RectanglePlannerConfig:
     right_heading_threshold: float = 0.35
     right_offset_threshold: float = 0.12
     corner_confirmation_frames: int = 2
+    corner_disarm_frames: int = 4
     missing_before_turn: int = 2
     reacquire_frames: int = 3
     max_turn_frames: int = 45
@@ -67,6 +68,7 @@ class ClockwiseRectanglePlanner:
         self.config = config
         self.state = RouteState.FOLLOW
         self._right_evidence_frames = 0
+        self._corner_absence_frames = 0
         self._missing_frames = 0
         self._turn_frames = 0
         self._reacquired_frames = 0
@@ -113,12 +115,21 @@ class ClockwiseRectanglePlanner:
             self._reset_follow()
             return self._decision(RouteIntent.STOP, "line_reappeared_after_safety_stop")
 
-        if right_corner_ahead or self._right_corner_evidence(observation):
+        corner_evidence = right_corner_ahead or self._right_corner_evidence(observation)
+        if corner_evidence:
             self._right_evidence_frames += 1
+            self._corner_absence_frames = 0
         else:
-            self._right_evidence_frames = 0
             if self.state is RouteState.RIGHT_CORNER_ARMED:
-                self.state = RouteState.FOLLOW
+                self._corner_absence_frames += 1
+                if self._corner_absence_frames >= self.config.corner_disarm_frames:
+                    self.state = RouteState.FOLLOW
+                    self._right_evidence_frames = 0
+                    self._corner_absence_frames = 0
+                else:
+                    return self._decision(RouteIntent.STRAIGHT, "right_corner_latched")
+            else:
+                self._right_evidence_frames = 0
 
         if self._right_evidence_frames >= self.config.corner_confirmation_frames:
             self.state = RouteState.RIGHT_CORNER_ARMED
@@ -159,6 +170,7 @@ class ClockwiseRectanglePlanner:
     def _reset_follow(self) -> None:
         self.state = RouteState.FOLLOW
         self._right_evidence_frames = 0
+        self._corner_absence_frames = 0
         self._missing_frames = 0
         self._turn_frames = 0
         self._reacquired_frames = 0

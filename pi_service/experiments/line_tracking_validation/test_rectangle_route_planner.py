@@ -73,6 +73,15 @@ class ClockwiseRectanglePlannerTests(unittest.TestCase):
         self.assertEqual(planner.state, RouteState.RIGHT_CORNER_ARMED)
         self.assertEqual(decision.reason, "right_corner_seen_ahead")
 
+    def test_armed_corner_survives_three_missing_branch_frames(self):
+        planner = ClockwiseRectanglePlanner()
+        observation = Observation(0.01, 0.02)
+        planner.step(observation, right_corner_ahead=True)
+        planner.step(observation, right_corner_ahead=True)
+        decisions = [planner.step(observation) for _ in range(3)]
+        self.assertTrue(all(item.state is RouteState.RIGHT_CORNER_ARMED for item in decisions))
+        self.assertTrue(all(item.reason == "right_corner_latched" for item in decisions))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
