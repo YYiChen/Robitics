@@ -1,7 +1,7 @@
 const $ = selector => document.querySelector(selector);
 const video = $("#video"), webrtcVideo = $("#webrtcVideo"), highresVideo = $("#highresVideo"), save = $("#save");
 const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:false});
-let folder, aborter, count = 0, profiles = {}, activeMode = "all", configLoaded = false, keysSending = false, keysQueued = false;
+let folder, aborter, count = 0, configLoaded = false, keysSending = false, keysQueued = false;
 let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, highresProfileDirty = false, highresProfileBusy = false, highresFpsDirty = false, highresFpsBusy = false, exposureDirty = false, exposureBusy = false, colorCorrectionDirty = false, colorCorrectionBusy = false, videoRetryTimer;
 let servoBusy = false, queuedServoAngle = null, steeringCenterAngle = 90, steeringReversed = true;
 let dealBusy = false;
@@ -11,7 +11,6 @@ let activeVideoTransport = "mjpeg", currentWebrtcUrl = "";
 let highresPreviewEnabled = false, highresPreviewAvailable = false;
 let webrtcPeer = null, webrtcSessionUrl = "", webrtcStatsTimer = null, webrtcStatsPrevious = null;
 const webrtcMetrics = {state:"未连接", fps:null, kbps:null, jitterMs:null, jitterBufferMs:null, packetsLost:null, framesDropped:null};
-const wheelNames = ["rf", "lf", "lr", "rr"];
 const actionKeys = {F:"w", SF:"slow", PL:"a", PR:"d", SPL:"x", SPR:"c", B:"s"};
 const keyboardKeys = {w:"w", a:"a", s:"s", d:"d", x:"x", c:"c", ArrowUp:"w", ArrowDown:"s", ArrowLeft:"a", ArrowRight:"d"};
 const heldKeys = new Set();
@@ -333,7 +332,6 @@ function animateServoIndicator(now) {
   if (Number.isFinite(visualServoAngle) && (visualSteeringDirection !== 0 || Math.abs(visualServoVelocity) > .01)) {
     visualServoAngle = clamp(visualServoAngle + visualServoVelocity * elapsed, 0, 180);
     $("#servoAngleDisplay").textContent = `${Math.round(visualServoAngle)}°`;
-    updateSteeringDial(visualServoAngle, true);
   }
   requestAnimationFrame(animateServoIndicator);
 }
@@ -422,47 +420,15 @@ async function flushServoQueue() {
 $("#servoSlider").addEventListener("input", () => {
   const angle = Number($("#servoSlider").value);
   $("#servoAngleDisplay").textContent = `${angle}°`;
-  updateSteeringDial(angle, true);
   queuedServoAngle = angle;
   void flushServoQueue();
 });
-
-function updateSteeringDial(angle, known) {
-  const numeric = Number(angle);
-  const dial = $("#steeringDial"), text = $("#steeringDialText"), cameraGimbal = $("#vehicleCameraGimbal"), turnLabel = $("#vehicleTurnLabel");
-  if (!Number.isFinite(numeric) || !known) {
-    dial.classList.add("steering-unknown"); text.textContent = "云台状态未知"; turnLabel.textContent = "等待 Arduino 回包"; cameraGimbal.style.transform = "rotate(0deg)"; return;
-  }
-  // Render the complete physical travel relative to the configured centre.
-  // This is intentionally not scaled for visual layout: 0° versus a 90°
-  // centre is displayed as a full 90° camera rotation.
-  const servoOffset = numeric - steeringCenterAngle;
-  const cameraOffset = steeringReversed ? -servoOffset : servoOffset;
-  const direction = Math.abs(cameraOffset) < .5 ? "回正" : cameraOffset < 0 ? "左转" : "右转";
-  dial.classList.remove("steering-unknown");
-  text.textContent = `云台指令 ${Math.round(numeric)}° · ${direction}`;
-  cameraGimbal.style.transform = `rotate(${cameraOffset}deg)`;
-  turnLabel.textContent = `摄像头${direction} · 相对中位 ${Math.abs(cameraOffset).toFixed(0)}°`;
-}
-
-function updateWheelOutputs(output, known) {
-  const ids = {rf:"wheelOutputRf", lf:"wheelOutputLf", lr:"wheelOutputLr", rr:"wheelOutputRr"};
-  const values = Array.isArray(output) && output.length === 4 ? {rf:output[0], lf:output[1], lr:output[2], rr:output[3]} : {};
-  for (const [wheel, id] of Object.entries(ids)) {
-    const node = $("#" + id), value = Number(values[wheel]);
-    const valid = known && Number.isFinite(value);
-    node.textContent = valid ? `${node.id === "wheelOutputRf" ? "M1" : node.id === "wheelOutputLf" ? "M2" : node.id === "wheelOutputLr" ? "M3" : "M4"} ${value > 0 ? "+" : ""}${Math.round(value)}` : `${node.id === "wheelOutputRf" ? "M1" : node.id === "wheelOutputLf" ? "M2" : node.id === "wheelOutputLr" ? "M3" : "M4"} —`;
-    node.classList.toggle("forward", valid && value > 0);
-    node.classList.toggle("reverse", valid && value < 0);
-  }
-}
 
 async function centerServo() {
   heldSteeringKeys.clear(); sendKeys(); queuedServoAngle = null;
   visualSteeringDirection = 0; visualServoVelocity = 0; visualServoAngle = steeringCenterAngle;
   $("#servoSlider").value = steeringCenterAngle;
   $("#servoAngleDisplay").textContent = `${steeringCenterAngle}°`;
-  updateSteeringDial(steeringCenterAngle, true);
   try {
     const response = await fetch("/api/servo", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({angle:steeringCenterAngle, fast:true})});
     const data = await response.json();
@@ -478,39 +444,14 @@ $("#applyServoSettings").onclick = async () => {
     const data = await response.json(); if (!response.ok || !data.ok) throw Error(data.error || "转向设置保存失败");
     steeringCenterAngle = data.config.servo_center_angle; steeringReversed = !!data.config.servo_qe_reversed;
     $("#servoCenterAngle").value = steeringCenterAngle; $("#servoSpeedDps").value = data.config.servo_speed_dps; $("#servoAccelerationDps2").value = data.config.servo_acceleration_dps2; $("#servoQeReversed").checked = steeringReversed;
-    updateSteeringDial($("#servoSlider").value, true); note("转向设置已保存");
+    note("转向设置已保存");
   } catch (error) { note(error.message); }
 };
 
-function profileFor(action) { return profiles[action] || {rf:0, lf:0, lr:0, rr:0}; }
-function signedMagnitude(value, sign) { return Math.round(Math.abs(Number(value) || 0)) * (sign < 0 ? -1 : 1); }
-function fillProfileEditor() {
-  const p = profileFor($("#profileAction").value), abs = wheel => Math.abs(Number(p[wheel]) || 0);
-  $("#allValue").value = Math.max(...wheelNames.map(abs));
-  $("#leftValue").value = Math.round((abs("lf") + abs("lr")) / 2); $("#rightValue").value = Math.round((abs("rf") + abs("rr")) / 2);
-  for (const wheel of wheelNames) $(`#${wheel}Value`).value = p[wheel]; updateProfilePreview(p);
-}
-function updateProfilePreview(p = profileFor($("#profileAction").value)) { $("#profilePreview").textContent = `M1 ${p.rf} · M2 ${p.lf} · M3 常转 -255 · M4 按 W 触发`; }
-function profileFromEditor() {
-  const p = {...profileFor($("#profileAction").value)};
-  if (activeMode === "all") for (const wheel of wheelNames) p[wheel] = signedMagnitude($("#allValue").value, p[wheel] || 1);
-  if (activeMode === "sides") { for (const wheel of ["lf", "lr"]) p[wheel] = signedMagnitude($("#leftValue").value, p[wheel] || 1); for (const wheel of ["rf", "rr"]) p[wheel] = signedMagnitude($("#rightValue").value, p[wheel] || 1); }
-  if (activeMode === "wheels") for (const wheel of wheelNames) p[wheel] = Math.max(-255, Math.min(255, Number($(`#${wheel}Value`).value) || 0));
-  return p;
-}
-function refreshProfilePreview() { updateProfilePreview(profileFromEditor()); }
-for (const input of document.querySelectorAll("#allValue,#leftValue,#rightValue,#rfValue,#lfValue,#lrValue,#rrValue")) input.addEventListener("input", refreshProfilePreview);
-$("#profileAction").onchange = fillProfileEditor;
-for (const tab of document.querySelectorAll(".mode")) tab.onclick = () => { activeMode = tab.dataset.mode; document.querySelectorAll(".mode").forEach(item => item.classList.toggle("active", item === tab)); $("#allEditor").classList.toggle("hidden", activeMode !== "all"); $("#sidesEditor").classList.toggle("hidden", activeMode !== "sides"); $("#wheelsEditor").classList.toggle("hidden", activeMode !== "wheels"); refreshProfilePreview(); };
-$("#applyProfile").onclick = async () => { profiles[$("#profileAction").value] = profileFromEditor();
-  try { const response = await fetch("/api/config", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({profiles})}); const data = await response.json(); if (!response.ok) throw Error(data.error || "轮速配置失败"); profiles = data.config.profiles; fillProfileEditor(); note("轮速配置已应用并保存"); } catch (error) { note(error.message); }
-};
-
 function fillConfig(config) {
-  profiles = config.profiles || profiles; $("#speedMode").checked = !!config.speed_mode; $("#targetSpeed").value = config.target_speed; $("#kp").value = config.kp; $("#ki").value = config.ki; $("#kd").value = config.kd;
+  $("#speedMode").checked = !!config.speed_mode; $("#targetSpeed").value = config.target_speed; $("#kp").value = config.kp; $("#ki").value = config.ki; $("#kd").value = config.kd;
   steeringCenterAngle = Number(config.servo_center_angle ?? 90); steeringReversed = !!config.servo_qe_reversed;
   $("#servoCenterAngle").value = steeringCenterAngle; $("#servoSpeedDps").value = config.servo_speed_dps ?? 45; $("#servoAccelerationDps2").value = config.servo_acceleration_dps2 ?? 120; $("#servoQeReversed").checked = steeringReversed;
-  fillProfileEditor(); updateSteeringDial($("#servoSlider").value, true);
 }
 $("#applyPid").onclick = async () => { const payload = {speed_mode:$("#speedMode").checked, target_speed:Number($("#targetSpeed").value), kp:Number($("#kp").value), ki:Number($("#ki").value), kd:Number($("#kd").value)};
   try { const response = await fetch("/api/config", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)}); if (!response.ok) throw Error("PID 参数提交失败"); note("PID 参数已应用并保存"); } catch (error) { note(error.message); }
@@ -521,12 +462,6 @@ function dot(online, text, warning = false) { return `<i class="dot ${online ? "
 function fixed(value, digits = 1) { const number = Number(value); return Number.isFinite(number) ? number.toFixed(digits) : "—"; }
 function bytes(value) { const number = Number(value); if (!Number.isFinite(number)) return "—"; return number >= 1e9 ? `${fixed(number / 1e9)} GB` : `${fixed(number / 1e6)} MB`; }
 function duration(seconds) { const whole = Math.max(0, Math.floor(Number(seconds) || 0)); return `${Math.floor(whole / 60)} 分 ${whole % 60} 秒`; }
-function distance(value) {
-  if (value == null) return "等待传感器数据…";
-  const front = Number(value);
-  if (!Number.isFinite(front) || front < 0) return "无有效回波（-1）";
-  return `${front.toFixed(1)} cm`;
-}
 function streamDiagnosis(camera) {
   if (camera.transport === "webrtc") {
     if (webrtcMetrics.jitterBufferMs != null && webrtcMetrics.jitterBufferMs > 150) return ["浏览器 WebRTC 缓冲偏高", `当前抖动缓冲约 ${fixed(webrtcMetrics.jitterBufferMs)} ms；请先关闭高清预览，并检查热点信号或降低实时码率。`];
@@ -636,14 +571,8 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     $("#systemUptime").textContent = !systemMetricsSupported ? "后端未更新" : duration(system.uptime_seconds);
     $("#oledState").textContent = oled.online ? `在线 · ${oled.address || "I2C"}` : oled.disabled ? "已关闭" : "不可用";
     $("#oledHint").textContent = oled.online ? `I2C-${oled.i2c_port ?? 1} · 每秒刷新状态` : (oled.error || "检查 I2C、地址和 luma.oled 依赖");
-    $("#controlState").innerHTML = dot(robot.client_online, robot.client_online ? "在线" : "已超时停车"); $("#action").textContent = robot.action; $("#keys").textContent = robot.keys?.join("+") || "—"; $("#distance").textContent = distance(robot.ultrasonic); $("#lastReply").textContent = robot.reply || "等待 Arduino 回包";
-    const frontDistance = Number(robot.ultrasonic), validDistance = Number.isFinite(frontDistance) && frontDistance >= 0, blocked = validDistance && frontDistance <= 30;
-    $("#dashboardDistance").textContent = distance(robot.ultrasonic); $("#dashboardDistanceState").textContent = !validDistance ? "无有效回波" : blocked ? "前进限位" : "通行";
-    $("#dashboardDistanceHint").textContent = !validDistance ? "请检查前向超声波回波" : blocked ? `距障碍 ${fixed(frontDistance)} cm · 前进已限制` : `安全距离 ${fixed(frontDistance)} cm`;
-    const marker = $("#distanceMarker"); marker.style.left = validDistance ? `${Math.min(frontDistance, 100)}%` : "100%"; marker.style.background = blocked ? "var(--red)" : "var(--green)"; marker.style.boxShadow = blocked ? "0 0 9px rgb(222 89 101)" : "0 0 9px rgb(71 201 140)";
-    if (!servoBusy && robot.servo_angle != null) { visualServoAngle = Number(robot.servo_angle); $("#servoSlider").value = robot.servo_angle; $("#servoAngleDisplay").textContent = `${robot.servo_angle}°`; updateSteeringDial(visualServoAngle, true); }
-    else if (robot.servo_angle == null) updateSteeringDial(null, false);
-    updateWheelOutputs(robot.motor_output, robot.arduino_online);
+    $("#controlState").innerHTML = dot(robot.client_online, robot.client_online ? "在线" : "已超时停车"); $("#action").textContent = robot.action; $("#keys").textContent = robot.keys?.join("+") || "—"; $("#lastReply").textContent = robot.reply || "等待 Arduino 回包";
+    if (!servoBusy && robot.servo_angle != null) { visualServoAngle = Number(robot.servo_angle); $("#servoSlider").value = robot.servo_angle; $("#servoAngleDisplay").textContent = `${robot.servo_angle}°`; }
     if (robot.imu) { $("#roll").textContent = `${robot.imu[0].toFixed(2)}°`; $("#pitch").textContent = `${robot.imu[1].toFixed(2)}°`; $("#yaw").textContent = `${robot.imu[2].toFixed(2)}°`; }
     if (robot.speed) { $("#wheelSpeed").textContent = `${robot.speed[0].toFixed(1)} / ${robot.speed[1].toFixed(1)} pps`; $("#targetWheelSpeed").textContent = `${robot.speed[2].toFixed(1)} / ${robot.speed[3].toFixed(1)} pps`; }
     if (!configLoaded) { fillConfig(robot.config); configLoaded = true; }
