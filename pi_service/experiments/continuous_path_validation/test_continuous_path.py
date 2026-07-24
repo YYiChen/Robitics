@@ -3,6 +3,7 @@ import unittest
 
 from continuous_motor_control import ContinuousMotorConfig, drive_pwm_with_last_path, path_drive_pwm
 from continuous_path_planner import ContinuousPathPlanner, PathIntent
+from marker_counter import MarkerCounter, MarkerCounterConfig, MarkerState
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,21 @@ class ContinuousPathTests(unittest.TestCase):
         resumed = planner.step(Observation(), 1.30)
         self.assertEqual(resumed.intent, PathIntent.FOLLOW_PATH)
         self.assertEqual(resumed.reason, "line_reacquired_resume_following")
+
+    def test_marker_is_counted_once_then_rearmed_after_it_leaves(self):
+        counter = MarkerCounter(MarkerCounterConfig(confirm_frames=2, clear_frames=3, markers_per_lap=4))
+        self.assertFalse(counter.update(True).event)
+        passed = counter.update(True)
+        self.assertTrue(passed.event)
+        self.assertEqual((passed.marker_in_lap, passed.lap_count), (1, 0))
+        self.assertFalse(counter.update(True).event)
+        self.assertEqual(counter.update(False).state, MarkerState.COOLDOWN)
+        self.assertEqual(counter.update(False).state, MarkerState.COOLDOWN)
+        self.assertEqual(counter.update(False).state, MarkerState.ARMED)
+        counter.update(True)
+        second = counter.update(True)
+        self.assertTrue(second.event)
+        self.assertEqual(second.marker_in_lap, 2)
 
 
 if __name__ == "__main__":

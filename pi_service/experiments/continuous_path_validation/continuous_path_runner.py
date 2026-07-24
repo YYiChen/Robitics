@@ -19,6 +19,7 @@ sys.path[:0] = [str(TRACK_LINE_SRC), str(REPOSITORY_ROOT)]
 
 from continuous_motor_control import ContinuousMotorConfig, ContinuousMotorExecutor  # noqa: E402
 from continuous_path_planner import ContinuousPathConfig, ContinuousPathPlanner  # noqa: E402
+from marker_counter import MarkerCounter, MarkerCounterConfig  # noqa: E402
 from debug_web import DebugMjpegPublisher  # noqa: E402
 from track_line.config import LineDetectorConfig  # noqa: E402
 from track_line.detector import OpenCVLineDetector  # noqa: E402
@@ -34,6 +35,9 @@ from tuning import (  # noqa: E402
     MAXIMUM_CORRECTION_PWM,
     MINIMUM_CORRECTION_PWM,
     MINIMUM_WHEEL_PWM,
+    MARKER_CLEAR_FRAMES,
+    MARKER_CONFIRM_FRAMES,
+    MARKERS_PER_LAP,
     PROCESS_FPS,
     STRAIGHT_PWM,
 )
@@ -68,15 +72,27 @@ def source_value(source: str) -> int | str:
     return int(source) if source.strip().lstrip("-").isdigit() else source.strip()
 
 
-def overlay(frame, decision, motor_action: str, observation):
+def overlay(frame, decision, motor_action: str, observation, marker_update):
     output = frame.copy()
     color = (0, 0, 255) if decision.intent.value == "STOP" else (0, 220, 0)
-    cv2.rectangle(output, (10, 76), (630, 190), (20, 20, 20), cv2.FILLED)
+    cv2.rectangle(output, (10, 76), (630, 216), (20, 20, 20), cv2.FILLED)
     cv2.putText(output, f"PATH: {decision.intent.value}", (18, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.72, color, 2, cv2.LINE_AA)
     cv2.putText(output, f"{decision.reason} lost_frames={decision.lost_frames}", (18, 132), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 255, 255), 1, cv2.LINE_AA)
     target = "n/a" if observation.lookahead_offset is None else f"{observation.lookahead_offset:+.3f}"
     cv2.putText(output, f"LOOKAHEAD OFFSET: {target}", (18, 157), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (100, 220, 255), 1, cv2.LINE_AA)
     cv2.putText(output, f"MOTOR: {motor_action}", (18, 181), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (100, 220, 255), 1, cv2.LINE_AA)
+    marker_state = "PASS" if marker_update.event else marker_update.state.value
+    marker_color = (0, 220, 255) if marker_update.detected else (180, 180, 180)
+    cv2.putText(
+        output,
+        f"MARKER: {marker_state}  {marker_update.marker_in_lap}/{MARKERS_PER_LAP}  LAP={marker_update.lap_count}",
+        (18, 205),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.50,
+        marker_color,
+        1,
+        cv2.LINE_AA,
+    )
     return output
 
 
@@ -89,6 +105,11 @@ def main() -> int:
         line_lost_stop_frames=args.line_lost_stop_frames,
         line_lost_prediction_seconds=args.line_lost_prediction_seconds,
         line_lost_stop_seconds=args.line_lost_stop_seconds,
+    ))
+    marker_counter = MarkerCounter(MarkerCounterConfig(
+        confirm_frames=MARKER_CONFIRM_FRAMES,
+        clear_frames=MARKER_CLEAR_FRAMES,
+        markers_per_lap=MARKERS_PER_LAP,
     ))
     executor = None
     if args.enable_motors:
@@ -118,10 +139,20 @@ def main() -> int:
                 continue
             last = now
             result = detector.detect(frame, frame_index=frame_index, timestamp_ns=time.monotonic_ns())
+            marker_update = marker_counter.update(result.observation.marker_detected)
             decision = planner.step(result.observation, now)
             motor_action = executor.apply(decision.intent, result.observation) if executor else "DISPLAY_ONLY"
-            annotated = overlay(render_debug(frame, result), decision, motor_action, result.observation)
-            payload = {"frame": frame_index, "intent": decision.intent.value, "reason": decision.reason, "motor": motor_action}
+            annotated = overlay(render_debug(frame, result), decision, motor_action, result.observation, marker_update)
+            payload = {
+                "frame": frame_index,
+                "intent": decision.intent.value,
+                "reason": decision.reason,
+                "motor": motor_action,
+                "marker_detected": marker_update.detected,
+                "marker_event": marker_update.event,
+                "marker_in_lap": marker_update.marker_in_lap,
+                "lap_count": marker_update.lap_count,
+            }
             print(json.dumps(payload, ensure_ascii=False), flush=True)
             if debug_web:
                 debug_web.publish(annotated, payload)
