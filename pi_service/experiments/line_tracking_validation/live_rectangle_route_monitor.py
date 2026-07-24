@@ -29,7 +29,11 @@ from track_line.config import LineDetectorConfig  # noqa: E402
 from track_line.detector import OpenCVLineDetector  # noqa: E402
 from track_line.visualization import render_debug  # noqa: E402
 
-from rectangle_route_planner import ClockwiseRectanglePlanner, PlannerDecision  # noqa: E402
+from rectangle_route_planner import (  # noqa: E402
+    ClockwiseRectanglePlanner,
+    PlannerDecision,
+    RectanglePlannerConfig,
+)
 from motor_control import MotorControlConfig, RobotWebMotorExecutor  # noqa: E402
 
 
@@ -44,8 +48,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--process-fps",
         type=float,
-        default=10.0,
-        help="maximum frames per second to analyse; zero means analyse every frame",
+        default=30.0,
+        help="maximum frames per second to analyse; default 30, zero means analyse every frame",
     )
     parser.add_argument(
         "--track-roi-top-width",
@@ -69,6 +73,17 @@ def parse_args() -> argparse.Namespace:
 def source_value(source: str) -> int | str:
     source = source.strip()
     return int(source) if source.lstrip("-").isdigit() else source
+
+
+def planner_config_for_processing_rate(process_fps: float) -> RectanglePlannerConfig:
+    """Keep physical corner timings stable when the analysis rate changes."""
+    # With --process-fps 0 the source rate is not known in advance; retain the
+    # original 10 FPS timing rather than silently making safety timing tiny.
+    effective_fps = process_fps if process_fps > 0 else 10.0
+    return RectanglePlannerConfig(
+        missing_before_turn=max(1, round(0.3 * effective_fps)),
+        max_turn_frames=max(1, round(10.0 * effective_fps)),
+    )
 
 
 def track_corridor(frame, *, roi_top_ratio: float, top_width: float, bottom_width: float):
@@ -262,12 +277,19 @@ def main() -> int:
         raise ValueError("--process-fps and --max-frames cannot be negative")
 
     detector = OpenCVLineDetector(LineDetectorConfig.from_json(args.config))
-    planner = ClockwiseRectanglePlanner()
+    planner = ClockwiseRectanglePlanner(planner_config_for_processing_rate(args.process_fps))
     motor_executor = None
     if args.enable_motors:
         motor_executor = RobotWebMotorExecutor(MotorControlConfig(args.controller_url))
         motor_executor.configure()
         print("motor_control=armed straight_pwm=105 pivot_pwm=165", flush=True)
+    print(
+        "vision_control="
+        f"process_fps={args.process_fps:g} "
+        f"corner_approach_frames={planner.config.missing_before_turn} "
+        f"max_turn_frames={planner.config.max_turn_frames}",
+        flush=True,
+    )
     capture = cv2.VideoCapture(source_value(args.source))
     if not capture.isOpened():
         raise RuntimeError(f"cannot open source: {args.source}")

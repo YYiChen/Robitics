@@ -71,13 +71,13 @@ http://100.80.46.54:5000/video_feed
 启动自动版本前，关闭网页遥控的按键操作；网页的 `/api/keys` 心跳会覆盖自动程序
 的动作。首次实车测试必须把车架空或低速有人扶持，按 `Q` / `Esc` 即停止。
 
-命令行调试示例（需要提高处理频率时改为 `--process-fps 15`）：
+命令行调试示例（默认和一键启动均以 30 FPS 分析）：
 
 ```powershell
 py -3 .\pi_service\experiments\line_tracking_validation\live_rectangle_route_monitor.py `
   --source http://100.80.46.54:5000/video_feed `
   --config .\third_party\DeskMate-Advance\src\track_line\config.dark_line.json `
-  --process-fps 10
+  --process-fps 30
 ```
 
 ## 上车前的建议参数
@@ -91,6 +91,6 @@ py -3 .\pi_service\experiments\line_tracking_validation\live_rectangle_route_mon
 下一阶段才将图像二值化得到的 `line_centre_x` 接给 `RightAngleTracker.step()`，并由一个明确的“开启循迹”开关接管 `RobotController` 动作。
 ## 直角右转的失线策略
 
-这是一个**无岔路、顺时针矩形**的固定路线。到达角落时，摄像头会比车身更早看不见旧边的黑线；因此先以 `F` 继续前进 3 个处理帧（10 FPS 时约 0.3 秒）。若期间重新看到线，就取消转弯；若仍失线，即使右侧横线因视野、反光或阈值原因没有被 `RIGHT BRANCH` 检测到，规划器才会进入 `TURN_RIGHT`，电机执行 `PR`（原地右转，PWM 165）。它会持续转动，直到连续三帧确认看见新的边线后才恢复前进。
+这是一个**无岔路、顺时针矩形**的固定路线。到达角落时，摄像头会比车身更早看不见旧边的黑线；因此先以 `F` 继续前进约 0.3 秒。处理器以 30 FPS 工作时会自动换算为 9 个处理帧；若期间重新看到线，就取消转弯；若仍失线，即使右侧横线因视野、反光或阈值原因没有被 `RIGHT BRANCH` 检测到，规划器才会进入 `TURN_RIGHT`，电机执行 `PR`（原地右转，PWM 165）。它会持续转动，直到连续三帧确认看见新的边线后才恢复前进。
 
-仍保留 `max_turn_frames=100` 的安全上限（处理帧率 10 FPS 时约 10 秒）；超过上限才会停止。若以后改成有岔路的路线，可将 `fixed_right_turn_on_line_end=False`，恢复“未确认角落就停止”的保守策略。
+仍保留约 10 秒的安全上限（30 FPS 时自动换算为 `max_turn_frames=300`）；超过上限才会停止。若以后改成有岔路的路线，可将 `fixed_right_turn_on_line_end=False`，恢复“未确认角落就停止”的保守策略。

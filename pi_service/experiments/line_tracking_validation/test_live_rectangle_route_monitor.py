@@ -5,12 +5,18 @@ import numpy as np
 from live_rectangle_route_monitor import (
     has_connected_right_branch,
     keep_near_connected_points,
+    planner_config_for_processing_rate,
     track_corridor,
 )
 from track_line.observations import LineDetectionResult, LineObservation
 
 
 class TrackCorridorTests(unittest.TestCase):
+    def test_corner_timing_scales_with_processing_rate(self):
+        config = planner_config_for_processing_rate(30.0)
+        self.assertEqual(config.missing_before_turn, 9)
+        self.assertEqual(config.max_turn_frames, 300)
+
     def test_keeps_dark_line_inside_and_masks_dark_object_outside(self):
         frame = np.full((100, 200, 3), 255, dtype=np.uint8)
         frame[70:100, 95:105] = 0  # guide tape inside the lower corridor
