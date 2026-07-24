@@ -24,7 +24,7 @@ chmod +x car_drive_test/start_car_test.sh
 
 浏览器打开 `http://树莓派IP:5050`。按住 W/A/S/D 或页面方向按钮才会运动，松开/失焦/网页断连，以及 Arduino 700 ms 未收到心跳都会停车。
 
-串口不是 `/dev/ttyACM0` 时：
+测试服务默认会依次查找 `/dev/ttyACM*` 与 `/dev/ttyUSB*`。若要固定使用某个串口：
 
 ```bash
 ROBOT_SERIAL_PORT=/dev/ttyUSB0 ./car_drive_test/start_car_test.sh

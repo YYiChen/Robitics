@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import sys
 import threading
 import time
@@ -37,13 +38,21 @@ class DriveBridge:
         with self.lock:
             if self.port and self.port.is_open:
                 return
-            try:
-                self.port = serial.Serial(self.port_name, self.baud, timeout=0.02, write_timeout=0.5)
-                time.sleep(2.2)  # USB serial opening commonly resets an Arduino.
-                self.error = ""
-            except Exception as exc:
-                self.port = None
-                self.error = str(exc)
+            candidates = [] if self.port_name == "auto" else [self.port_name]
+            candidates += sorted(glob.glob("/dev/ttyACM*")) + sorted(glob.glob("/dev/ttyUSB*"))
+            candidates = list(dict.fromkeys(candidates))
+            failures = []
+            for candidate in candidates:
+                try:
+                    self.port = serial.Serial(candidate, self.baud, timeout=0.02, write_timeout=0.5)
+                    self.port_name = candidate
+                    time.sleep(2.2)  # USB serial opening commonly resets an Arduino.
+                    self.error = ""
+                    return
+                except Exception as exc:
+                    failures.append(f"{candidate}: {exc}")
+                    self.port = None
+            self.error = "; ".join(failures) if failures else "no /dev/ttyACM* or /dev/ttyUSB* device found"
 
     def _write(self, command: str) -> None:
         self._connect()
@@ -147,7 +156,7 @@ def create_app(bridge: DriveBridge, camera: CameraStreamer) -> Flask:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", default="/dev/ttyACM0")
+    parser.add_argument("--port", default="auto", help="serial device path, or auto")
     parser.add_argument("--web-port", type=int, default=5050)
     args = parser.parse_args()
     camera = CameraStreamer()
