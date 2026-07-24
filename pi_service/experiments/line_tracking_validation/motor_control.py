@@ -22,9 +22,9 @@ class MotorControlConfig:
     controller_url: str
     # Cruise can stay below the static-friction threshold because a brief
     # launch pulse is sent whenever the vehicle starts moving from rest.
-    straight_pwm: int = 85
-    launch_pwm: int = 145
-    launch_duration_seconds: float = 0.18
+    straight_pwm: int = 65
+    launch_pwm: int = 155
+    launch_duration_seconds: float = 0.12
     pivot_pwm: int = 155
     curve_outer_pwm: int = 180
     curve_inner_pwm: int = 60
