@@ -1,5 +1,6 @@
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -62,9 +63,14 @@ class ControllerPersistenceTests(unittest.TestCase):
             controller = RobotController("unused", Path(directory) / "drive_config.json")
             self.assertEqual(controller._raw("F", controller.config), (255, 255, 0, 0))
             commands: list[str] = []
-            controller._write = commands.append
-            self.assertEqual(controller.deal_card(180, 2500), "requested")
-            self.assertEqual(controller.feed_cards(200, 5000), "requested")
+            def write_with_ack(command: str) -> bool:
+                commands.append(command)
+                if command.startswith("DEAL"): controller._parse("OK:DEAL,180,2500")
+                if command.startswith("FEED"): controller._parse("OK:FEED,200,5000")
+                return True
+            controller._write = write_with_ack
+            self.assertEqual(controller.deal_card(180, 2500), "running")
+            self.assertEqual(controller.feed_cards(200, 5000), "running")
             self.assertEqual(commands, ["DEAL,180,2500", "FEED,200,5000"])
             controller._parse("OK:DEAL,180,2500")
             self.assertEqual(controller.card_deal_state, "running")
@@ -78,7 +84,7 @@ class ControllerPersistenceTests(unittest.TestCase):
     def test_card_motor_power_and_time_are_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             controller = RobotController("unused", Path(directory) / "drive_config.json")
-            for pwm, duration in [(-1, 1000), (256, 1000), (100, 99), (100, 60001)]:
+            for pwm, duration in [(0, 1000), (-1, 1000), (256, 1000), (100, 99), (100, 60001)]:
                 with self.assertRaises(ValueError):
                     controller.deal_card(pwm, duration)
 
@@ -86,7 +92,11 @@ class ControllerPersistenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             controller = RobotController("unused", Path(directory) / "drive_config.json")
             commands: list[str] = []
-            controller._write = commands.append
+            def write_legacy_ack(command: str) -> bool:
+                commands.append(command)
+                controller._parse("OK:DEAL")
+                return True
+            controller._write = write_legacy_ack
             controller._parse("READY:MOTOR_BRIDGE,M1=RIGHT,M2=LEFT,M3=CARD_CONTINUOUS,M4=DEAL_1000MS,SERVO=23,IMU=OK")
             self.assertEqual(controller.card_motor_protocol, "legacy")
             self.assertEqual(controller.deal_card(180, 2500), "legacy")
@@ -99,6 +109,27 @@ class ControllerPersistenceTests(unittest.TestCase):
             controller = RobotController("unused", Path(directory) / "drive_config.json")
             controller._parse("READY:MOTOR_BRIDGE,M1=RIGHT,M2=LEFT,M3=FEED_ADJUSTABLE,M4=DEAL_ADJUSTABLE,SERVO=23,IMU=OK")
             self.assertEqual(controller.card_motor_protocol, "adjustable")
+
+    def test_unknown_firmware_retries_plain_deal_and_deduplicates_key_token(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = RobotController("unused", Path(directory) / "drive_config.json")
+            commands: list[str] = []
+            def write_with_fallback(command: str) -> bool:
+                commands.append(command)
+                controller._parse("ERR:BAD_COMMAND" if "," in command else "OK:DEAL")
+                return True
+            controller._write = write_with_fallback
+            request = {"token": "p-1", "pwm": 200, "duration_ms": 1200}
+            first = controller.deal_from_key_request(request)
+            deadline = time.monotonic() + 1.0
+            while first["state"] == "pending" and time.monotonic() < deadline:
+                time.sleep(.01)
+                first = controller.deal_from_key_request(request)
+            second = controller.deal_from_key_request(request)
+            self.assertEqual(first, second)
+            self.assertEqual(first["state"], "legacy")
+            self.assertEqual(commands, ["DEAL,200,1200", "DEAL"])
+            self.assertEqual(controller.card_motor_protocol, "legacy")
 
     def test_steering_syncs_direction_and_limits_to_arduino(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

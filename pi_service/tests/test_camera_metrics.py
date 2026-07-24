@@ -195,7 +195,7 @@ class CameraMetricsTests(unittest.TestCase):
         response = app.test_client().get("/api/status")
         self.assertEqual(response.status_code, 200)
         body = response.get_json()
-        self.assertEqual(body["api_version"], "robot-console-2026-07-24-card-protocol-v2")
+        self.assertEqual(body["api_version"], "robot-console-2026-07-24-card-ack-v3")
         self.assertTrue(body["capabilities"]["system_metrics"])
         self.assertTrue(body["capabilities"]["highres_fps_control"])
         self.assertEqual(body["capabilities"]["highres_fps_max"], 30)
@@ -218,11 +218,27 @@ class CameraMetricsTests(unittest.TestCase):
                 self.commands.append(("DEAL", pwm, duration_ms))
                 return "requested"
 
+            def update_keys(self, payload):
+                self.commands.append(("KEYS", payload.get("keys")))
+                return "F"
+
+            def deal_from_key_request(self, request):
+                self.commands.append(("KEY_DEAL", request["pwm"], request["duration_ms"]))
+                return {"token": request["token"], "state": "running", "reply": "OK:DEAL,200,750"}
+
         controller = Controller()
         client = create_app(controller, CameraStreamer()).test_client()
         self.assertEqual(client.post("/api/feed", json={"pwm": 180, "duration_ms": 2500}).status_code, 200)
         self.assertEqual(client.post("/api/deal", json={"pwm": 200, "duration_ms": 750}).status_code, 200)
-        self.assertEqual(controller.commands, [("FEED", 180, 2500), ("DEAL", 200, 750)])
+        key_response = client.post("/api/keys", json={"keys": ["w"], "deal_request": {"token": "p1", "pwm": 200, "duration_ms": 750}})
+        self.assertEqual(key_response.status_code, 200)
+        self.assertEqual(key_response.get_json()["deal"]["reply"], "OK:DEAL,200,750")
+        self.assertEqual(controller.commands, [
+            ("FEED", 180, 2500),
+            ("DEAL", 200, 750),
+            ("KEYS", ["w"]),
+            ("KEY_DEAL", 200, 750),
+        ])
 
 
 if __name__ == "__main__":

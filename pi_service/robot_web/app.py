@@ -48,7 +48,17 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
         except ValueError as exc: return jsonify(ok=False, error=str(exc)), 400
     @app.post("/api/keys")
     def keys():
-        return jsonify(ok=True, action=controller.update_keys(request.get_json(silent=True) or {}))
+        payload = request.get_json(silent=True) or {}
+        try:
+            return jsonify(
+                ok=True,
+                action=controller.update_keys(payload),
+                deal=controller.deal_from_key_request(payload.get("deal_request")),
+            )
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        except RuntimeError as exc:
+            return jsonify(ok=False, error=str(exc)), 503
     @app.post("/api/heartbeat")
     def heartbeat(): controller.heartbeat(); return jsonify(ok=True)
     @app.post("/api/stop")
@@ -138,7 +148,7 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
     @app.get("/api/status")
     def status():
         return jsonify(
-            api_version="robot-console-2026-07-24-card-protocol-v2",
+            api_version="robot-console-2026-07-24-card-ack-v3",
             capabilities={"system_metrics": True, "highres_fps_control": hasattr(camera, "set_highres_fps"), "highres_fps_max": 30, "card_deal": True, "card_feed": True},
             robot=controller.status(),
             camera=camera.status_dict(),

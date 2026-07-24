@@ -5,6 +5,7 @@ let folder, aborter, count = 0, profiles = {}, configLoaded = false, keysSending
 let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, highresProfileDirty = false, highresProfileBusy = false, highresFpsDirty = false, highresFpsBusy = false, exposureDirty = false, exposureBusy = false, colorCorrectionDirty = false, colorCorrectionBusy = false, videoRetryTimer;
 let servoBusy = false, queuedServoAngle = null, steeringCenterAngle = 90, steeringReversed = true;
 let feedBusy = false, dealBusy = false;
+let pendingDealRequest = null, dealRequestSerial = 0, dealResetTimer = null;
 let visualServoAngle = 90, visualServoVelocity = 0, visualSteeringDirection = 0, visualServoLastAt = performance.now();
 let receivedFrameCount = 0, receivedFrameWindowAt = performance.now(), browserReceiveFps = 0, statusRttMs = null;
 let activeVideoTransport = "mjpeg", currentWebrtcUrl = "";
@@ -338,9 +339,36 @@ function animateServoIndicator(now) {
 async function sendKeys() {
   if (keysSending) { keysQueued = true; return; }
   keysSending = true;
-  do { keysQueued = false; try { const response = await requestJson("/api/keys", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({keys:[...heldKeys], steering:steeringDirection()}), keepalive:true});
-      const data = await response.json(); if (!response.ok) throw Error(data.error || "动作发送失败"); $("#action").textContent = data.action;
-    } catch (error) { note(error.message); }
+  do { keysQueued = false; try {
+      const payload = {keys:[...heldKeys], steering:steeringDirection()};
+      if (pendingDealRequest) payload.deal_request = pendingDealRequest;
+      const response = await requestJson("/api/keys", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload), keepalive:true}, pendingDealRequest ? 3500 : 500);
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw Error(data.error || "动作发送失败");
+      $("#action").textContent = data.action;
+      if (data.deal && pendingDealRequest && data.deal.token === pendingDealRequest.token) {
+        if (data.deal.state === "pending") {
+          note(`P 已送达树莓派：M4 PWM ${pendingDealRequest.pwm}，正在等待 Arduino 确认`);
+          continue;
+        }
+        const request = pendingDealRequest;
+        pendingDealRequest = null;
+        note(data.deal.state === "error"
+          ? `M4 未启动：${data.deal.error || data.deal.reply || "Arduino 未确认"}`
+          : data.deal.state === "legacy"
+          ? `M4 已确认运行（旧固件固定 PWM 255、1 秒），回包：${data.deal.reply}`
+          : data.deal.state === "busy"
+            ? `M4 正在运行，本次没有重复启动，回包：${data.deal.reply}`
+            : `M4 已确认运行：PWM ${request.pwm}，${request.seconds} 秒，回包：${data.deal.reply}`);
+        resetDealControls(data.deal.state === "error" ? 0 : request.duration_ms);
+      }
+    } catch (error) {
+      note(`M4/行驶命令失败：${error.message}`);
+      if (pendingDealRequest) {
+        pendingDealRequest = null;
+        resetDealControls(0);
+      }
+    }
   } while (keysQueued);
   keysSending = false;
 }
@@ -350,7 +378,7 @@ function releaseKeys() { heldKeys.clear(); heldSteeringKeys.clear(); syncVisualS
 function timedMotorSettings(prefix) {
   const pwm = Number($(`#${prefix}Pwm`).value);
   const seconds = Number($(`#${prefix}Seconds`).value);
-  if (!Number.isInteger(pwm) || pwm < 0 || pwm > 255) throw Error("PWM 必须是 0 到 255 的整数");
+  if (!Number.isInteger(pwm) || pwm < 1 || pwm > 255) throw Error("PWM 必须是 1 到 255 的整数；0 不会驱动电机");
   if (!Number.isFinite(seconds) || seconds < .1 || seconds > 60) throw Error("运行时间必须在 0.1 到 60 秒之间");
   return {pwm, duration_ms: Math.round(seconds * 1000), seconds};
 }
@@ -382,22 +410,17 @@ async function dealCard() {
   dealBusy = true;
   const button = document.querySelector("[data-deal]");
   if (button) button.disabled = true;
-  note(`P 出牌命令发送中：M4 PWM ${settings.pwm}，${settings.seconds} 秒`);
-  try {
-    const response = await requestJson("/api/deal", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(settings)}, 3500);
-    const data = await response.json();
-    if (!response.ok || !data.ok) throw Error(data.error || "出牌命令发送失败");
-    note(data.state === "legacy"
-      ? "已触发 M4，但 Arduino 是旧固件：固定 PWM 255、运行 1 秒；重新烧录后才能使用网页参数"
-      : `已触发 M4：PWM ${settings.pwm}，运行 ${settings.seconds} 秒`);
-  } catch (error) {
-    note(error.message);
-  } finally {
-    setTimeout(() => {
-      dealBusy = false;
-      if (button) button.disabled = false;
-    }, settings.duration_ms);
-  }
+  pendingDealRequest = {...settings, token:`${Date.now()}-${++dealRequestSerial}`};
+  note(`P 出牌命令发送中：M4 PWM ${settings.pwm}，${settings.seconds} 秒；正在等待 Arduino 确认`);
+  await sendKeys();
+}
+function resetDealControls(delayMs) {
+  clearTimeout(dealResetTimer);
+  dealResetTimer = setTimeout(() => {
+    dealBusy = false;
+    const button = document.querySelector("[data-deal]");
+    if (button) button.disabled = false;
+  }, Math.max(0, delayMs));
 }
 for (const button of document.querySelectorAll("[data-action]")) {
   const key = actionKeys[button.dataset.action];
@@ -655,7 +678,7 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     if (robot.speed) { $("#wheelSpeed").textContent = `${robot.speed[0].toFixed(1)} / ${robot.speed[1].toFixed(1)} pps`; $("#targetWheelSpeed").textContent = `${robot.speed[2].toFixed(1)} / ${robot.speed[3].toFixed(1)} pps`; }
     if (!configLoaded) { fillConfig(robot.config); configLoaded = true; }
     const age = robot.last_rx_age == null ? "—" : `${robot.last_rx_age.toFixed(2)} s`;
-    $("#status").textContent = [`后端: ${data.api_version || "旧版本，需同步 app.py"}`, `系统指标: ${systemMetricsSupported ? (system.error || "正常") : "当前后端未提供 system/capabilities"}`, `高清帧率: ${highresFpsSupported ? `${fixed(highres.target_fps)} FPS，可调整` : "当前后端不支持，需同步 camera.py"}`, `卡牌电机协议: ${robot.card_motor_protocol || "旧后端未报告"}`, `驱动配置: ${robot.config_source || "旧后端未报告"}`, `配置路径: ${robot.config_path || "旧后端未报告"}`, `配置读取错误: ${robot.config_error || "无"}`, `Arduino: ${robot.arduino_online ? "在线" : robot.serial ? "无响应" : "离线"}`, `串口: ${robot.serial ? "已打开" : "未打开"}`, `最近回包: ${age}`, `动作: ${robot.action}`, `按键: ${robot.keys?.join("+") || "—"}`, `回复: ${robot.reply || "—"}`, `错误: ${robot.error || "—"}`].join("\n");
+    $("#status").textContent = [`后端: ${data.api_version || "旧版本，需同步 app.py"}`, `系统指标: ${systemMetricsSupported ? (system.error || "正常") : "当前后端未提供 system/capabilities"}`, `高清帧率: ${highresFpsSupported ? `${fixed(highres.target_fps)} FPS，可调整` : "当前后端不支持，需同步 camera.py"}`, `卡牌电机协议: ${robot.card_motor_protocol || "旧后端未报告"}`, `卡牌命令回包: ${robot.card_command_reply || "尚未触发"}`, `驱动配置: ${robot.config_source || "旧后端未报告"}`, `配置路径: ${robot.config_path || "旧后端未报告"}`, `配置读取错误: ${robot.config_error || "无"}`, `Arduino: ${robot.arduino_online ? "在线" : robot.serial ? "无响应" : "离线"}`, `串口: ${robot.serial ? "已打开" : "未打开"}`, `最近回包: ${age}`, `动作: ${robot.action}`, `按键: ${robot.keys?.join("+") || "—"}`, `回复: ${robot.reply || "—"}`, `错误: ${robot.error || "—"}`].join("\n");
   } catch (error) { $("#status").textContent = `网页后端连接失败：${error}`; $("#arduinoState").innerHTML = dot(false, "网页服务异常"); }
 }
 addEventListener("beforeunload", stopWebrtc);

@@ -13,6 +13,7 @@ import serial
 HEARTBEAT_SECONDS = 0.20
 SERVO_TICK_SECONDS = 0.05
 CLIENT_TIMEOUT_SECONDS = 0.80
+CARD_COMMAND_ACK_TIMEOUT_SECONDS = 1.20
 ACTIONS = {"STOP", "F", "SF", "B", "PL", "PR", "SPL", "SPR", "FL", "FR", "BL", "BR"}
 # Q/E are steering-servo controls rather than motor profiles.
 KEY_ACTIONS = {"w": "F", "slow": "SF", "a": "PL", "d": "PR", "s": "B", "x": "SPL", "c": "SPR"}
@@ -100,7 +101,13 @@ class RobotController:
         self._last_steering_sent_at = 0.0
         self._last_sent_servo_limits: tuple[float, float] | None = None
         self._servo_target_angle: float | None = None
-        self.imu = self.speed = self.ultrasonic = None; self.servo_angle: int | None = None; self.motor_output: list[int] | None = None; self.card_feed_state = self.card_deal_state = "idle"; self.card_motor_protocol = "unknown"; self.reply = self.error = ""; self.last_rx = 0.0
+        self.imu = self.speed = self.ultrasonic = None; self.servo_angle: int | None = None; self.motor_output: list[int] | None = None; self.card_feed_state = self.card_deal_state = "idle"; self.card_motor_protocol = "unknown"; self.card_command_reply = ""; self._card_reply_sequence = 0; self._card_reply_waiting_for = None
+        self._card_reply_condition = threading.Condition(self.lock)
+        self._card_command_lock = threading.Lock()
+        self._deal_request_lock = threading.Lock()
+        self._last_deal_request_token = ""
+        self._last_deal_request_result: dict | None = None
+        self.reply = self.error = ""; self.last_rx = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._shutdown_lock = threading.Lock()
@@ -189,12 +196,16 @@ class RobotController:
                     if send_stop and port.is_open: port.write(b"STOP\n"); port.flush()
                     if port.is_open: port.close()
                 except Exception: pass
-    def _write(self, command: str) -> None:
+    def _write(self, command: str) -> bool:
         self._connect()
         with self.serial_lock:
             if self.serial:
-                try: self.serial.write((command + "\n").encode("ascii")); self.serial.flush()
-                except Exception as exc: self.error = str(exc); self._close_serial()
+                try:
+                    self.serial.write((command + "\n").encode("ascii")); self.serial.flush()
+                    return True
+                except Exception as exc:
+                    self.error = str(exc); self._close_serial()
+        return False
     def select_action(self, action: str) -> str:
         action = action.upper()
         if action not in ACTIONS: raise ValueError("未知动作")
@@ -253,23 +264,68 @@ class RobotController:
             duration_ms = int(raw_duration_ms)
         except (TypeError, ValueError):
             raise ValueError("电机功率和运行时间必须是整数") from None
-        if not 0 <= pwm <= 255:
-            raise ValueError("电机 PWM 必须在 0 到 255 之间")
+        if not 1 <= pwm <= 255:
+            raise ValueError("电机 PWM 必须在 1 到 255 之间；0 不会驱动电机")
         if not 100 <= duration_ms <= 60000:
             raise ValueError("电机运行时间必须在 100 到 60000 毫秒之间")
         return pwm, duration_ms
+    def _send_card_command_and_wait(self, motor: str, command: str) -> str:
+        with self._card_command_lock:
+            with self._card_reply_condition:
+                before = self._card_reply_sequence
+                self._card_reply_waiting_for = motor
+            if not self._write(command):
+                with self._card_reply_condition:
+                    self._card_reply_waiting_for = None
+                raise RuntimeError(f"串口写入失败：{self.error or 'Arduino 串口未打开'}")
+            deadline = time.monotonic() + CARD_COMMAND_ACK_TIMEOUT_SECONDS
+            with self._card_reply_condition:
+                while self._card_reply_sequence == before:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        self._card_reply_waiting_for = None
+                        raise TimeoutError(f"Arduino 未确认 {command}")
+                    self._card_reply_condition.wait(remaining)
+                self._card_reply_waiting_for = None
+                return self.card_command_reply
+    @staticmethod
+    def _card_result_state(reply: str) -> str:
+        if reply.startswith("OK:"): return "running"
+        if reply.startswith("BUSY:"): return "busy"
+        raise RuntimeError(f"Arduino 拒绝卡牌电机命令：{reply}")
     def deal_card(self, raw_pwm: object = 255, raw_duration_ms: object = 1000) -> str:
-        """Request one adjustable Arduino-timed M4 dealing cycle."""
+        """Request one M4 cycle and wait for Arduino acknowledgement."""
         pwm, duration_ms = self._timed_motor_parameters(raw_pwm, raw_duration_ms)
         with self.lock:
             self.card_deal_state = "requested"
             protocol = self.card_motor_protocol
-        # Firmware before adjustable card controls only accepts the exact
-        # command DEAL. Keep M4 usable while clearly reporting the limitation.
-        self._write("DEAL" if protocol == "legacy" else f"DEAL,{pwm},{duration_ms}")
-        if self.error:
-            raise RuntimeError(f"发送出牌命令失败：{self.error}")
-        return "legacy" if protocol == "legacy" else "requested"
+        command = "DEAL" if protocol == "legacy" else f"DEAL,{pwm},{duration_ms}"
+        try:
+            reply = self._send_card_command_and_wait("DEAL", command)
+            state = self._card_result_state(reply)
+        except (TimeoutError, RuntimeError) as first_error:
+            if protocol != "unknown":
+                with self.lock:
+                    self.card_deal_state = "error"
+                raise RuntimeError(f"发送出牌命令失败：{first_error}") from first_error
+            # A firmware variant whose READY line was missed may only support
+            # the old exact DEAL command. Probe it once before reporting fail.
+            try:
+                reply = self._send_card_command_and_wait("DEAL", "DEAL")
+                state = self._card_result_state(reply)
+                with self.lock:
+                    if reply == "OK:DEAL":
+                        self.card_motor_protocol = "legacy"
+                    elif reply.startswith("OK:DEAL,"):
+                        self.card_motor_protocol = "adjustable"
+                    protocol = self.card_motor_protocol
+            except (TimeoutError, RuntimeError) as fallback_error:
+                with self.lock:
+                    self.card_deal_state = "error"
+                raise RuntimeError(f"新版和旧版出牌命令均未被 Arduino 接受：{fallback_error}") from fallback_error
+        with self.lock:
+            self.card_deal_state = "running" if state in {"running", "busy"} else state
+        return "legacy" if protocol == "legacy" and state == "running" else state
     def feed_cards(self, raw_pwm: object = 255, raw_duration_ms: object = 5000) -> str:
         """Request one adjustable Arduino-timed M3 feed cycle."""
         pwm, duration_ms = self._timed_motor_parameters(raw_pwm, raw_duration_ms)
@@ -279,10 +335,47 @@ class RobotController:
             raise RuntimeError("Arduino 固件过旧，不支持网页触发 M3；请重新烧录新版 motor_bridge 固件")
         with self.lock:
             self.card_feed_state = "requested"
-        self._write(f"FEED,{pwm},{duration_ms}")
-        if self.error:
-            raise RuntimeError(f"发送送牌命令失败：{self.error}")
-        return "requested"
+        try:
+            reply = self._send_card_command_and_wait("FEED", f"FEED,{pwm},{duration_ms}")
+            state = self._card_result_state(reply)
+        except (TimeoutError, RuntimeError) as exc:
+            with self.lock:
+                self.card_feed_state = "error"
+            raise RuntimeError(f"发送送牌命令失败：{exc}") from exc
+        with self.lock:
+            self.card_feed_state = "running" if state in {"running", "busy"} else state
+        return state
+    def deal_from_key_request(self, request: object) -> dict | None:
+        if not isinstance(request, dict):
+            return None
+        token = str(request.get("token", "")).strip()
+        if not token:
+            raise ValueError("出牌事件缺少 token")
+        pwm, duration_ms = self._timed_motor_parameters(
+            request.get("pwm", 255),
+            request.get("duration_ms", 1000),
+        )
+        with self._deal_request_lock:
+            if token == self._last_deal_request_token:
+                return self._last_deal_request_result
+            self._last_deal_request_token = token
+            self._last_deal_request_result = {"token": token, "state": "pending", "reply": ""}
+            threading.Thread(
+                target=self._complete_deal_request,
+                args=(token, pwm, duration_ms),
+                daemon=True,
+                name="card-deal-request",
+            ).start()
+            return self._last_deal_request_result
+    def _complete_deal_request(self, token: str, pwm: int, duration_ms: int) -> None:
+        try:
+            state = self.deal_card(pwm, duration_ms)
+            result = {"token": token, "state": state, "reply": self.card_command_reply}
+        except (RuntimeError, ValueError) as exc:
+            result = {"token": token, "state": "error", "reply": self.card_command_reply, "error": str(exc)}
+        with self._deal_request_lock:
+            if token == self._last_deal_request_token:
+                self._last_deal_request_result = result
     def set_servo_angle(self, raw_angle: object, *, fast: bool = False, track_target: bool = True) -> int:
         """Set a smooth target or request a mechanical-speed SG90 return."""
         try: angle = int(raw_angle)
@@ -350,6 +443,20 @@ class RobotController:
             self._write(f"SVD,{direction}")
     def _parse(self, text: str) -> None:
         self.reply, self.last_rx = text, time.monotonic()
+        with self._card_reply_condition:
+            waiting_for = self._card_reply_waiting_for
+            is_expected_card_reply = bool(
+                waiting_for
+                and (
+                    text.startswith(f"OK:{waiting_for}")
+                    or text == f"BUSY:{waiting_for}"
+                    or text.startswith("ERR:")
+                )
+            )
+            if is_expected_card_reply:
+                self.card_command_reply = text
+                self._card_reply_sequence += 1
+                self._card_reply_condition.notify_all()
         try:
             parts = text.split(",")
             if text.startswith("READY:MOTOR_BRIDGE"):
@@ -412,6 +519,6 @@ class RobotController:
                 for command in ("IMU", "SPD", "US", "OUT"): self._write(command)
                 next_query = now + .5
     def status(self) -> dict:
-        with self.lock: cfg, action, seen, feed_state, deal_state, card_protocol = asdict(self.config), self.action, self.last_client_seen, self.card_feed_state, self.card_deal_state, self.card_motor_protocol
+        with self.lock: cfg, action, seen, feed_state, deal_state, card_protocol, card_reply = asdict(self.config), self.action, self.last_client_seen, self.card_feed_state, self.card_deal_state, self.card_motor_protocol, self.card_command_reply
         serial_open = bool(self.serial and self.serial.is_open); age = time.monotonic() - self.last_rx if self.last_rx else None
-        return {"serial":serial_open,"arduino_online":serial_open and age is not None and age <= 1.5,"last_rx_age":age,"error":self.error,"reply":self.reply,"config":cfg,"config_path":str(self.config_path),"config_source":self.config_source,"config_error":self.config_error,"action":action,"keys":sorted(self.held_keys),"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"steering_direction":self.steering_direction,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic,"servo_angle":self.servo_angle,"motor_output":self.motor_output,"card_feed_state":feed_state,"card_deal_state":deal_state,"card_motor_protocol":card_protocol}
+        return {"serial":serial_open,"arduino_online":serial_open and age is not None and age <= 1.5,"last_rx_age":age,"error":self.error,"reply":self.reply,"config":cfg,"config_path":str(self.config_path),"config_source":self.config_source,"config_error":self.config_error,"action":action,"keys":sorted(self.held_keys),"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"steering_direction":self.steering_direction,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic,"servo_angle":self.servo_angle,"motor_output":self.motor_output,"card_feed_state":feed_state,"card_deal_state":deal_state,"card_motor_protocol":card_protocol,"card_command_reply":card_reply}

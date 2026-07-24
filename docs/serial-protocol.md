@@ -5,8 +5,8 @@
 | 命令 | 说明 |
 | --- | --- |
 | `M,m1,m2,m3,m4` | 行驶 PWM（-255..255）；M1 为右侧、M2 为左侧，M3/M4 字段被忽略 |
-| `FEED,pwm,timeMs` | 触发一次 M3 送牌；`pwm` 为 0–255，`timeMs` 为 100–60000，方向固定为已验证的反向；运行期间重复命令返回 `BUSY:FEED` |
-| `DEAL,pwm,timeMs` | 触发一次 M4 出牌；`pwm` 为 0–255，`timeMs` 为 100–60000，方向固定为已验证的反向；运行期间重复命令返回 `BUSY:DEAL` |
+| `FEED,pwm,timeMs` | 触发一次 M3 送牌；`pwm` 为 1–255，`timeMs` 为 100–60000，方向固定为已验证的反向；运行期间重复命令返回 `BUSY:FEED` |
+| `DEAL,pwm,timeMs` | 触发一次 M4 出牌；`pwm` 为 1–255，`timeMs` 为 100–60000，方向固定为已验证的反向；运行期间重复命令返回 `BUSY:DEAL` |
 | `V,leftPPS,rightPPS` | M2/M1 左右行驶电机 PID 的目标脉冲每秒 |
 | `KP,value` / `KI,value` / `KD,value` | 后轮 PID 参数 |
 | `STOP` | 立即停止 M1/M2 行驶并退出速度模式；不打断已经触发的 M3/M4 本地定时周期 |

@@ -813,6 +813,21 @@ bool parseIntegerStrict(const char *text, int &result) {
   return true;
 }
 
+bool parseUnsignedLongStrict(const char *text, unsigned long &result) {
+  if (text == nullptr || *text == '\0' || *text == '-') {
+    return false;
+  }
+
+  char *endPointer = nullptr;
+  unsigned long value = strtoul(text, &endPointer, 10);
+  if (endPointer == text || *endPointer != '\0') {
+    return false;
+  }
+
+  result = value;
+  return true;
+}
+
 // Parse a floating-point string.  Returns true on success.
 bool parseFloat(const char *text, float &result) {
   if (text == nullptr || *text == '\0') {
@@ -952,18 +967,18 @@ bool parseTimedMotorPayload(
 
   *comma = '\0';
   int parsedPwm = 0;
-  int parsedDurationMs = 0;
+  unsigned long parsedDurationMs = 0;
   if (!parseIntegerStrict(payload, parsedPwm)
-      || !parseIntegerStrict(comma + 1, parsedDurationMs)
-      || parsedPwm < 0
+      || !parseUnsignedLongStrict(comma + 1, parsedDurationMs)
+      || parsedPwm < 1
       || parsedPwm > 255
-      || parsedDurationMs < (int)MIN_CARD_MOTOR_TIME_MS
-      || parsedDurationMs > (int)MAX_CARD_MOTOR_TIME_MS) {
+      || parsedDurationMs < MIN_CARD_MOTOR_TIME_MS
+      || parsedDurationMs > MAX_CARD_MOTOR_TIME_MS) {
     return false;
   }
 
   pwm = (uint8_t)parsedPwm;
-  durationMs = (unsigned long)parsedDurationMs;
+  durationMs = parsedDurationMs;
   return true;
 }
 
