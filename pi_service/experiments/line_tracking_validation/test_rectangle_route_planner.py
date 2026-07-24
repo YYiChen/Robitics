@@ -29,8 +29,8 @@ class ClockwiseRectanglePlannerTests(unittest.TestCase):
     def test_confirmed_right_corner_turns_after_line_end(self):
         planner = ClockwiseRectanglePlanner()
         observations = (
-            Observation(0.02, 0.22),
-            Observation(0.05, 0.25),
+            Observation(0.02, 0.42),
+            Observation(0.05, 0.45),
             LOST,
             LOST,
             LOST,
@@ -56,7 +56,7 @@ class ClockwiseRectanglePlannerTests(unittest.TestCase):
 
     def test_new_edge_needs_three_frames_before_straight(self):
         planner = ClockwiseRectanglePlanner()
-        for item in (Observation(0.03, 0.23), Observation(0.05, 0.25), LOST, LOST):
+        for item in (Observation(0.03, 0.43), Observation(0.05, 0.45), LOST, LOST):
             planner.step(item)
         decisions = [planner.step(Observation(-0.02, 0.01)) for _ in range(3)]
         self.assertEqual(

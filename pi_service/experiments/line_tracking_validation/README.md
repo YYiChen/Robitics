@@ -39,6 +39,11 @@ http://100.80.46.54:5000/video_feed
 ..\\..\\..\\third_party\\DeskMate-Advance\\src\\track_line\\config.white_on_green.json
 ```
 
+为避免桌腿、椅轮等黑色物体被误认为胶带，默认只在车前方的梯形赛道区域内
+检测；预览中的浅蓝色梯形就是该范围。可通过 `--track-roi-top-width` 和
+`--track-roi-bottom-width` 调整宽度。车不在路线附近时，显示 `STOP` 是预期的
+安全行为。
+
 命令行调试示例（需要提高处理频率时改为 `--process-fps 15`）：
 
 ```powershell

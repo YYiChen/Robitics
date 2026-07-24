@@ -47,7 +47,7 @@ class RectanglePlannerConfig:
     """Initial thresholds; tune them from recordings of the mounted camera."""
 
     minimum_confidence: float = 0.55
-    right_heading_threshold: float = 0.18
+    right_heading_threshold: float = 0.35
     right_offset_threshold: float = 0.12
     corner_confirmation_frames: int = 2
     missing_before_turn: int = 2
