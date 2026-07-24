@@ -282,7 +282,7 @@ def main() -> int:
     if args.enable_motors:
         motor_executor = RobotWebMotorExecutor(MotorControlConfig(args.controller_url))
         motor_executor.configure()
-        print("motor_control=armed straight_pwm=105 pivot_pwm=165", flush=True)
+        print("motor_control=armed straight_pwm=85 pivot_pwm=145", flush=True)
     print(
         "vision_control="
         f"process_fps={args.process_fps:g} "
