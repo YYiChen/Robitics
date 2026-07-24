@@ -264,8 +264,8 @@ class RobotController:
             duration_ms = int(raw_duration_ms)
         except (TypeError, ValueError):
             raise ValueError("电机功率和运行时间必须是整数") from None
-        if not 1 <= pwm <= 255:
-            raise ValueError("电机 PWM 必须在 1 到 255 之间；0 不会驱动电机")
+        if pwm == 0 or not -255 <= pwm <= 255:
+            raise ValueError("电机 PWM 必须在 -255 到 255 之间，正负号控制方向；0 不会驱动电机")
         if not 100 <= duration_ms <= 60000:
             raise ValueError("电机运行时间必须在 100 到 60000 毫秒之间")
         return pwm, duration_ms
@@ -326,7 +326,7 @@ class RobotController:
         with self.lock:
             self.card_deal_state = "running" if state in {"running", "busy"} else state
         return "legacy" if protocol == "legacy" and state == "running" else state
-    def feed_cards(self, raw_pwm: object = 255, raw_duration_ms: object = 5000) -> str:
+    def feed_cards(self, raw_pwm: object = -255, raw_duration_ms: object = 5000) -> str:
         """Request one adjustable Arduino-timed M3 feed cycle."""
         pwm, duration_ms = self._timed_motor_parameters(raw_pwm, raw_duration_ms)
         with self.lock:
@@ -352,7 +352,7 @@ class RobotController:
         if not token:
             raise ValueError("出牌事件缺少 token")
         feed_pwm, feed_duration_ms = self._timed_motor_parameters(
-            request.get("feed_pwm", 255),
+            request.get("feed_pwm", -255),
             request.get("feed_duration_ms", 5000),
         )
         deal_pwm, deal_duration_ms = self._timed_motor_parameters(

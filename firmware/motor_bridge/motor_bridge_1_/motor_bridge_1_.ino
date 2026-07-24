@@ -13,8 +13,8 @@
 //
 //   Motor control:
 //     M,m1,m2,m3,m4\n         raw drive PWM (-255..255); M3/M4 fields ignored
-//     FEED,pwm,timeMs\n        run M3 with adjustable power and duration
-//     DEAL,pwm,timeMs\n        run M4 with adjustable power and duration
+//     FEED,signedPwm,timeMs\n  run M3 with adjustable power, direction and duration
+//     DEAL,signedPwm,timeMs\n  run M4 with adjustable power, direction and duration
 //
 //   Speed control (left/right drive):
 //     V,leftPPS,rightPPS\n    target speed in pulses/sec (signed)
@@ -70,10 +70,11 @@ const unsigned long STOPPED_REPORT_INTERVAL_MS = 1000;
 // briefly to reduce current and mechanical shock.
 const unsigned long REVERSE_PAUSE_MS = 80;
 
-// Card mechanism. Both motors keep the tested BACKWARD direction; the web
-// supplies an unsigned PWM and duration for every trigger.
-constexpr uint8_t DEFAULT_CARD_FEED_PWM = 255;
-constexpr uint8_t DEFAULT_CARD_DEAL_PWM = 255;
+// Card mechanism. Signed PWM determines direction: positive is FORWARD and
+// negative is BACKWARD. Web controls can therefore adjust each card motor's
+// speed, direction and runtime without reflashing the Arduino.
+constexpr int DEFAULT_CARD_FEED_PWM = -255;
+constexpr int DEFAULT_CARD_DEAL_PWM = 255;
 constexpr unsigned long DEFAULT_CARD_FEED_TIME_MS = 5000UL;
 constexpr unsigned long DEFAULT_CARD_DEAL_TIME_MS = 1000UL;
 constexpr unsigned long MIN_CARD_MOTOR_TIME_MS = 100UL;
@@ -361,13 +362,12 @@ void releaseAllMotors() {
 #endif
 #include "motor_control.h"
 
-bool startCardFeed(uint8_t pwm, unsigned long durationMs) {
+bool startCardFeed(int pwm, unsigned long durationMs) {
   if (cardFeedRunning) {
     return false;
   }
-  const int command = -(int)pwm;
-  applyOneMotor(motor3, command);
-  currentMotorCommands[2] = command;
+  applyOneMotor(motor3, pwm);
+  currentMotorCommands[2] = pwm;
   cardFeedStartedAt = millis();
   cardFeedDurationMs = durationMs;
   cardFeedRunning = true;
@@ -385,13 +385,12 @@ void updateCardFeed() {
   Serial.println(F("FEED:DONE"));
 }
 
-bool startCardDeal(uint8_t pwm, unsigned long durationMs) {
+bool startCardDeal(int pwm, unsigned long durationMs) {
   if (cardDealRunning) {
     return false;
   }
-  const int command = -(int)pwm;
-  applyOneMotor(motor4, command);
-  currentMotorCommands[3] = command;
+  applyOneMotor(motor4, pwm);
+  currentMotorCommands[3] = pwm;
   cardDealStartedAt = millis();
   cardDealDurationMs = durationMs;
   cardDealRunning = true;
@@ -957,7 +956,7 @@ bool parseMotorCommand(char *line, int output[4]) {
 
 bool parseTimedMotorPayload(
   char *payload,
-  uint8_t &pwm,
+  int &pwm,
   unsigned long &durationMs
 ) {
   char *comma = strchr(payload, ',');
@@ -970,14 +969,15 @@ bool parseTimedMotorPayload(
   unsigned long parsedDurationMs = 0;
   if (!parseIntegerStrict(payload, parsedPwm)
       || !parseUnsignedLongStrict(comma + 1, parsedDurationMs)
-      || parsedPwm < 1
-      || parsedPwm > 255
+      || parsedPwm == 0
+      || parsedPwm < -MOTOR_COMMAND_LIMIT
+      || parsedPwm > MOTOR_COMMAND_LIMIT
       || parsedDurationMs < MIN_CARD_MOTOR_TIME_MS
       || parsedDurationMs > MAX_CARD_MOTOR_TIME_MS) {
     return false;
   }
 
-  pwm = (uint8_t)parsedPwm;
+  pwm = parsedPwm;
   durationMs = parsedDurationMs;
   return true;
 }
@@ -1001,10 +1001,10 @@ void executeLine(char *line) {
 
   // M3 feed is locally timed and does not refresh the drive watchdog.
   if (strcmp(line, "FEED") == 0 || strncmp(line, "FEED,", 5) == 0) {
-    uint8_t pwm = DEFAULT_CARD_FEED_PWM;
+    int pwm = DEFAULT_CARD_FEED_PWM;
     unsigned long durationMs = DEFAULT_CARD_FEED_TIME_MS;
     if (line[4] != '\0' && !parseTimedMotorPayload(line + 5, pwm, durationMs)) {
-      Serial.println(F("ERR:FEED_POWER_TIME"));
+      Serial.println(F("ERR:FEED_SIGNED_POWER_TIME"));
       return;
     }
     if (startCardFeed(pwm, durationMs)) {
@@ -1021,10 +1021,10 @@ void executeLine(char *line) {
   // One-shot card dealing does not refresh the vehicle-drive watchdog.
   // Repeated requests while M4 is active are ignored instead of extending it.
   if (strcmp(line, "DEAL") == 0 || strncmp(line, "DEAL,", 5) == 0) {
-    uint8_t pwm = DEFAULT_CARD_DEAL_PWM;
+    int pwm = DEFAULT_CARD_DEAL_PWM;
     unsigned long durationMs = DEFAULT_CARD_DEAL_TIME_MS;
     if (line[4] != '\0' && !parseTimedMotorPayload(line + 5, pwm, durationMs)) {
-      Serial.println(F("ERR:DEAL_POWER_TIME"));
+      Serial.println(F("ERR:DEAL_SIGNED_POWER_TIME"));
       return;
     }
     if (startCardDeal(pwm, durationMs)) {

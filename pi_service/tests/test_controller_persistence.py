@@ -66,17 +66,17 @@ class ControllerPersistenceTests(unittest.TestCase):
             def write_with_ack(command: str) -> bool:
                 commands.append(command)
                 if command.startswith("DEAL"): controller._parse("OK:DEAL,180,2500")
-                if command.startswith("FEED"): controller._parse("OK:FEED,200,5000")
+                if command.startswith("FEED"): controller._parse("OK:FEED,-200,5000")
                 return True
             controller._write = write_with_ack
             self.assertEqual(controller.deal_card(180, 2500), "running")
-            self.assertEqual(controller.feed_cards(200, 5000), "running")
-            self.assertEqual(commands, ["DEAL,180,2500", "FEED,200,5000"])
+            self.assertEqual(controller.feed_cards(-200, 5000), "running")
+            self.assertEqual(commands, ["DEAL,180,2500", "FEED,-200,5000"])
             controller._parse("OK:DEAL,180,2500")
             self.assertEqual(controller.card_deal_state, "running")
             controller._parse("DEAL:DONE")
             self.assertEqual(controller.card_deal_state, "idle")
-            controller._parse("OK:FEED,200,5000")
+            controller._parse("OK:FEED,-200,5000")
             self.assertEqual(controller.card_feed_state, "running")
             controller._parse("FEED:DONE")
             self.assertEqual(controller.card_feed_state, "idle")
@@ -84,7 +84,7 @@ class ControllerPersistenceTests(unittest.TestCase):
     def test_card_motor_power_and_time_are_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             controller = RobotController("unused", Path(directory) / "drive_config.json")
-            for pwm, duration in [(0, 1000), (-1, 1000), (256, 1000), (100, 99), (100, 60001)]:
+            for pwm, duration in [(0, 1000), (-256, 1000), (256, 1000), (100, 99), (100, 60001)]:
                 with self.assertRaises(ValueError):
                     controller.deal_card(pwm, duration)
 
@@ -146,14 +146,14 @@ class ControllerPersistenceTests(unittest.TestCase):
             commands: list[str] = []
             def write_both_acks(command: str) -> bool:
                 commands.append(command)
-                controller._parse("OK:FEED,180,2500" if command.startswith("FEED") else "OK:DEAL,210,900")
+                controller._parse("OK:FEED,-180,2500" if command.startswith("FEED") else "OK:DEAL,-210,900")
                 return True
             controller._write = write_both_acks
             request = {
                 "token": "p-both",
-                "feed_pwm": 180,
+                "feed_pwm": -180,
                 "feed_duration_ms": 2500,
-                "deal_pwm": 210,
+                "deal_pwm": -210,
                 "deal_duration_ms": 900,
             }
             result = controller.deal_from_key_request(request)
@@ -162,9 +162,9 @@ class ControllerPersistenceTests(unittest.TestCase):
                 time.sleep(.01)
                 result = controller.deal_from_key_request(request)
             self.assertEqual(result["state"], "running")
-            self.assertEqual(result["feed"]["reply"], "OK:FEED,180,2500")
-            self.assertEqual(result["deal"]["reply"], "OK:DEAL,210,900")
-            self.assertEqual(commands, ["FEED,180,2500", "DEAL,210,900"])
+            self.assertEqual(result["feed"]["reply"], "OK:FEED,-180,2500")
+            self.assertEqual(result["deal"]["reply"], "OK:DEAL,-210,900")
+            self.assertEqual(commands, ["FEED,-180,2500", "DEAL,-210,900"])
 
     def test_steering_syncs_direction_and_limits_to_arduino(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

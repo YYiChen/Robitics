@@ -364,14 +364,14 @@ async function sendKeys() {
           ? `M3失败：${feedResult.error || feedResult.reply || "未确认"}`
           : feedResult.state === "busy"
             ? `M3已在运行：${feedResult.reply}`
-            : `M3已运行 PWM ${request.feed_pwm}/${request.feed_seconds}秒：${feedResult.reply}`;
+            : `M3已运行 ${request.feed_direction_label}/PWM ${request.feed_power}/${request.feed_seconds}秒：${feedResult.reply}`;
         const dealText = dealResult.state === "error"
           ? `M4失败：${dealResult.error || dealResult.reply || "未确认"}`
           : dealResult.state === "busy"
             ? `M4已在运行：${dealResult.reply}`
             : dealResult.state === "legacy"
               ? `M4按旧固件固定参数运行：${dealResult.reply}`
-              : `M4已运行 PWM ${request.deal_pwm}/${request.deal_seconds}秒：${dealResult.reply}`;
+              : `M4已运行 ${request.deal_direction_label}/PWM ${request.deal_power}/${request.deal_seconds}秒：${dealResult.reply}`;
         note(`${feedText}；${dealText}`);
         resetDealControls(data.deal.state === "error" ? 0 : Math.max(request.feed_duration_ms, request.deal_duration_ms));
       }
@@ -391,11 +391,13 @@ function setKey(key, pressed) { if (pressed) heldKeys.add(key); else heldKeys.de
 function setSteeringKey(key, pressed) { if (pressed) heldSteeringKeys.add(key); else heldSteeringKeys.delete(key); syncVisualSteeringDirection(); sendKeys(); }
 function releaseKeys() { heldKeys.clear(); heldSteeringKeys.clear(); syncVisualSteeringDirection(); sendKeys(); }
 function timedMotorSettings(prefix) {
-  const pwm = Number($(`#${prefix}Pwm`).value);
+  const power = Number($(`#${prefix}Pwm`).value);
+  const direction = Number($(`#${prefix}Direction`).value);
   const seconds = Number($(`#${prefix}Seconds`).value);
-  if (!Number.isInteger(pwm) || pwm < 1 || pwm > 255) throw Error("PWM 必须是 1 到 255 的整数；0 不会驱动电机");
+  if (!Number.isInteger(power) || power < 1 || power > 255) throw Error("PWM 必须是 1 到 255 的整数；0 不会驱动电机");
+  if (direction !== 1 && direction !== -1) throw Error("电机方向必须选择正转或反转");
   if (!Number.isFinite(seconds) || seconds < .1 || seconds > 60) throw Error("运行时间必须在 0.1 到 60 秒之间");
-  return {pwm, duration_ms: Math.round(seconds * 1000), seconds};
+  return {pwm: power * direction, power, direction, directionLabel: direction > 0 ? "正转" : "反转", duration_ms: Math.round(seconds * 1000), seconds};
 }
 async function feedCards() {
   if (feedBusy) return;
@@ -408,7 +410,7 @@ async function feedCards() {
     const response = await requestJson("/api/feed", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(settings)}, 3500);
     const data = await response.json();
     if (!response.ok || !data.ok) throw Error(data.error || "M3 送牌命令发送失败");
-    note(`已触发 M3：PWM ${settings.pwm}，运行 ${settings.seconds} 秒`);
+    note(`已触发 M3：${settings.directionLabel}，PWM ${settings.power}，运行 ${settings.seconds} 秒`);
   } catch (error) {
     note(error.message);
   } finally {
@@ -431,13 +433,17 @@ async function dealCard() {
   pendingDealRequest = {
     token:`${Date.now()}-${++dealRequestSerial}`,
     feed_pwm:feedSettings.pwm,
+    feed_power:feedSettings.power,
+    feed_direction_label:feedSettings.directionLabel,
     feed_duration_ms:feedSettings.duration_ms,
     feed_seconds:feedSettings.seconds,
     deal_pwm:dealSettings.pwm,
+    deal_power:dealSettings.power,
+    deal_direction_label:dealSettings.directionLabel,
     deal_duration_ms:dealSettings.duration_ms,
     deal_seconds:dealSettings.seconds,
   };
-  note(`P 组合命令发送中：M3 PWM ${feedSettings.pwm}/${feedSettings.seconds}秒，M4 PWM ${dealSettings.pwm}/${dealSettings.seconds}秒`);
+  note(`P 组合命令发送中：M3 ${feedSettings.directionLabel}/PWM ${feedSettings.power}/${feedSettings.seconds}秒，M4 ${dealSettings.directionLabel}/PWM ${dealSettings.power}/${dealSettings.seconds}秒`);
   await sendKeys();
 }
 function resetDealControls(delayMs) {
@@ -463,7 +469,7 @@ for (const button of document.querySelectorAll("[data-feed]")) button.addEventLi
 for (const button of document.querySelectorAll("[data-deal]")) button.addEventListener("click", dealCard);
 for (const button of document.querySelectorAll("[data-servo-center]")) button.addEventListener("click", centerServo);
 addEventListener("keydown", event => { if (event.repeat) return;
-  // P is reserved exclusively for M4 dealing. Use KeyboardEvent.code as well
+  // P is reserved for the combined M3/M4 card action. Use KeyboardEvent.code as well
   // so the physical key still works with a Chinese input method enabled.
   if (event.code === "KeyP" || event.key?.toLowerCase() === "p") { event.preventDefault(); dealCard(); return; }
   if (editing(event)) return;

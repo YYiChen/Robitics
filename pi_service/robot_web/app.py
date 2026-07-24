@@ -72,7 +72,7 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
     @app.post("/api/feed")
     def feed():
         payload = request.get_json(silent=True) or {}
-        try: return jsonify(ok=True, state=controller.feed_cards(payload.get("pwm", 255), payload.get("duration_ms", 5000)))
+        try: return jsonify(ok=True, state=controller.feed_cards(payload.get("pwm", -255), payload.get("duration_ms", 5000)))
         except ValueError as exc: return jsonify(ok=False, error=str(exc)), 400
         except RuntimeError as exc: return jsonify(ok=False, error=str(exc)), 503
     @app.post("/api/servo")

@@ -45,7 +45,7 @@ class CameraMetricsTests(unittest.TestCase):
     def test_p_event_carries_independent_m3_and_m4_presets(self) -> None:
         script = (Path(__file__).parents[1] / "robot_web" / "static" / "app.js").read_text(encoding="utf-8")
         deal_card = script.split("async function dealCard()", 1)[1].split("function resetDealControls", 1)[0]
-        for field in ("feed_pwm", "feed_duration_ms", "deal_pwm", "deal_duration_ms"):
+        for field in ("feed_pwm", "feed_duration_ms", "deal_pwm", "deal_duration_ms", "feedSettings.directionLabel", "dealSettings.directionLabel"):
             self.assertIn(field, deal_card)
 
     def test_reports_encoded_and_stream_bandwidth(self) -> None:
