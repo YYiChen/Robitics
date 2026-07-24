@@ -8,6 +8,8 @@ from fixed_rectangle_planner import FixedClockwiseRectanglePlanner, FixedRectang
 class Observation:
     line_lost: bool = False
     confidence: float = 0.8
+    corner_direction: str | None = None
+    corner_distance_px: float | None = None
 
 
 class FixedRectanglePlannerTests(unittest.TestCase):
@@ -31,6 +33,15 @@ class FixedRectanglePlannerTests(unittest.TestCase):
         planner.step(Observation(True, 0), .1)
         planner.step(Observation(True, 0), .2)
         self.assertEqual(planner.step(Observation(True, 0), .3).intent, RectangleIntent.STOP)
+
+    def test_prearmed_right_corner_pivots_on_first_lost_frame(self):
+        planner = FixedClockwiseRectanglePlanner(FixedRectangleConfig(line_lost_corner_frames=5, right_turn_seconds=.3, prearm_corner_distance_px=170))
+        self.assertEqual(planner.step(Observation(), 0).intent, RectangleIntent.FOLLOW_LINE)
+        armed = planner.step(Observation(False, .8, "RIGHT", 120), .1)
+        self.assertTrue(armed.corner_armed)
+        turn = planner.step(Observation(True, 0), .2)
+        self.assertEqual(turn.intent, RectangleIntent.PIVOT_RIGHT)
+        self.assertEqual(turn.reason, "prearmed_right_corner_line_end_reached")
 
 
 if __name__ == "__main__":

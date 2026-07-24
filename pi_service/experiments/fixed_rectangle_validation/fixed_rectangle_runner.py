@@ -40,6 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reacquire-frames", type=int, default=3)
     parser.add_argument("--reacquire-timeout-seconds", type=float, default=0.80)
     parser.add_argument("--corners-to-complete", type=int, default=4)
+    parser.add_argument("--prearm-corner-distance-px", type=float, default=170.0)
     parser.add_argument("--straight-pwm", type=int, default=75)
     parser.add_argument("--launch-pwm", type=int, default=155)
     parser.add_argument("--pivot-pwm", type=int, default=155)
@@ -59,11 +60,12 @@ def source_value(source: str) -> int | str:
 def overlay(frame, decision, motor_action: str):
     output = frame.copy()
     color = (0, 0, 255) if decision.intent.value == "STOP" else (0, 165, 255) if decision.intent.value == "PIVOT_RIGHT" else (0, 220, 0)
-    cv2.rectangle(output, (10, 76), (630, 190), (20, 20, 20), cv2.FILLED)
+    cv2.rectangle(output, (10, 76), (630, 215), (20, 20, 20), cv2.FILLED)
     cv2.putText(output, f"RECTANGLE: {decision.intent.value}", (18, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.72, color, 2, cv2.LINE_AA)
     cv2.putText(output, f"{decision.state.value}: {decision.reason}", (18, 132), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 255, 255), 1, cv2.LINE_AA)
     cv2.putText(output, f"corner={decision.corner_count}/4 lost_frames={decision.lost_frames}", (18, 157), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 220, 100), 1, cv2.LINE_AA)
     cv2.putText(output, f"MOTOR: {motor_action}", (18, 181), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (100, 220, 255), 1, cv2.LINE_AA)
+    cv2.putText(output, f"RIGHT_CORNER_ARMED: {decision.corner_armed}", (18, 205), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (100, 220, 255), 1, cv2.LINE_AA)
     return output
 
 
@@ -79,6 +81,7 @@ def main() -> int:
         reacquire_frames=args.reacquire_frames,
         reacquire_timeout_seconds=args.reacquire_timeout_seconds,
         corners_to_complete=args.corners_to_complete,
+        prearm_corner_distance_px=args.prearm_corner_distance_px,
     )
     planner = FixedClockwiseRectanglePlanner(planner_config)
     executor = None

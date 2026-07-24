@@ -26,6 +26,8 @@ class RectangleState(str, Enum):
 class LineObservation(Protocol):
     line_lost: bool
     confidence: float
+    corner_direction: str | None
+    corner_distance_px: float | None
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,7 @@ class FixedRectangleConfig:
     reacquire_frames: int = 3
     reacquire_timeout_seconds: float = 0.80
     corners_to_complete: int = 4
+    prearm_corner_distance_px: float = 170.0
 
     def __post_init__(self) -> None:
         if not 0 <= self.minimum_confidence <= 1:
@@ -47,6 +50,8 @@ class FixedRectangleConfig:
             raise ValueError("phase durations must be non-negative")
         if self.corners_to_complete < 1:
             raise ValueError("corners_to_complete must be at least one")
+        if self.prearm_corner_distance_px <= 0:
+            raise ValueError("prearm corner distance must be positive")
 
 
 @dataclass(frozen=True)
@@ -56,6 +61,7 @@ class RectangleDecision:
     reason: str
     corner_count: int
     lost_frames: int
+    corner_armed: bool
 
 
 class FixedClockwiseRectanglePlanner:
@@ -69,12 +75,13 @@ class FixedClockwiseRectanglePlanner:
         self._phase_started_at = 0.0
         self._corner_count = 0
         self._has_seen_line = False
+        self._corner_armed = False
 
     def _visible(self, observation: LineObservation) -> bool:
         return not observation.line_lost and observation.confidence >= self.config.minimum_confidence
 
     def _decision(self, intent: RectangleIntent, reason: str) -> RectangleDecision:
-        return RectangleDecision(intent, self.state, reason, self._corner_count, self._lost_frames)
+        return RectangleDecision(intent, self.state, reason, self._corner_count, self._lost_frames, self._corner_armed)
 
     def step(self, observation: LineObservation, now: float) -> RectangleDecision:
         visible = self._visible(observation)
@@ -85,11 +92,23 @@ class FixedClockwiseRectanglePlanner:
             if visible:
                 self._has_seen_line = True
                 self._lost_frames = 0
+                if (
+                    observation.corner_direction == "RIGHT"
+                    and observation.corner_distance_px is not None
+                    and observation.corner_distance_px <= self.config.prearm_corner_distance_px
+                ):
+                    self._corner_armed = True
+                    return self._decision(RectangleIntent.FOLLOW_LINE, "right_corner_armed_waiting_for_line_end")
                 return self._decision(RectangleIntent.FOLLOW_LINE, "following_visible_line")
             if not self._has_seen_line:
                 self.state = RectangleState.LOST
                 return self._decision(RectangleIntent.STOP, "startup_line_missing")
             self._lost_frames += 1
+            if self._corner_armed:
+                self.state = RectangleState.TURN_RIGHT
+                self._phase_started_at = now
+                self._corner_armed = False
+                return self._decision(RectangleIntent.PIVOT_RIGHT, "prearmed_right_corner_line_end_reached")
             if self._lost_frames < self.config.line_lost_corner_frames:
                 return self._decision(RectangleIntent.FOLLOW_LINE, "brief_line_loss_grace")
             self.state = RectangleState.APPROACH
@@ -107,6 +126,7 @@ class FixedClockwiseRectanglePlanner:
             if now - self._phase_started_at < self.config.right_turn_seconds:
                 return self._decision(RectangleIntent.PIVOT_RIGHT, "fixed_right_turn_in_progress")
             self._corner_count += 1
+            self._corner_armed = False
             if self._corner_count >= self.config.corners_to_complete:
                 self.state = RectangleState.COMPLETE
                 return self._decision(RectangleIntent.STOP, "four_corners_complete")
