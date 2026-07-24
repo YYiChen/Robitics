@@ -44,10 +44,11 @@ class ControllerPersistenceTests(unittest.TestCase):
             self.assertEqual(second.config.servo_acceleration_dps2, 88.0)
             self.assertTrue(second.config.servo_qe_reversed)
 
-    def test_r_is_slow_forward_and_qe_do_not_select_motor_actions(self) -> None:
+    def test_wasd_drive_and_qe_do_not_select_motor_actions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             controller = RobotController("unused", Path(directory) / "drive_config.json")
-            self.assertEqual(controller.update_keys({"keys": ["r"]}), "SF")
+            self.assertEqual(controller.update_keys({"keys": ["slow"]}), "SF")
+            self.assertEqual(controller.update_keys({"keys": ["r"]}), "STOP")
             self.assertEqual(controller.config.profiles["SF"], {"rf": 100, "lf": 100, "lr": 100, "rr": 100})
             self.assertEqual(controller.update_keys({"keys": ["w", "a"]}), "FL")
             self.assertEqual(controller.update_keys({"keys": ["w", "d"]}), "FR")

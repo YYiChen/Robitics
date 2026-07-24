@@ -15,7 +15,7 @@ SERVO_TICK_SECONDS = 0.05
 CLIENT_TIMEOUT_SECONDS = 0.80
 ACTIONS = {"STOP", "F", "SF", "B", "PL", "PR", "SPL", "SPR", "FL", "FR", "BL", "BR"}
 # Q/E are steering-servo controls rather than motor profiles.
-KEY_ACTIONS = {"w": "F", "r": "SF", "a": "PL", "d": "PR", "s": "B", "x": "SPL", "c": "SPR"}
+KEY_ACTIONS = {"w": "F", "slow": "SF", "a": "PL", "d": "PR", "s": "B", "x": "SPL", "c": "SPR"}
 PROFILE_ACTIONS = ("F", "SF", "B", "PL", "PR", "SPL", "SPR", "FL", "FR", "BL", "BR")
 WHEELS = ("rf", "lf", "lr", "rr")
 
@@ -212,7 +212,7 @@ class RobotController:
         if forward < 0: return "BL" if turn < 0 else "BR" if turn > 0 else "B"
         if turn < 0: return "PL"
         if turn > 0: return "PR"
-        return "SF" if "r" in keys else "STOP"
+        return "SF" if "slow" in keys else "STOP"
     def update_keys(self, payload: dict) -> str:
         received = payload.get("keys", [])
         keys = {str(key).lower() for key in received if str(key).lower() in KEY_ACTIONS} if isinstance(received, list) else set()

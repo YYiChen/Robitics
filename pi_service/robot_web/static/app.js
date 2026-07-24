@@ -12,8 +12,8 @@ let highresPreviewEnabled = false, highresPreviewAvailable = false;
 let webrtcPeer = null, webrtcSessionUrl = "", webrtcStatsTimer = null, webrtcStatsPrevious = null;
 const webrtcMetrics = {state:"未连接", fps:null, kbps:null, jitterMs:null, jitterBufferMs:null, packetsLost:null, framesDropped:null};
 const wheelNames = ["rf", "lf", "lr", "rr"];
-const actionKeys = {F:"w", SF:"r", PL:"a", PR:"d", SPL:"x", SPR:"c", B:"s"};
-const keyboardKeys = {w:"w", r:"r", a:"a", s:"s", d:"d", x:"x", c:"c", ArrowUp:"w", ArrowDown:"s", ArrowLeft:"a", ArrowRight:"d"};
+const actionKeys = {F:"w", SF:"slow", PL:"a", PR:"d", SPL:"x", SPR:"c", B:"s"};
+const keyboardKeys = {w:"w", a:"a", s:"s", d:"d", x:"x", c:"c", ArrowUp:"w", ArrowDown:"s", ArrowLeft:"a", ArrowRight:"d"};
 const heldKeys = new Set();
 const heldSteeringKeys = new Set();
 
@@ -382,12 +382,12 @@ for (const button of document.querySelectorAll("[data-steering]")) {
 for (const button of document.querySelectorAll("[data-deal]")) button.addEventListener("click", dealCard);
 for (const button of document.querySelectorAll("[data-servo-center]")) button.addEventListener("click", centerServo);
 addEventListener("keydown", event => { if (editing(event) || event.repeat) return; if (event.code === "Space") { event.preventDefault(); releaseKeys(); return; }
-  if (event.key?.toLowerCase() === "w") { event.preventDefault(); dealCard(); return; }
+  if (event.key?.toLowerCase() === "r") { event.preventDefault(); dealCard(); return; }
   if (event.key?.toLowerCase() === "z") { event.preventDefault(); centerServo(); return; }
   const steering = event.key?.toLowerCase(); if (steering === "q" || steering === "e") { event.preventDefault(); setSteeringKey(steering, true); return; }
   const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, true); }
 });
-addEventListener("keyup", event => { if (editing(event)) return; if (event.key?.toLowerCase() === "w") { event.preventDefault(); return; } const steering = event.key?.toLowerCase(); if (steering === "q" || steering === "e") { event.preventDefault(); setSteeringKey(steering, false); return; } const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, false); } });
+addEventListener("keyup", event => { if (editing(event)) return; if (event.key?.toLowerCase() === "r") { event.preventDefault(); return; } const steering = event.key?.toLowerCase(); if (steering === "q" || steering === "e") { event.preventDefault(); setSteeringKey(steering, false); return; } const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, false); } });
 addEventListener("blur", releaseKeys); addEventListener("beforeunload", () => navigator.sendBeacon("/api/stop")); setInterval(sendKeys, 180);
 async function sendHeartbeat() { try { await requestJson("/api/heartbeat", {method:"POST", keepalive:true}, 500); } catch (_) {} }
 setInterval(sendHeartbeat, 180);
