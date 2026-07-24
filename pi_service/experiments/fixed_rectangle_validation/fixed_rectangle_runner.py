@@ -13,10 +13,9 @@ import cv2
 HERE = Path(__file__).resolve().parent
 REPOSITORY_ROOT = HERE.parents[2]
 TRACK_LINE_SRC = REPOSITORY_ROOT / "third_party" / "DeskMate-Advance" / "src"
-STRAIGHT_ROOT = REPOSITORY_ROOT / "pi_service" / "experiments" / "straight_line_stop_validation"
 if not TRACK_LINE_SRC.is_dir():
     raise RuntimeError(f"track_line source is missing: {TRACK_LINE_SRC}")
-sys.path[:0] = [str(STRAIGHT_ROOT), str(TRACK_LINE_SRC), str(REPOSITORY_ROOT)]
+sys.path[:0] = [str(TRACK_LINE_SRC), str(REPOSITORY_ROOT)]
 
 from debug_web import DebugMjpegPublisher  # noqa: E402
 from fixed_rectangle_planner import FixedClockwiseRectanglePlanner, FixedRectangleConfig  # noqa: E402
