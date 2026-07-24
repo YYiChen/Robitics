@@ -35,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--controller-url", default="http://127.0.0.1:5000")
     parser.add_argument("--process-fps", type=float, default=20.0)
     parser.add_argument("--line-lost-stop-frames", type=int, default=3)
+    parser.add_argument("--line-lost-stop-seconds", type=float, default=0.45)
     parser.add_argument("--straight-pwm", type=int, default=75)
     parser.add_argument("--launch-pwm", type=int, default=155)
     parser.add_argument("--lookahead-gain", type=float, default=160.0)
@@ -68,7 +69,10 @@ def main() -> int:
     if args.process_fps <= 0 or not 0 <= args.debug_web_port <= 65535:
         raise ValueError("invalid process or web port setting")
     detector = OpenCVLineDetector(LineDetectorConfig.from_json(args.config))
-    planner = ContinuousPathPlanner(ContinuousPathConfig(line_lost_stop_frames=args.line_lost_stop_frames))
+    planner = ContinuousPathPlanner(ContinuousPathConfig(
+        line_lost_stop_frames=args.line_lost_stop_frames,
+        line_lost_stop_seconds=args.line_lost_stop_seconds,
+    ))
     executor = None
     if args.enable_motors:
         executor = ContinuousMotorExecutor(ContinuousMotorConfig(
@@ -96,7 +100,7 @@ def main() -> int:
                 continue
             last = now
             result = detector.detect(frame, frame_index=frame_index, timestamp_ns=time.monotonic_ns())
-            decision = planner.step(result.observation)
+            decision = planner.step(result.observation, now)
             motor_action = executor.apply(decision.intent, result.observation) if executor else "DISPLAY_ONLY"
             annotated = overlay(render_debug(frame, result), decision, motor_action, result.observation)
             payload = {"frame": frame_index, "intent": decision.intent.value, "reason": decision.reason, "motor": motor_action}
