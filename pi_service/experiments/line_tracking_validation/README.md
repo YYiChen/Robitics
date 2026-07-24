@@ -53,6 +53,19 @@ http://100.80.46.54:5000/video_feed
 消失，才显示 `TURN_RIGHT`。已预判后允许最多三帧暂时看不到横线，避免相机轻微
 抖动或胶带反光立刻取消转弯。
 
+## 自动电机执行（首次必须有人看守）
+
+`start_rectangle_auto_drive.cmd` 才会向 Pi 控制器发送行驶命令；原来的
+`start_rectangle_line_monitor.cmd` 始终只显示画面。自动版本启动时先检查 Arduino
+在线，并保存以下 PWM 配置到 Pi 的 `drive_config.json`：
+
+- 直行：`F` 为 120；循迹微调时外侧 120、内侧 80；
+- 右直角：`PR` 原地右转，PWM 为 150；
+- 任意 `STOP`、视觉异常、HTTP 通信异常或关闭窗口：立即发送 `STOP`。
+
+启动自动版本前，关闭网页遥控的按键操作；网页的 `/api/keys` 心跳会覆盖自动程序
+的动作。首次实车测试必须把车架空或低速有人扶持，按 `Q` / `Esc` 即停止。
+
 命令行调试示例（需要提高处理频率时改为 `--process-fps 15`）：
 
 ```powershell

@@ -28,6 +28,7 @@ from track_line.detector import OpenCVLineDetector  # noqa: E402
 from track_line.visualization import render_debug  # noqa: E402
 
 from rectangle_route_planner import ClockwiseRectanglePlanner, PlannerDecision  # noqa: E402
+from motor_control import MotorControlConfig, RobotWebMotorExecutor  # noqa: E402
 
 
 DEFAULT_SOURCE = "http://100.80.46.54:5000/video_feed"
@@ -58,6 +59,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--headless", action="store_true", help="print JSON without preview windows")
     parser.add_argument("--max-frames", type=int, default=0, help="stop after N analysed frames; zero means run until Q/Esc")
+    parser.add_argument("--enable-motors", action="store_true", help="enable real motor commands; omitted means display-only")
+    parser.add_argument("--controller-url", default="http://100.80.46.54:5000", help="Pi robot-web base URL")
     return parser.parse_args()
 
 
@@ -255,6 +258,11 @@ def main() -> int:
 
     detector = OpenCVLineDetector(LineDetectorConfig.from_json(args.config))
     planner = ClockwiseRectanglePlanner()
+    motor_executor = None
+    if args.enable_motors:
+        motor_executor = RobotWebMotorExecutor(MotorControlConfig(args.controller_url))
+        motor_executor.configure()
+        print("motor_control=armed straight_pwm=120 pivot_pwm=150", flush=True)
     capture = cv2.VideoCapture(source_value(args.source))
     if not capture.isOpened():
         raise RuntimeError(f"cannot open source: {args.source}")
@@ -283,6 +291,7 @@ def main() -> int:
             result = keep_near_connected_points(result, detector_frame.shape)
             right_branch = has_connected_right_branch(result)
             decision = planner.step(result.observation, right_corner_ahead=right_branch)
+            motor_action = motor_executor.apply(decision, result.observation) if motor_executor else "DISPLAY_ONLY"
             emit(analysed_frames, result, decision, right_branch_detected=right_branch)
             annotated = render_decision(
                 draw_track_corridor(render_debug(detector_frame, result), corridor_polygon),
@@ -300,6 +309,8 @@ def main() -> int:
                 break
     finally:
         capture.release()
+        if motor_executor is not None:
+            motor_executor.stop()
         cv2.destroyAllWindows()
     return 0
 
