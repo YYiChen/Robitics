@@ -4,6 +4,7 @@ const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:f
 let folder, aborter, count = 0, profiles = {}, activeMode = "all", configLoaded = false, keysSending = false, keysQueued = false;
 let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, highresProfileDirty = false, highresProfileBusy = false, highresFpsDirty = false, highresFpsBusy = false, exposureDirty = false, exposureBusy = false, colorCorrectionDirty = false, colorCorrectionBusy = false, videoRetryTimer;
 let servoBusy = false, queuedServoAngle = null, steeringCenterAngle = 90, steeringReversed = true;
+let dealBusy = false;
 let visualServoAngle = 90, visualServoVelocity = 0, visualSteeringDirection = 0, visualServoLastAt = performance.now();
 let receivedFrameCount = 0, receivedFrameWindowAt = performance.now(), browserReceiveFps = 0, statusRttMs = null;
 let activeVideoTransport = "mjpeg", currentWebrtcUrl = "";
@@ -247,7 +248,10 @@ $("#applyHighresProfile").onclick = async () => {
   } catch (error) { note(error.message); }
   finally { highresProfileBusy = false; button.disabled = false; select.disabled = false; }
 };
-$("#highresFps").onchange = () => { highresFpsDirty = true; };
+// Status polling runs every 500 ms.  Mark the field dirty on each keystroke,
+// not only after blur, so polling cannot overwrite a partially typed FPS.
+$("#highresFps").addEventListener("input", () => { highresFpsDirty = true; });
+$("#highresFps").addEventListener("change", () => { highresFpsDirty = true; });
 $("#applyHighresFps").onclick = async () => {
   if (highresFpsBusy) return;
   highresFpsBusy = true;
@@ -345,6 +349,25 @@ async function sendKeys() {
 function setKey(key, pressed) { if (pressed) heldKeys.add(key); else heldKeys.delete(key); sendKeys(); }
 function setSteeringKey(key, pressed) { if (pressed) heldSteeringKeys.add(key); else heldSteeringKeys.delete(key); syncVisualSteeringDirection(); sendKeys(); }
 function releaseKeys() { heldKeys.clear(); heldSteeringKeys.clear(); syncVisualSteeringDirection(); sendKeys(); }
+async function dealCard() {
+  if (dealBusy) return;
+  dealBusy = true;
+  const button = document.querySelector("[data-deal]");
+  if (button) button.disabled = true;
+  try {
+    const response = await requestJson("/api/deal", {method:"POST"}, 3500);
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw Error(data.error || "出牌命令发送失败");
+    note("已触发出牌：M4 运转 1 秒");
+  } catch (error) {
+    note(error.message);
+  } finally {
+    setTimeout(() => {
+      dealBusy = false;
+      if (button) button.disabled = false;
+    }, 1000);
+  }
+}
 for (const button of document.querySelectorAll("[data-action]")) {
   const key = actionKeys[button.dataset.action];
   if (!key) { button.onclick = releaseKeys; continue; }
@@ -356,13 +379,15 @@ for (const button of document.querySelectorAll("[data-steering]")) {
   button.addEventListener("pointerdown", event => { event.preventDefault(); button.setPointerCapture(event.pointerId); setSteeringKey(key, true); });
   for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) button.addEventListener(name, event => { event.preventDefault(); setSteeringKey(key, false); });
 }
+for (const button of document.querySelectorAll("[data-deal]")) button.addEventListener("click", dealCard);
 for (const button of document.querySelectorAll("[data-servo-center]")) button.addEventListener("click", centerServo);
 addEventListener("keydown", event => { if (editing(event) || event.repeat) return; if (event.code === "Space") { event.preventDefault(); releaseKeys(); return; }
+  if (event.key?.toLowerCase() === "w") { event.preventDefault(); dealCard(); return; }
   if (event.key?.toLowerCase() === "z") { event.preventDefault(); centerServo(); return; }
   const steering = event.key?.toLowerCase(); if (steering === "q" || steering === "e") { event.preventDefault(); setSteeringKey(steering, true); return; }
   const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, true); }
 });
-addEventListener("keyup", event => { if (editing(event)) return; const steering = event.key?.toLowerCase(); if (steering === "q" || steering === "e") { event.preventDefault(); setSteeringKey(steering, false); return; } const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, false); } });
+addEventListener("keyup", event => { if (editing(event)) return; if (event.key?.toLowerCase() === "w") { event.preventDefault(); return; } const steering = event.key?.toLowerCase(); if (steering === "q" || steering === "e") { event.preventDefault(); setSteeringKey(steering, false); return; } const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, false); } });
 addEventListener("blur", releaseKeys); addEventListener("beforeunload", () => navigator.sendBeacon("/api/stop")); setInterval(sendKeys, 180);
 async function sendHeartbeat() { try { await requestJson("/api/heartbeat", {method:"POST", keepalive:true}, 500); } catch (_) {} }
 setInterval(sendHeartbeat, 180);
@@ -465,7 +490,7 @@ function fillProfileEditor() {
   $("#leftValue").value = Math.round((abs("lf") + abs("lr")) / 2); $("#rightValue").value = Math.round((abs("rf") + abs("rr")) / 2);
   for (const wheel of wheelNames) $(`#${wheel}Value`).value = p[wheel]; updateProfilePreview(p);
 }
-function updateProfilePreview(p = profileFor($("#profileAction").value)) { $("#profilePreview").textContent = `M1 ${p.rf} · M2 ${p.lf} · M3 ${p.lr} · M4 ${p.rr}`; }
+function updateProfilePreview(p = profileFor($("#profileAction").value)) { $("#profilePreview").textContent = `M1 ${p.rf} · M2 ${p.lf} · M3 常转 -255 · M4 按 W 触发`; }
 function profileFromEditor() {
   const p = {...profileFor($("#profileAction").value)};
   if (activeMode === "all") for (const wheel of wheelNames) p[wheel] = signedMagnitude($("#allValue").value, p[wheel] || 1);

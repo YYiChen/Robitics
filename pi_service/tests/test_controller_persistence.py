@@ -56,6 +56,19 @@ class ControllerPersistenceTests(unittest.TestCase):
             self.assertEqual(controller.update_keys({"keys": [], "steering": -1}), "STOP")
             self.assertEqual(controller.steering_direction, -1)
 
+    def test_drive_uses_m1_m2_and_deal_is_a_one_shot_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = RobotController("unused", Path(directory) / "drive_config.json")
+            self.assertEqual(controller._raw("F", controller.config), (255, 255, 0, 0))
+            commands: list[str] = []
+            controller._write = commands.append
+            self.assertEqual(controller.deal_card(), "requested")
+            self.assertEqual(commands, ["DEAL"])
+            controller._parse("OK:DEAL")
+            self.assertEqual(controller.card_deal_state, "running")
+            controller._parse("DEAL:DONE")
+            self.assertEqual(controller.card_deal_state, "idle")
+
     def test_steering_syncs_direction_and_limits_to_arduino(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             controller = RobotController("unused", Path(directory) / "drive_config.json")

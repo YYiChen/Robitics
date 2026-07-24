@@ -12,17 +12,18 @@
 // Serial protocol (9600 baud, one command per line):
 //
 //   Motor control:
-//     M,m1,m2,m3,m4\n         raw PWM (-255..255) for each motor
+//     M,m1,m2,m3,m4\n         raw drive PWM (-255..255); M3/M4 fields ignored
+//     DEAL\n                   run the M4 dealing motor once
 //
-//   Speed control (rear wheels):
+//   Speed control (left/right drive):
 //     V,leftPPS,rightPPS\n    target speed in pulses/sec (signed)
-//                              PID overrides M3 / M4 in M commands
+//                              PID overrides M2 / M1 in M commands
 //
 //   PID tuning:
 //     KP,value\n  KI,value\n  KD,value\n
 //
 //   Queries:
-//     STOP | S                 stop + disable speed control
+//     STOP | S                 stop M1/M2 + disable speed control
 //     IMU                      query Euler angles
 //     SPD                      query wheel speeds + PID state
 //     OUT                      query actual PWM applied to M1..M4
@@ -33,13 +34,15 @@
 //     SVD,direction            manual servo direction (-1, 0, 1)
 //     SVC,speed,acceleration   set servo motion limits (degrees/s, degrees/s^2)
 //
-//   Motor mapping:
-//     M1 = right front   M2 = left front
-//     M3 = left rear     M4 = right rear
+//   Active motor mapping:
+//     M1 = right-side vehicle drive
+//     M2 = left-side vehicle drive
+//     M3 = continuous card-feed motor
+//     M4 = one-shot dealing motor
 //
 //   Hall encoders:
-//     Pin 18 (INT3) = left rear wheel
-//     Pin 19 (INT2) = right rear wheel
+//     Pin 18 (INT3) = left drive wheel (M2)
+//     Pin 19 (INT2) = right drive wheel (M1)
 //     8-pole magnet → 4 pulses per revolution
 //
 //   Speed unit: pulses/second (pps).
@@ -54,17 +57,22 @@ AF_DCMotor motor4(4);
 // AFMotor accepts PWM values from 0 to 255.
 const int MOTOR_COMMAND_LIMIT = 255;
 
-// If no valid motor command is received within this interval,
-// release all motors.
+// If no valid drive command is received within this interval, release M1/M2.
+// Card motors have their own deterministic state and timer.
 const unsigned long COMMAND_TIMEOUT_MS = 1000;
 
 // While the robot is stationary, publish a clear serial heartbeat so that a
 // connected Serial Monitor can confirm the Arduino is alive and stopped.
 const unsigned long STOPPED_REPORT_INTERVAL_MS = 1000;
 
-// Before changing a motor from forward to backward, release all
-// motors briefly to reduce current and mechanical shock.
+// Before changing a drive motor from forward to backward, release M1/M2
+// briefly to reduce current and mechanical shock.
 const unsigned long REVERSE_PAUSE_MS = 80;
+
+// Card mechanism. Signed values preserve the tested BACKWARD direction.
+constexpr int CARD_FEED_COMMAND = -255;       // M3: continuous
+constexpr int CARD_DEAL_COMMAND = -255;       // M4: one shot
+constexpr unsigned long CARD_DEAL_TIME_MS = 1000UL;
 
 // ============================================================
 // One forward-facing ultrasonic sensor.  It stops forward travel only.
@@ -81,7 +89,7 @@ constexpr unsigned long ULTRASONIC_BETWEEN_SENSORS_MS = 35UL;
 // Only the single centre/front sensor is safety active.  A distance at or
 // below this threshold blocks forward wheel commands; pivots and reverse are
 // intentionally left available.
-constexpr float FRONT_STOP_DISTANCE_CM = 10.0F;
+constexpr float FRONT_STOP_DISTANCE_CM = 1.0F;
 
 float frontDistanceCm = -1.0F;
 
@@ -148,13 +156,16 @@ const int GYRO_CALIBRATION_SAMPLES = 200;
 const float PULSES_PER_REVOLUTION = 4.0f;
 
 // Encoder input pins (Arduino Mega external interrupt pins).
-const uint8_t ENCODER_LEFT_PIN  = 18;  // INT3 — left rear motor (M3)
-const uint8_t ENCODER_RIGHT_PIN = 19;  // INT2 — right rear motor (M4)
+const uint8_t ENCODER_LEFT_PIN  = 18;  // INT3 — left drive motor (M2)
+const uint8_t ENCODER_RIGHT_PIN = 19;  // INT2 — right drive motor (M1)
 
 // SG90 signal wire.  Power the servo from a suitable 5 V supply with a
 // common ground to the Mega; do not power it from the Mega's 5 V pin.
-constexpr uint8_t SERVO_PIN = 22;
+// D22 is reserved for the HW-487 card sensor in the current hardware.
+constexpr uint8_t SERVO_PIN = 23;
 constexpr int SERVO_CENTER_ANGLE = 90;
+constexpr int SERVO_POWER_ON_START_ANGLE = 0;
+constexpr unsigned long SERVO_POWER_ON_HOLD_MS = 600UL;
 constexpr unsigned long SERVO_UPDATE_INTERVAL_MS = 20;
 constexpr unsigned long SERVO_DIRECTION_TIMEOUT_MS = 450;
 constexpr float SERVO_DEFAULT_SPEED_DPS = 45.0F;
@@ -172,6 +183,21 @@ int8_t servoManualDirection = 0;
 unsigned long lastServoUpdateMs = 0;
 unsigned long lastServoDirectionCommandMs = 0;
 int lastServoWrittenAngle = SERVO_CENTER_ANGLE;
+
+// Runs once during setup so the hardware can visibly confirm the servo range.
+// Afterwards normal web/serial servo control takes over from the final 0° pose.
+void runServoPowerOnSequence() {
+  const int sequence[] = {0, 90, 180, 90, 0};
+  for (uint8_t i = 0; i < sizeof(sequence) / sizeof(sequence[0]); ++i) {
+    panServo.write(sequence[i]);
+    delay(SERVO_POWER_ON_HOLD_MS);
+  }
+
+  servoCurrentAngle = SERVO_POWER_ON_START_ANGLE;
+  servoTargetAngle = SERVO_POWER_ON_START_ANGLE;
+  servoVelocityDps = 0.0F;
+  lastServoWrittenAngle = SERVO_POWER_ON_START_ANGLE;
+}
 
 // Speed is computed from pulse counts at this interval (ms).
 const unsigned long SPEED_CALC_INTERVAL_MS = 50;   // 20 Hz
@@ -196,6 +222,8 @@ bool timeoutStopped = true;
 // Last commands after clamping.
 int currentMotorCommands[4] = {0, 0, 0, 0};
 unsigned long lastStoppedReportTime = 0;
+bool cardDealRunning = false;
+unsigned long cardDealStartedAt = 0;
 
 // ============================================================
 // MPU-6500 IMU state variables
@@ -323,6 +351,33 @@ void releaseAllMotors() {
 
 #endif
 #include "motor_control.h"
+
+void startContinuousCardFeed() {
+  applyOneMotor(motor3, CARD_FEED_COMMAND);
+  currentMotorCommands[2] = CARD_FEED_COMMAND;
+}
+
+bool startCardDeal() {
+  if (cardDealRunning) {
+    return false;
+  }
+  applyOneMotor(motor4, CARD_DEAL_COMMAND);
+  currentMotorCommands[3] = CARD_DEAL_COMMAND;
+  cardDealStartedAt = millis();
+  cardDealRunning = true;
+  return true;
+}
+
+void updateCardDeal() {
+  if (!cardDealRunning ||
+      millis() - cardDealStartedAt < CARD_DEAL_TIME_MS) {
+    return;
+  }
+  applyOneMotor(motor4, 0);
+  currentMotorCommands[3] = 0;
+  cardDealRunning = false;
+  Serial.println(F("DEAL:DONE"));
+}
 
 // ============================================================
 // MPU-6500 I2C helper functions
@@ -617,11 +672,9 @@ void printMotorOutputs() {
   Serial.println(currentMotorCommands[3]);
 }
 
-// Emit a periodic idle heartbeat.  This is intentionally independent of the
-// remote-control watchdog: after power-up, or whenever all motors are stopped,
-// the Serial Monitor can visibly confirm the safe state.
+// Emit a periodic drive-idle heartbeat. M3 is expected to remain active.
 void reportStoppedState() {
-  for (int i = 0; i < 4; ++i) {
+  for (int i = 0; i < 2; ++i) {
     if (currentMotorCommands[i] != 0) {
       return;
     }
@@ -629,7 +682,7 @@ void reportStoppedState() {
 
   const unsigned long now = millis();
   if (now - lastStoppedReportTime >= STOPPED_REPORT_INTERVAL_MS) {
-    Serial.println(F("STATUS:STOPPED"));
+    Serial.println(F("STATUS:DRIVE_STOPPED"));
     lastStoppedReportTime = now;
   }
 }
@@ -637,7 +690,7 @@ void reportStoppedState() {
 #include "ultrasonic_avoidance.h"
 
 bool needsReversePause(const int nextCommands[4]) {
-  for (int i = 0; i < 4; ++i) {
+  for (int i = 0; i < 2; ++i) {
     const int oldDirection = commandDirection(currentMotorCommands[i]);
     const int newDirection = commandDirection(nextCommands[i]);
 
@@ -651,18 +704,19 @@ bool needsReversePause(const int nextCommands[4]) {
 }
 
 void applyMotorCommands(int m1, int m2, int m3, int m4) {
+  (void)m3;
+  (void)m4;
   int nextCommands[4] = {
-    clampMotorCommand(m1),
-    clampMotorCommand(m2),
-    clampMotorCommand(m3),
-    clampMotorCommand(m4),
+    clampMotorCommand(m1),  // M1: right drive
+    clampMotorCommand(m2),  // M2: left drive
+    currentMotorCommands[2],
+    currentMotorCommands[3],
   };
 
-  // In speed-control mode the rear-motor PWM values come from the PID
-  // controller — not from the M command.
+  // In speed-control mode M1/M2 come from the right/left PID outputs.
   if (speedControlEnabled) {
-    nextCommands[2] = clampMotorCommand(pidOutputLeft);   // M3 – left rear
-    nextCommands[3] = clampMotorCommand(pidOutputRight);  // M4 – right rear
+    nextCommands[0] = clampMotorCommand(pidOutputRight);
+    nextCommands[1] = clampMotorCommand(pidOutputLeft);
   }
 
   const char *blockReason = forwardBlockReason(
@@ -674,7 +728,7 @@ void applyMotorCommands(int m1, int m2, int m3, int m4) {
   }
 
   bool changed = false;
-  for (int i = 0; i < 4; ++i) {
+  for (int i = 0; i < 2; ++i) {
     if (nextCommands[i] != currentMotorCommands[i]) {
       changed = true;
       break;
@@ -687,16 +741,14 @@ void applyMotorCommands(int m1, int m2, int m3, int m4) {
   }
 
   if (needsReversePause(nextCommands)) {
-    releaseAllMotors();
+    releaseDriveMotors();
     delay(REVERSE_PAUSE_MS);
   }
 
   applyOneMotor(motor1, nextCommands[0]);
   applyOneMotor(motor2, nextCommands[1]);
-  applyOneMotor(motor3, nextCommands[2]);
-  applyOneMotor(motor4, nextCommands[3]);
 
-  for (int i = 0; i < 4; ++i) {
+  for (int i = 0; i < 2; ++i) {
     currentMotorCommands[i] = nextCommands[i];
   }
 
@@ -868,10 +920,21 @@ void executeLine(char *line) {
   }
 
   if (strcmp(line, "STOP") == 0 || strcmp(line, "S") == 0) {
-    releaseAllMotors();
+    releaseDriveMotors();
     lastValidCommandTime = millis();
     timeoutStopped = true;
     Serial.println(F("OK:STOP"));
+    return;
+  }
+
+  // One-shot card dealing does not refresh the vehicle-drive watchdog.
+  // Repeated requests while M4 is active are ignored instead of extending it.
+  if (strcmp(line, "DEAL") == 0) {
+    if (startCardDeal()) {
+      Serial.println(F("OK:DEAL"));
+    } else {
+      Serial.println(F("BUSY:DEAL"));
+    }
     return;
   }
 
@@ -1059,7 +1122,7 @@ void executeLine(char *line) {
   int commands[4] = {0, 0, 0, 0};
 
   if (!parseMotorCommand(line, commands)) {
-    releaseAllMotors();
+    releaseDriveMotors();
     timeoutStopped = true;
     Serial.println(F("ERR:BAD_COMMAND"));
     return;
@@ -1081,6 +1144,7 @@ void setup() {
   Serial.begin(9600);
 
   releaseAllMotors();
+  startContinuousCardFeed();
   lastValidCommandTime = millis();
   timeoutStopped = true;
 
@@ -1100,7 +1164,7 @@ void setup() {
                   encoderRightISR, RISING);
 
   panServo.attach(SERVO_PIN);
-  panServo.write(SERVO_CENTER_ANGLE);
+  runServoPowerOnSequence();
   lastServoUpdateMs = millis();
   lastServoDirectionCommandMs = lastServoUpdateMs;
 
@@ -1114,9 +1178,9 @@ void setup() {
   imuPresent = initMPU6500();
 
   if (imuPresent) {
-    Serial.println(F("READY:MOTOR_BRIDGE,MAX=255,TIMEOUT=1000,SERVO=22,IMU=OK,ENC=18,19,US=FRONT(26,27)"));
+    Serial.println(F("READY:MOTOR_BRIDGE,M1=RIGHT,M2=LEFT,M3=CARD_CONTINUOUS,M4=DEAL_1000MS,SERVO=23,IMU=OK"));
   } else {
-    Serial.println(F("READY:MOTOR_BRIDGE,MAX=255,TIMEOUT=1000,SERVO=22,IMU=ABSENT,ENC=18,19,US=FRONT(26,27)"));
+    Serial.println(F("READY:MOTOR_BRIDGE,M1=RIGHT,M2=LEFT,M3=CARD_CONTINUOUS,M4=DEAL_1000MS,SERVO=23,IMU=ABSENT"));
   }
 }
 
@@ -1151,7 +1215,7 @@ void loop() {
     } else {
       commandLength = 0;
       discardUntilNewline = true;
-      releaseAllMotors();
+      releaseDriveMotors();
       timeoutStopped = true;
       Serial.println(F("ERR:COMMAND_TOO_LONG"));
     }
@@ -1160,6 +1224,7 @@ void loop() {
   // Keep sensor sampling independent from remote-control command timing.
   updateUltrasonic();
   updateServoMotion();
+  updateCardDeal();
 
   // An obstacle may appear after a previously safe forward command.  Stop it
   // here instead of waiting for the next remote heartbeat.
@@ -1173,7 +1238,7 @@ void loop() {
 
   if (!timeoutStopped &&
       millis() - lastValidCommandTime > COMMAND_TIMEOUT_MS) {
-    releaseAllMotors();
+    releaseDriveMotors();
     timeoutStopped = true;
     Serial.println(F("TIMEOUT:STOP"));
   }

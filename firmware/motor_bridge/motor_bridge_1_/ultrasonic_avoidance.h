@@ -35,16 +35,18 @@ void updateUltrasonic() {
   }
 }
 
-// Both sides must be commanded forward.  Any pivot has one side backward, so
-// left/right in-place turns remain available even when an obstacle is close.
+// M1 is the right drive motor and M2 is the left drive motor. Both sides must
+// be commanded forward; pivots and reverse remain available near an obstacle.
 const char *forwardBlockReason(int m1, int m2, int m3, int m4) {
+  (void)m3;
+  (void)m4;
   if (!ULTRASONIC_BLOCKING_ENABLED) return nullptr;
-  const bool drivingForward = m1 > 0 && m2 > 0 && m3 > 0 && m4 > 0;
+  const bool drivingForward = m1 > 0 && m2 > 0;
   if (drivingForward && frontDistanceCm >= 0.0F && frontDistanceCm <= FRONT_STOP_DISTANCE_CM) return "FRONT";
   return nullptr;
 }
 
 void stopForObstacle(const char *reason) {
-  releaseAllMotors(); timeoutStopped = true;
+  releaseDriveMotors(); timeoutStopped = true;
   Serial.print(F("BLOCK:")); Serial.println(reason);
 }

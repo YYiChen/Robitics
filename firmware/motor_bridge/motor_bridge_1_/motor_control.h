@@ -1,4 +1,4 @@
-// Low-level four-motor output and complete safe-stop reset.
+// Low-level motor output and safe-stop reset.
 
 int clampMotorCommand(int value) {
   return constrain(value, -MOTOR_COMMAND_LIMIT, MOTOR_COMMAND_LIMIT);
@@ -18,13 +18,7 @@ void applyOneMotor(AF_DCMotor &motor, int command) {
   else motor.run(RELEASE);
 }
 
-void releaseAllMotors() {
-  motor1.setSpeed(0); motor2.setSpeed(0);
-  motor3.setSpeed(0); motor4.setSpeed(0);
-  motor1.run(RELEASE); motor2.run(RELEASE);
-  motor3.run(RELEASE); motor4.run(RELEASE);
-  for (int i = 0; i < 4; ++i) currentMotorCommands[i] = 0;
-
+void resetDriveControlState() {
   speedControlEnabled = false;
   targetSpeedLeft = 0.0f;
   targetSpeedRight = 0.0f;
@@ -34,4 +28,25 @@ void releaseAllMotors() {
   pidLastErrorRight = 0.0f;
   pidOutputLeft = 0;
   pidOutputRight = 0;
+}
+
+// M1/M2 are the vehicle drive motors. Card motors M3/M4 deliberately keep
+// their independent state when the drive watchdog, STOP, or obstacle guard
+// stops the vehicle.
+void releaseDriveMotors() {
+  motor1.setSpeed(0); motor2.setSpeed(0);
+  motor1.run(RELEASE); motor2.run(RELEASE);
+  currentMotorCommands[0] = 0;
+  currentMotorCommands[1] = 0;
+  resetDriveControlState();
+}
+
+// Full release is reserved for initialisation. Runtime drive stops use
+// releaseDriveMotors() so M3 can remain continuous and M4 can finish safely.
+void releaseAllMotors() {
+  releaseDriveMotors();
+  motor3.setSpeed(0); motor4.setSpeed(0);
+  motor3.run(RELEASE); motor4.run(RELEASE);
+  currentMotorCommands[2] = 0;
+  currentMotorCommands[3] = 0;
 }

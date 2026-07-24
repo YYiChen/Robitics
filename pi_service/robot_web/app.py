@@ -53,6 +53,10 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
     def heartbeat(): controller.heartbeat(); return jsonify(ok=True)
     @app.post("/api/stop")
     def stop(): controller.stop_now(); return jsonify(ok=True)
+    @app.post("/api/deal")
+    def deal():
+        try: return jsonify(ok=True, state=controller.deal_card())
+        except RuntimeError as exc: return jsonify(ok=False, error=str(exc)), 503
     @app.post("/api/servo")
     def servo():
         payload = request.get_json(silent=True) or {}
@@ -126,8 +130,8 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
     @app.get("/api/status")
     def status():
         return jsonify(
-            api_version="robot-console-2026-07-16-steering",
-            capabilities={"system_metrics": True, "highres_fps_control": hasattr(camera, "set_highres_fps"), "highres_fps_max": 30},
+            api_version="robot-console-2026-07-24-card-deal",
+            capabilities={"system_metrics": True, "highres_fps_control": hasattr(camera, "set_highres_fps"), "highres_fps_max": 30, "card_deal": True},
             robot=controller.status(),
             camera=camera.status_dict(),
             system=system_metrics.status_dict(),
