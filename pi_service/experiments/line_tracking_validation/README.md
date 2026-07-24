@@ -15,6 +15,9 @@ chmod +x pi_service/run_autonomous_rectangle_line_tracking.sh
 网络画面；电脑可断开，仅不能再看到调试预览。终端中按 `Ctrl+C` 会先发送 `STOP`，
 随后关闭本次启动的 `robot_web` 服务，释放 5000 端口。
 
+脚本会先等待网页服务和 Arduino 串口都显示在线，再开始循迹，避免网页端口虽已
+打开、Arduino 尚在 USB 重启握手阶段时过早退出。
+
 默认串口为 `/dev/ttyACM0`。若树莓派上的 Arduino 是其他串口，例如
 `/dev/ttyUSB0`，这样启动：
 

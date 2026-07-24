@@ -39,11 +39,14 @@ echo "Starting local robot service on port ${WEB_PORT} (serial: ${SERIAL_PORT}).
 WEB_PID=$!
 
 ready=0
-for _ in $(seq 1 50); do
+for _ in $(seq 1 120); do
     if python3 - "${WEB_PORT}" <<'PY' >/dev/null 2>&1
+import json
 import sys
 from urllib.request import urlopen
-urlopen(f"http://127.0.0.1:{sys.argv[1]}/api/status", timeout=0.2)
+with urlopen(f"http://127.0.0.1:{sys.argv[1]}/api/status", timeout=0.2) as response:
+    status = json.load(response)
+sys.exit(0 if status.get("robot", {}).get("arduino_online") else 1)
 PY
     then
         ready=1
@@ -53,7 +56,19 @@ PY
 done
 
 if [[ "${ready}" != "1" ]]; then
-    echo "robot_web did not become ready. Check the serial port and whether port ${WEB_PORT} is already occupied." >&2
+    echo "robot_web started, but Arduino did not become online within 12 seconds." >&2
+    python3 - "${WEB_PORT}" <<'PY' >&2 || true
+import json
+import sys
+from urllib.request import urlopen
+try:
+    with urlopen(f"http://127.0.0.1:{sys.argv[1]}/api/status", timeout=0.5) as response:
+        robot = json.load(response).get("robot", {})
+    print("serial=", robot.get("serial"), "arduino_online=", robot.get("arduino_online"))
+    print("error=", robot.get("error"), "reply=", robot.get("reply"))
+except Exception as exc:
+    print("could not read robot status:", exc)
+PY
     exit 1
 fi
 
