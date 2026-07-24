@@ -89,3 +89,8 @@ py -3 .\pi_service\experiments\line_tracking_validation\live_rectangle_route_mon
 - 对左转或右转分别摆放赛道试验，再记录实际需要的 `PL/PR` 时间；不要一开始就允许无限原地转。
 
 下一阶段才将图像二值化得到的 `line_centre_x` 接给 `RightAngleTracker.step()`，并由一个明确的“开启循迹”开关接管 `RobotController` 动作。
+## 直角右转的失线策略
+
+这是一个**无岔路、顺时针矩形**的固定路线。到达角落时，如果旧边的黑线已经离开相机视野，即使右侧横线因视野、反光或阈值原因没有被 `RIGHT BRANCH` 检测到，规划器也会进入 `TURN_RIGHT`，电机执行 `PR`（原地右转，PWM 150）。它会持续转动，直到连续三帧确认看见新的边线后才恢复前进。
+
+仍保留 `max_turn_frames=100` 的安全上限（处理帧率 10 FPS 时约 10 秒）；超过上限才会停止。若以后改成有岔路的路线，可将 `fixed_right_turn_on_line_end=False`，恢复“未确认角落就停止”的保守策略。

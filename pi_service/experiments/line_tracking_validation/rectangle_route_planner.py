@@ -54,14 +54,17 @@ class RectanglePlannerConfig:
     missing_before_turn: int = 1
     reacquire_frames: int = 3
     max_turn_frames: int = 100
+    fixed_right_turn_on_line_end: bool = True
 
 
 class ClockwiseRectanglePlanner:
     """Recognise a fixed clockwise rectangle's right-angle corners.
 
-    A right turn is *armed* while the far ROI already bends right, then emitted
-    only after the old line disappears. This avoids deciding turn direction
-    solely from the final near-line offset.
+    A right turn is normally *armed* while the far ROI already bends right,
+    then emitted only after the old line disappears.  On this project's
+    fixed, no-branch clockwise rectangle, an unarmed line end is also treated
+    as a right corner by default.  This fallback prevents a missed branch
+    detector from turning into an unsafe stop at every physical corner.
     """
 
     def __init__(self, config: RectanglePlannerConfig = RectanglePlannerConfig()) -> None:
@@ -155,23 +158,29 @@ class ClockwiseRectanglePlanner:
         self._missing_frames += 1
 
         if self.state is RouteState.RIGHT_CORNER_ARMED:
-            self.state = RouteState.TURNING_RIGHT
-            self._turn_frames = 0
-            self._reacquired_frames = 0
-            return self._turn_or_stop()
+            return self._begin_right_turn("right_corner_line_end_confirmed")
 
         if self.state is RouteState.TURNING_RIGHT:
-            return self._turn_or_stop()
+            return self._turn_or_stop("turning_searching_new_edge")
+
+        if self.config.fixed_right_turn_on_line_end:
+            return self._begin_right_turn("fixed_route_line_end")
 
         self.state = RouteState.LOST
         return self._decision(RouteIntent.STOP, "unexpected_line_loss")
 
-    def _turn_or_stop(self) -> PlannerDecision:
+    def _begin_right_turn(self, reason: str) -> PlannerDecision:
+        self.state = RouteState.TURNING_RIGHT
+        self._turn_frames = 0
+        self._reacquired_frames = 0
+        return self._turn_or_stop(reason)
+
+    def _turn_or_stop(self, reason: str) -> PlannerDecision:
         self._turn_frames += 1
         if self._turn_frames > self.config.max_turn_frames:
             self.state = RouteState.LOST
             return self._decision(RouteIntent.STOP, "right_turn_timeout")
-        return self._decision(RouteIntent.TURN_RIGHT, "right_corner_line_end_confirmed")
+        return self._decision(RouteIntent.TURN_RIGHT, reason)
 
     def _reset_follow(self) -> None:
         self.state = RouteState.FOLLOW

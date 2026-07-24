@@ -3,6 +3,7 @@ import unittest
 
 from rectangle_route_planner import (
     ClockwiseRectanglePlanner,
+    RectanglePlannerConfig,
     RouteIntent,
     RouteState,
 )
@@ -49,10 +50,28 @@ class ClockwiseRectanglePlannerTests(unittest.TestCase):
         self.assertEqual(planner.state, RouteState.TURNING_RIGHT)
 
     def test_unexpected_loss_stops_instead_of_turning(self):
-        planner = ClockwiseRectanglePlanner()
+        planner = ClockwiseRectanglePlanner(
+            RectanglePlannerConfig(fixed_right_turn_on_line_end=False)
+        )
         decision = planner.step(LOST)
         self.assertEqual(decision.intent, RouteIntent.STOP)
         self.assertEqual(decision.reason, "unexpected_line_loss")
+
+    def test_fixed_clockwise_route_turns_right_when_line_ends_without_branch_evidence(self):
+        planner = ClockwiseRectanglePlanner()
+        decision = planner.step(LOST)
+        self.assertEqual(decision.intent, RouteIntent.TURN_RIGHT)
+        self.assertEqual(decision.state, RouteState.TURNING_RIGHT)
+        self.assertEqual(decision.reason, "fixed_route_line_end")
+
+    def test_fixed_route_turn_still_stops_at_safety_timeout(self):
+        planner = ClockwiseRectanglePlanner(RectanglePlannerConfig(max_turn_frames=2))
+        decisions = [planner.step(LOST) for _ in range(3)]
+        self.assertEqual(
+            [item.intent for item in decisions],
+            [RouteIntent.TURN_RIGHT, RouteIntent.TURN_RIGHT, RouteIntent.STOP],
+        )
+        self.assertEqual(decisions[-1].reason, "right_turn_timeout")
 
     def test_new_edge_needs_three_frames_before_straight(self):
         planner = ClockwiseRectanglePlanner()
