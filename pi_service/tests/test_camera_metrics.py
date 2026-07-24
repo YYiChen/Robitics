@@ -33,6 +33,15 @@ class CameraMetricsTests(unittest.TestCase):
         keydown = script.split('addEventListener("keydown"', 1)[1].split('addEventListener("keyup"', 1)[0]
         self.assertLess(keydown.index('event.code === "KeyP"'), keydown.index("editing(event)"))
 
+    def test_inflight_wasd_timeout_cannot_clear_a_new_queued_p_event(self) -> None:
+        script = (Path(__file__).parents[1] / "robot_web" / "static" / "app.js").read_text(encoding="utf-8")
+        send_keys = script.split("async function sendKeys()", 1)[1].split("function setKey(", 1)[0]
+        self.assertIn("const dealRequestSent = pendingDealRequest", send_keys)
+        self.assertIn("if (dealRequestSent)", send_keys)
+        self.assertIn("pendingDealRequest?.token === dealRequestSent.token", send_keys)
+        catch_body = send_keys.split("catch (error)", 1)[1]
+        self.assertNotIn("if (pendingDealRequest) {", catch_body)
+
     def test_reports_encoded_and_stream_bandwidth(self) -> None:
         camera = CameraStreamer(width=1280, height=720, fps=15)
         camera._record_encoded(100_000, 12.5)

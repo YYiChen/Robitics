@@ -339,20 +339,26 @@ function animateServoIndicator(now) {
 async function sendKeys() {
   if (keysSending) { keysQueued = true; return; }
   keysSending = true;
-  do { keysQueued = false; try {
+  do {
+    keysQueued = false;
+    // Capture which P event is actually carried by this particular HTTP
+    // request. A previous WASD heartbeat may already be in flight when P is
+    // pressed; its timeout must never clear the newly queued P event.
+    const dealRequestSent = pendingDealRequest;
+    try {
       const payload = {keys:[...heldKeys], steering:steeringDirection()};
-      if (pendingDealRequest) payload.deal_request = pendingDealRequest;
-      const response = await requestJson("/api/keys", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload), keepalive:true}, pendingDealRequest ? 3500 : 500);
+      if (dealRequestSent) payload.deal_request = dealRequestSent;
+      const response = await requestJson("/api/keys", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload), keepalive:true}, dealRequestSent ? 3500 : 1000);
       const data = await response.json();
       if (!response.ok || !data.ok) throw Error(data.error || "动作发送失败");
       $("#action").textContent = data.action;
-      if (data.deal && pendingDealRequest && data.deal.token === pendingDealRequest.token) {
+      if (data.deal && dealRequestSent && data.deal.token === dealRequestSent.token) {
         if (data.deal.state === "pending") {
-          note(`P 已送达树莓派：M4 PWM ${pendingDealRequest.pwm}，正在等待 Arduino 确认`);
+          note(`P 已送达树莓派：M4 PWM ${dealRequestSent.pwm}，正在等待 Arduino 确认`);
           continue;
         }
-        const request = pendingDealRequest;
-        pendingDealRequest = null;
+        const request = dealRequestSent;
+        if (pendingDealRequest?.token === dealRequestSent.token) pendingDealRequest = null;
         note(data.deal.state === "error"
           ? `M4 未启动：${data.deal.error || data.deal.reply || "Arduino 未确认"}`
           : data.deal.state === "legacy"
@@ -363,10 +369,12 @@ async function sendKeys() {
         resetDealControls(data.deal.state === "error" ? 0 : request.duration_ms);
       }
     } catch (error) {
-      note(`M4/行驶命令失败：${error.message}`);
-      if (pendingDealRequest) {
-        pendingDealRequest = null;
+      if (dealRequestSent) {
+        note(`M4 命令失败：${error.message}`);
+        if (pendingDealRequest?.token === dealRequestSent.token) pendingDealRequest = null;
         resetDealControls(0);
+      } else {
+        note(`行驶命令失败：${error.message}`);
       }
     }
   } while (keysQueued);
