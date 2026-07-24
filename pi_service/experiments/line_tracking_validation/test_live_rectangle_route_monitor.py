@@ -14,7 +14,7 @@ from track_line.observations import LineDetectionResult, LineObservation
 class TrackCorridorTests(unittest.TestCase):
     def test_corner_timing_scales_with_processing_rate(self):
         config = planner_config_for_processing_rate(30.0)
-        self.assertEqual(config.missing_before_turn, 9)
+        self.assertEqual(config.missing_before_turn, 3)
         self.assertEqual(config.max_turn_frames, 300)
 
     def test_keeps_dark_line_inside_and_masks_dark_object_outside(self):

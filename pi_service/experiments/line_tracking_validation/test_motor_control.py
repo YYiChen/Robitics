@@ -17,6 +17,8 @@ class MotorActionMappingTests(unittest.TestCase):
         self.assertEqual(action_for_decision(decision, Observation(0.0), config), "F")
         self.assertEqual(action_for_decision(decision, Observation(-0.2), config), "FL")
         self.assertEqual(action_for_decision(decision, Observation(0.2), config), "FR")
+        self.assertEqual(config.curve_outer_pwm, 200)
+        self.assertEqual(config.curve_inner_pwm, 60)
 
     def test_right_turn_and_stop_override_offset(self):
         config = MotorControlConfig("http://robot")

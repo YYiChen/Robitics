@@ -81,7 +81,7 @@ def planner_config_for_processing_rate(process_fps: float) -> RectanglePlannerCo
     # original 10 FPS timing rather than silently making safety timing tiny.
     effective_fps = process_fps if process_fps > 0 else 10.0
     return RectanglePlannerConfig(
-        missing_before_turn=max(1, round(0.3 * effective_fps)),
+        missing_before_turn=max(1, round(0.1 * effective_fps)),
         max_turn_frames=max(1, round(10.0 * effective_fps)),
     )
 
@@ -282,7 +282,14 @@ def main() -> int:
     if args.enable_motors:
         motor_executor = RobotWebMotorExecutor(MotorControlConfig(args.controller_url))
         motor_executor.configure()
-        print("motor_control=armed straight_pwm=85 pivot_pwm=145", flush=True)
+        print(
+            "motor_control=armed "
+            f"straight_pwm={motor_executor.config.straight_pwm} "
+            f"pivot_pwm={motor_executor.config.pivot_pwm} "
+            f"curve_outer_pwm={motor_executor.config.curve_outer_pwm} "
+            f"curve_inner_pwm={motor_executor.config.curve_inner_pwm}",
+            flush=True,
+        )
     print(
         "vision_control="
         f"process_fps={args.process_fps:g} "

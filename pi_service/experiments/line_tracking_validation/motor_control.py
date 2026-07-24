@@ -20,8 +20,9 @@ class LineObservation(Protocol):
 @dataclass(frozen=True)
 class MotorControlConfig:
     controller_url: str
-    straight_pwm: int = 85
-    pivot_pwm: int = 145
+    straight_pwm: int = 110
+    pivot_pwm: int = 155
+    curve_outer_pwm: int = 200
     curve_inner_pwm: int = 60
     correction_deadband: float = 0.05
     command_interval_seconds: float = 0.18
@@ -66,13 +67,17 @@ class RobotWebMotorExecutor:
         current = robot.get("config", {})
         profiles = dict(current.get("profiles", {}))
         straight = self.config.straight_pwm
+        outer = self.config.curve_outer_pwm
         inner = self.config.curve_inner_pwm
         pivot = self.config.pivot_pwm
         profiles.update(
             {
                 "F": {"rf": straight, "lf": straight, "lr": straight, "rr": straight},
-                "FL": {"rf": straight, "lf": inner, "lr": inner, "rr": straight},
-                "FR": {"rf": inner, "lf": straight, "lr": straight, "rr": inner},
+                # FL: right side is the outside of a left correction; FR is
+                # the mirror image.  Keep correction power independent from
+                # normal straight-line power.
+                "FL": {"rf": outer, "lf": inner, "lr": inner, "rr": outer},
+                "FR": {"rf": inner, "lf": outer, "lr": outer, "rr": inner},
                 "PR": {"rf": -pivot, "lf": pivot, "lr": pivot, "rr": -pivot},
             }
         )
@@ -81,7 +86,7 @@ class RobotWebMotorExecutor:
                 "speed_mode": False,
                 "straight_pwm": straight,
                 "pivot_pwm": pivot,
-                "curve_outer_pwm": straight,
+                "curve_outer_pwm": outer,
                 "curve_inner_pwm": inner,
                 "profiles": profiles,
             },
