@@ -82,6 +82,24 @@ class ControllerPersistenceTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     controller.deal_card(pwm, duration)
 
+    def test_legacy_firmware_falls_back_to_plain_deal_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = RobotController("unused", Path(directory) / "drive_config.json")
+            commands: list[str] = []
+            controller._write = commands.append
+            controller._parse("READY:MOTOR_BRIDGE,M1=RIGHT,M2=LEFT,M3=CARD_CONTINUOUS,M4=DEAL_1000MS,SERVO=23,IMU=OK")
+            self.assertEqual(controller.card_motor_protocol, "legacy")
+            self.assertEqual(controller.deal_card(180, 2500), "legacy")
+            self.assertEqual(commands, ["DEAL"])
+            with self.assertRaises(RuntimeError):
+                controller.feed_cards(200, 5000)
+
+    def test_adjustable_firmware_is_detected_from_ready_line(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = RobotController("unused", Path(directory) / "drive_config.json")
+            controller._parse("READY:MOTOR_BRIDGE,M1=RIGHT,M2=LEFT,M3=FEED_ADJUSTABLE,M4=DEAL_ADJUSTABLE,SERVO=23,IMU=OK")
+            self.assertEqual(controller.card_motor_protocol, "adjustable")
+
     def test_steering_syncs_direction_and_limits_to_arduino(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             controller = RobotController("unused", Path(directory) / "drive_config.json")

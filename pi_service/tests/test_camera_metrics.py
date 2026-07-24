@@ -195,7 +195,7 @@ class CameraMetricsTests(unittest.TestCase):
         response = app.test_client().get("/api/status")
         self.assertEqual(response.status_code, 200)
         body = response.get_json()
-        self.assertEqual(body["api_version"], "robot-console-2026-07-24-card-motors")
+        self.assertEqual(body["api_version"], "robot-console-2026-07-24-card-protocol-v2")
         self.assertTrue(body["capabilities"]["system_metrics"])
         self.assertTrue(body["capabilities"]["highres_fps_control"])
         self.assertEqual(body["capabilities"]["highres_fps_max"], 30)

@@ -100,7 +100,7 @@ class RobotController:
         self._last_steering_sent_at = 0.0
         self._last_sent_servo_limits: tuple[float, float] | None = None
         self._servo_target_angle: float | None = None
-        self.imu = self.speed = self.ultrasonic = None; self.servo_angle: int | None = None; self.motor_output: list[int] | None = None; self.card_feed_state = self.card_deal_state = "idle"; self.reply = self.error = ""; self.last_rx = 0.0
+        self.imu = self.speed = self.ultrasonic = None; self.servo_angle: int | None = None; self.motor_output: list[int] | None = None; self.card_feed_state = self.card_deal_state = "idle"; self.card_motor_protocol = "unknown"; self.reply = self.error = ""; self.last_rx = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._shutdown_lock = threading.Lock()
@@ -263,13 +263,20 @@ class RobotController:
         pwm, duration_ms = self._timed_motor_parameters(raw_pwm, raw_duration_ms)
         with self.lock:
             self.card_deal_state = "requested"
-        self._write(f"DEAL,{pwm},{duration_ms}")
+            protocol = self.card_motor_protocol
+        # Firmware before adjustable card controls only accepts the exact
+        # command DEAL. Keep M4 usable while clearly reporting the limitation.
+        self._write("DEAL" if protocol == "legacy" else f"DEAL,{pwm},{duration_ms}")
         if self.error:
             raise RuntimeError(f"发送出牌命令失败：{self.error}")
-        return "requested"
+        return "legacy" if protocol == "legacy" else "requested"
     def feed_cards(self, raw_pwm: object = 255, raw_duration_ms: object = 5000) -> str:
         """Request one adjustable Arduino-timed M3 feed cycle."""
         pwm, duration_ms = self._timed_motor_parameters(raw_pwm, raw_duration_ms)
+        with self.lock:
+            protocol = self.card_motor_protocol
+        if protocol == "legacy":
+            raise RuntimeError("Arduino 固件过旧，不支持网页触发 M3；请重新烧录新版 motor_bridge 固件")
         with self.lock:
             self.card_feed_state = "requested"
         self._write(f"FEED,{pwm},{duration_ms}")
@@ -345,7 +352,12 @@ class RobotController:
         self.reply, self.last_rx = text, time.monotonic()
         try:
             parts = text.split(",")
-            if text.startswith("IMU,") and len(parts) == 4: self.imu = [float(x) for x in parts[1:]]
+            if text.startswith("READY:MOTOR_BRIDGE"):
+                if "DEAL_ADJUSTABLE" in text:
+                    self.card_motor_protocol = "adjustable"
+                elif "DEAL_1000MS" in text:
+                    self.card_motor_protocol = "legacy"
+            elif text.startswith("IMU,") and len(parts) == 4: self.imu = [float(x) for x in parts[1:]]
             elif text.startswith("SPD,") and len(parts) == 7: self.speed = [float(x) for x in parts[1:]]
             elif (text.startswith("OK:M,") or text.startswith("OUT,")) and len(parts) == 5: self.motor_output = [int(x) for x in parts[1:]]
             elif text.startswith("US,") and len(parts) == 2:
@@ -400,6 +412,6 @@ class RobotController:
                 for command in ("IMU", "SPD", "US", "OUT"): self._write(command)
                 next_query = now + .5
     def status(self) -> dict:
-        with self.lock: cfg, action, seen, feed_state, deal_state = asdict(self.config), self.action, self.last_client_seen, self.card_feed_state, self.card_deal_state
+        with self.lock: cfg, action, seen, feed_state, deal_state, card_protocol = asdict(self.config), self.action, self.last_client_seen, self.card_feed_state, self.card_deal_state, self.card_motor_protocol
         serial_open = bool(self.serial and self.serial.is_open); age = time.monotonic() - self.last_rx if self.last_rx else None
-        return {"serial":serial_open,"arduino_online":serial_open and age is not None and age <= 1.5,"last_rx_age":age,"error":self.error,"reply":self.reply,"config":cfg,"config_path":str(self.config_path),"config_source":self.config_source,"config_error":self.config_error,"action":action,"keys":sorted(self.held_keys),"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"steering_direction":self.steering_direction,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic,"servo_angle":self.servo_angle,"motor_output":self.motor_output,"card_feed_state":feed_state,"card_deal_state":deal_state}
+        return {"serial":serial_open,"arduino_online":serial_open and age is not None and age <= 1.5,"last_rx_age":age,"error":self.error,"reply":self.reply,"config":cfg,"config_path":str(self.config_path),"config_source":self.config_source,"config_error":self.config_error,"action":action,"keys":sorted(self.held_keys),"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"steering_direction":self.steering_direction,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic,"servo_angle":self.servo_angle,"motor_output":self.motor_output,"card_feed_state":feed_state,"card_deal_state":deal_state,"card_motor_protocol":card_protocol}
