@@ -7,10 +7,13 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import sys
+import threading
 import time
+from urllib.parse import urlparse
 
 import cv2
 import numpy as np
@@ -65,10 +68,119 @@ def parse_args() -> argparse.Namespace:
         help="fractional width of the track trapezoid at the bottom of the frame",
     )
     parser.add_argument("--headless", action="store_true", help="print JSON without preview windows")
+    parser.add_argument(
+        "--debug-web-port",
+        type=int,
+        default=0,
+        help="serve the annotated monitoring view on this port; zero disables it",
+    )
     parser.add_argument("--max-frames", type=int, default=0, help="stop after N analysed frames; zero means run until Q/Esc")
     parser.add_argument("--enable-motors", action="store_true", help="enable real motor commands; omitted means display-only")
     parser.add_argument("--controller-url", default="http://100.80.46.54:5000", help="Pi robot-web base URL")
     return parser.parse_args()
+
+
+class DebugMjpegPublisher:
+    """Serve the same annotated frame shown by the local OpenCV preview."""
+
+    def __init__(self, port: int) -> None:
+        self._condition = threading.Condition()
+        self._jpeg: bytes | None = None
+        self._sequence = 0
+        self._status: dict[str, object] = {"state": "waiting_for_first_frame"}
+        self._running = True
+        publisher = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, _format, *_args):
+                # A browser requests a new MJPEG chunk for every rendered
+                # frame; keep that normal traffic out of the motor terminal.
+                return
+
+            def do_GET(self):  # noqa: N802 - required by BaseHTTPRequestHandler
+                path = urlparse(self.path).path
+                if path == "/":
+                    body = (
+                        "<!doctype html><html><head><meta charset='utf-8'>"
+                        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                        "<title>Pi Line Tracking</title>"
+                        "<style>body{margin:0;background:#111;color:#ddd;font-family:sans-serif}"
+                        "main{max-width:960px;margin:auto;padding:12px}img{width:100%;height:auto;display:block}"
+                        "p{color:#9ecbff}</style></head><body><main>"
+                        "<h2>树莓派循迹实时判断</h2><p>路线、偏差和电机动作由树莓派本机计算。</p>"
+                        "<img src='/video_feed' alt='line tracking debug stream'></main></body></html>"
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if path == "/api/status":
+                    with publisher._condition:
+                        body = json.dumps(publisher._status, ensure_ascii=False).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if path != "/video_feed":
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+                self.end_headers()
+                sequence = 0
+                try:
+                    while True:
+                        with publisher._condition:
+                            publisher._condition.wait_for(
+                                lambda: not publisher._running or publisher._sequence != sequence,
+                                timeout=1.0,
+                            )
+                            if not publisher._running:
+                                return
+                            jpeg = publisher._jpeg
+                            sequence = publisher._sequence
+                        if jpeg is None:
+                            continue
+                        self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n")
+                        self.wfile.write(f"Content-Length: {len(jpeg)}\r\n\r\n".encode("ascii"))
+                        self.wfile.write(jpeg)
+                        self.wfile.write(b"\r\n")
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+
+        self._server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+        self._server.daemon_threads = True
+        self._thread = threading.Thread(
+            target=self._server.serve_forever,
+            name="line-tracking-debug-web",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def publish(self, frame, status: dict[str, object]) -> None:
+        ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        if not ok:
+            return
+        with self._condition:
+            self._jpeg = encoded.tobytes()
+            self._status = dict(status)
+            self._sequence += 1
+            self._condition.notify_all()
+
+    def close(self) -> None:
+        with self._condition:
+            self._running = False
+            self._condition.notify_all()
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=1.0)
 
 
 def source_value(source: str) -> int | str:
@@ -294,12 +406,13 @@ def emit(
 
 def main() -> int:
     args = parse_args()
-    if args.process_fps < 0 or args.max_frames < 0:
-        raise ValueError("--process-fps and --max-frames cannot be negative")
+    if args.process_fps < 0 or args.max_frames < 0 or not 0 <= args.debug_web_port <= 65535:
+        raise ValueError("--process-fps, --max-frames, or --debug-web-port is invalid")
 
     detector = OpenCVLineDetector(LineDetectorConfig.from_json(args.config))
     planner = ClockwiseRectanglePlanner(planner_config_for_processing_rate(args.process_fps))
     ground_filter = GroundPlaneLineFilter()
+    debug_web = None
     motor_executor = None
     if args.enable_motors:
         motor_executor = RobotWebMotorExecutor(MotorControlConfig(args.controller_url))
@@ -325,6 +438,9 @@ def main() -> int:
     capture = cv2.VideoCapture(source_value(args.source))
     if not capture.isOpened():
         raise RuntimeError(f"cannot open source: {args.source}")
+    if args.debug_web_port:
+        debug_web = DebugMjpegPublisher(args.debug_web_port)
+        print(f"debug_web=http://0.0.0.0:{args.debug_web_port}", flush=True)
 
     minimum_interval = 0.0 if args.process_fps == 0 else 1.0 / args.process_fps
     last_processed_at = 0.0
@@ -394,6 +510,18 @@ def main() -> int:
                 motor_action=motor_action,
                 ground_offset=ground_offset,
             )
+            if debug_web:
+                debug_web.publish(
+                    annotated,
+                    {
+                        "frame_index": analysed_frames,
+                        "route_intent": decision.intent.value,
+                        "route_state": decision.state.value,
+                        "reason": decision.reason,
+                        "motor_action": motor_action,
+                        "ground_offset": ground_offset,
+                    },
+                )
             analysed_frames += 1
 
             if not args.headless:
@@ -407,6 +535,8 @@ def main() -> int:
         capture.release()
         if motor_executor is not None:
             motor_executor.stop()
+        if debug_web is not None:
+            debug_web.close()
         cv2.destroyAllWindows()
     return 0
 

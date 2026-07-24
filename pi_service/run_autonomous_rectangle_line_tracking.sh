@@ -11,6 +11,7 @@ REPOSITORY_ROOT="$(cd "${PI_SERVICE_DIR}/.." && pwd)"
 VISION_SCRIPT="${PI_SERVICE_DIR}/experiments/line_tracking_validation/live_rectangle_route_monitor.py"
 LINE_CONFIG="${REPOSITORY_ROOT}/third_party/DeskMate-Advance/src/track_line/config.dark_line.json"
 WEB_PORT="${ROBOT_WEB_PORT:-5000}"
+DEBUG_WEB_PORT="${LINE_TRACKING_DEBUG_WEB_PORT:-5051}"
 SERIAL_PORT="${ROBOT_SERIAL_PORT:-/dev/ttyACM0}"
 WEB_PID=""
 
@@ -72,7 +73,8 @@ PY
     exit 1
 fi
 
-echo "Autonomous tracking is active. Press Ctrl+C to STOP motors and exit."
+echo "Autonomous tracking is active. Open http://<Pi-IP>:${DEBUG_WEB_PORT} on a computer for the route-debug view."
+echo "Press Ctrl+C to STOP motors and exit."
 cd "${PI_SERVICE_DIR}/experiments/line_tracking_validation"
 python3 -u "${VISION_SCRIPT}" \
     --source "http://127.0.0.1:${WEB_PORT}/video_feed" \
@@ -80,6 +82,7 @@ python3 -u "${VISION_SCRIPT}" \
     --process-fps 30 \
     --enable-motors \
     --controller-url "http://127.0.0.1:${WEB_PORT}" \
+    --debug-web-port "${DEBUG_WEB_PORT}" \
     --headless \
     "$@"
 exit $?

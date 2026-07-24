@@ -18,6 +18,11 @@ chmod +x pi_service/run_autonomous_rectangle_line_tracking.sh
 脚本会先等待网页服务和 Arduino 串口都显示在线，再开始循迹，避免网页端口虽已
 打开、Arduino 尚在 USB 重启握手阶段时过早退出。
 
+自动循迹启动后，在电脑浏览器打开 `http://<树莓派 IP>:5051`，即可看到和本地
+OpenCV 窗口相同的叠加画面：道路判断、右转状态、标线点、地面偏差、右侧分支和
+实际发送的电机动作。该调试网页只显示，不参与控制；要改变端口，可在启动前设置
+`LINE_TRACKING_DEBUG_WEB_PORT=<端口号>`。
+
 默认串口为 `/dev/ttyACM0`。若树莓派上的 Arduino 是其他串口，例如
 `/dev/ttyUSB0`，这样启动：
 
