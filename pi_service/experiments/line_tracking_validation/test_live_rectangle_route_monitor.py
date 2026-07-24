@@ -2,7 +2,8 @@ import unittest
 
 import numpy as np
 
-from live_rectangle_route_monitor import track_corridor
+from live_rectangle_route_monitor import keep_near_connected_points, track_corridor
+from track_line.observations import LineDetectionResult, LineObservation
 
 
 class TrackCorridorTests(unittest.TestCase):
@@ -25,6 +26,37 @@ class TrackCorridorTests(unittest.TestCase):
         frame = np.full((100, 200, 3), 255, dtype=np.uint8)
         with self.assertRaises(ValueError):
             track_corridor(frame, roi_top_ratio=0.42, top_width=0, bottom_width=0.56)
+
+    def test_rejects_far_point_from_a_different_tape_component(self):
+        mask = np.zeros((90, 100), dtype=np.uint8)
+        mask[5:25, 10:25] = 255  # unrelated dark object in the far band
+        mask[35:90, 45:58] = 255  # actual guide tape in middle and near bands
+        points = ((17, 20), (51, 55), (51, 85))
+        observation = LineObservation(
+            frame_index=0,
+            timestamp_ns=1,
+            offset=0.0,
+            heading=-0.7,
+            curvature=0.0,
+            confidence=0.8,
+            line_lost=False,
+            valid_bands=3,
+            points_normalized=((0.17, 0.20), (0.51, 0.55), (0.51, 0.85)),
+        )
+        result = LineDetectionResult(
+            observation=observation,
+            mask=mask,
+            roi_top=0,
+            points_px=points,
+            band_boundaries_px=(0, 30, 60, 90),
+        )
+
+        filtered = keep_near_connected_points(result, (90, 100, 3))
+
+        self.assertEqual(filtered.points_px, points[1:])
+        self.assertEqual(filtered.observation.valid_bands, 2)
+        self.assertEqual(filtered.observation.rejection_reason, "far_candidate_disconnected")
+        self.assertAlmostEqual(filtered.observation.heading, 0.0)
 
 
 if __name__ == "__main__":

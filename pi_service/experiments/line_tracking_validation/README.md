@@ -44,6 +44,10 @@ http://100.80.46.54:5000/video_feed
 `--track-roi-bottom-width` 调整宽度。车不在路线附近时，显示 `STOP` 是预期的
 安全行为。
 
+监视器还会检查近、中、远三个绿点是否属于同一块连通的黑胶带。若最远点属于
+另一块噪点，会从标线中删掉并显示 `far_candidate_disconnected`；此时程序不再
+用该错误点计算转向趋势。
+
 命令行调试示例（需要提高处理频率时改为 `--process-fps 15`）：
 
 ```powershell

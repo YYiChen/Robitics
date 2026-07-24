@@ -6,6 +6,7 @@ motor command. Press Q or Esc in the preview window to stop it.
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 from pathlib import Path
 import sys
@@ -104,6 +105,76 @@ def draw_track_corridor(frame, polygon):
     return output
 
 
+def keep_near_connected_points(result, frame_shape):
+    """Reject band points not connected to the near guide-line component.
+
+    The base detector selects candidates independently in three horizontal
+    bands. A chair leg may therefore become the far point even when the near
+    and middle points are correct. A real L corner is a single connected tape
+    component, so all accepted points must share the near point's component.
+    """
+    if len(result.points_px) < 2:
+        return result
+
+    _count, labels = cv2.connectedComponents(result.mask, connectivity=8)
+    labels_for_points: list[int] = []
+    for x, y in result.points_px:
+        mask_y = y - result.roi_top
+        if not (0 <= mask_y < labels.shape[0] and 0 <= x < labels.shape[1]):
+            labels_for_points.append(0)
+            continue
+        window = labels[
+            max(0, mask_y - 8) : min(labels.shape[0], mask_y + 9),
+            max(0, x - 8) : min(labels.shape[1], x + 9),
+        ]
+        foreground = window[window > 0]
+        if foreground.size == 0:
+            labels_for_points.append(0)
+            continue
+        candidates, counts = np.unique(foreground, return_counts=True)
+        labels_for_points.append(int(candidates[np.argmax(counts)]))
+
+    near_label = labels_for_points[-1]
+    keep_indices = [
+        index for index, label in enumerate(labels_for_points) if near_label and label == near_label
+    ]
+    if len(keep_indices) == len(result.points_px):
+        return result
+
+    kept_points = tuple(result.points_px[index] for index in keep_indices)
+    kept_normalized = tuple(
+        result.observation.points_normalized[index] for index in keep_indices
+    )
+    if len(kept_points) < 2:
+        observation = replace(
+            result.observation,
+            offset=None,
+            heading=None,
+            curvature=None,
+            confidence=0.0,
+            line_lost=True,
+            valid_bands=len(kept_points),
+            points_normalized=kept_normalized,
+            rejection_reason="disconnected_line_candidates",
+        )
+    else:
+        frame_height, frame_width = frame_shape[:2]
+        half_width = max(1.0, frame_width / 2.0)
+        centres = [point[0] for point in kept_points]
+        offset = float(np.clip((float(np.mean(centres)) - half_width) / half_width, -1, 1))
+        heading = float(np.clip((centres[0] - centres[-1]) / half_width, -1, 1))
+        observation = replace(
+            result.observation,
+            offset=offset,
+            heading=heading,
+            curvature=0.0 if len(kept_points) < 3 else result.observation.curvature,
+            valid_bands=len(kept_points),
+            points_normalized=kept_normalized,
+            rejection_reason="far_candidate_disconnected",
+        )
+    return replace(result, observation=observation, points_px=kept_points)
+
+
 def render_decision(frame, decision: PlannerDecision):
     color = {
         "STRAIGHT": (0, 220, 0),
@@ -166,6 +237,7 @@ def main() -> int:
                 bottom_width=args.track_roi_bottom_width,
             )
             result = detector.detect(detector_frame, frame_index=analysed_frames, timestamp_ns=time.monotonic_ns())
+            result = keep_near_connected_points(result, detector_frame.shape)
             decision = planner.step(result.observation)
             emit(analysed_frames, result, decision)
             annotated = render_decision(
