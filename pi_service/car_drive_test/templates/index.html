@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>小车整车测试</title>
+  <style>
+    body { margin: 0; background: #111827; color: #e5e7eb; font: 16px system-ui,sans-serif; }
+    main { max-width: 860px; margin: auto; padding: 16px; }
+    img { width: 100%; background: #000; border-radius: 12px; aspect-ratio: 4 / 3; object-fit: contain; }
+    .controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; max-width: 390px; margin: 18px auto; }
+    button { min-height: 64px; border: 0; border-radius: 10px; background: #2563eb; color: #fff; font-size: 18px; touch-action: none; }
+    button.stop { background: #dc2626; } button.blank { visibility: hidden; }
+    label { display: block; text-align: center; } input { width: 210px; vertical-align: middle; }
+    #status { text-align: center; color: #9ca3af; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>小车整车测试：M3 右侧 / M4 左侧</h1>
+    <img src="/video_feed" alt="CSI 摄像头画面">
+    <div class="controls">
+      <button class="blank">.</button><button data-action="F">前进 W</button><button class="blank">.</button>
+      <button data-action="L">左转 A</button><button class="stop" data-action="STOP">停止</button><button data-action="R">右转 D</button>
+      <button class="blank">.</button><button data-action="B">后退 S</button><button class="blank">.</button>
+    </div>
+    <label>测试 PWM：<input id="speed" type="range" min="0" max="255" value="100"> <span id="speed-value">100</span></label>
+    <p id="status">正在连接…</p>
+  </main>
+  <script>
+    let held = 'STOP';
+    const post = (url, body) => fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}).catch(() => {});
+    const setAction = action => { held = action; post('/api/action', {action}); };
+    document.querySelectorAll('[data-action]').forEach(button => {
+      const action = button.dataset.action;
+      button.addEventListener('pointerdown', event => { event.preventDefault(); setAction(action); });
+      ['pointerup','pointerleave','pointercancel'].forEach(name => button.addEventListener(name, () => { if (action !== 'STOP') setAction('STOP'); }));
+    });
+    const keys = {w:'F',a:'L',s:'B',d:'R'};
+    addEventListener('keydown', event => { const action = keys[event.key.toLowerCase()]; if (action && !event.repeat) setAction(action); });
+    addEventListener('keyup', event => { if (keys[event.key.toLowerCase()]) setAction('STOP'); });
+    addEventListener('blur', () => setAction('STOP'));
+    // Keep the Arduino watchdog alive only while a button/key remains held.
+    setInterval(() => { if (held !== 'STOP') post('/api/action', {action: held}); }, 180);
+    const speed = document.querySelector('#speed');
+    speed.addEventListener('input', () => document.querySelector('#speed-value').textContent = speed.value);
+    speed.addEventListener('change', () => post('/api/speed', {speed:+speed.value}));
+    setInterval(async () => { try { const data = await (await fetch('/api/status')).json(); document.querySelector('#status').textContent = `串口：${data.robot.serial ? '已连接' : '未连接'} | 动作：${data.robot.action} | ${data.robot.reply || data.robot.error || ''}`; } catch (_) {} }, 500);
+  </script>
+</body>
+</html>
