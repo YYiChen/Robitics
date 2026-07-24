@@ -295,7 +295,18 @@ def main() -> int:
             result = detector.detect(detector_frame, frame_index=analysed_frames, timestamp_ns=time.monotonic_ns())
             result = keep_near_connected_points(result, detector_frame.shape)
             right_branch = has_connected_right_branch(result)
-            decision = planner.step(result.observation, right_corner_ahead=right_branch)
+            new_line_ready = (
+                not result.observation.line_lost
+                and result.observation.valid_bands >= 2
+                and not right_branch
+                and result.observation.heading is not None
+                and abs(result.observation.heading) <= 0.18
+            )
+            decision = planner.step(
+                result.observation,
+                right_corner_ahead=right_branch,
+                new_line_ready=new_line_ready,
+            )
             motor_action = motor_executor.apply(decision, result.observation) if motor_executor else "DISPLAY_ONLY"
             emit(analysed_frames, result, decision, right_branch_detected=right_branch, motor_action=motor_action)
             annotated = render_decision(

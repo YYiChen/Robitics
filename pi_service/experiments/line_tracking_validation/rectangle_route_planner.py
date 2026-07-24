@@ -51,9 +51,9 @@ class RectanglePlannerConfig:
     right_offset_threshold: float = 0.12
     corner_confirmation_frames: int = 2
     corner_disarm_frames: int = 4
-    missing_before_turn: int = 2
+    missing_before_turn: int = 1
     reacquire_frames: int = 3
-    max_turn_frames: int = 45
+    max_turn_frames: int = 100
 
 
 class ClockwiseRectanglePlanner:
@@ -78,6 +78,7 @@ class ClockwiseRectanglePlanner:
         observation: LineEvidence,
         *,
         right_corner_ahead: bool = False,
+        new_line_ready: bool = False,
     ) -> PlannerDecision:
         """Return the route intent for one detector observation.
 
@@ -85,7 +86,11 @@ class ClockwiseRectanglePlanner:
         evidence. It takes precedence over the weaker far-band heading cue.
         """
         if self._usable(observation):
-            return self._on_line(observation, right_corner_ahead=right_corner_ahead)
+            return self._on_line(
+                observation,
+                right_corner_ahead=right_corner_ahead,
+                new_line_ready=new_line_ready,
+            )
         return self._on_line_lost()
 
     def _usable(self, observation: LineEvidence) -> bool:
@@ -101,10 +106,13 @@ class ClockwiseRectanglePlanner:
         observation: LineEvidence,
         *,
         right_corner_ahead: bool,
+        new_line_ready: bool,
     ) -> PlannerDecision:
         self._missing_frames = 0
 
         if self.state is RouteState.TURNING_RIGHT:
+            if not new_line_ready:
+                return self._decision(RouteIntent.TURN_RIGHT, "turning_until_new_line")
             self._reacquired_frames += 1
             if self._reacquired_frames < self.config.reacquire_frames:
                 return self._decision(RouteIntent.TURN_RIGHT, "reacquiring_new_edge")
@@ -147,12 +155,10 @@ class ClockwiseRectanglePlanner:
         self._missing_frames += 1
 
         if self.state is RouteState.RIGHT_CORNER_ARMED:
-            if self._missing_frames >= self.config.missing_before_turn:
-                self.state = RouteState.TURNING_RIGHT
-                self._turn_frames = 0
-                self._reacquired_frames = 0
-                return self._turn_or_stop()
-            return self._decision(RouteIntent.STRAIGHT, "armed_corner_waiting_for_line_end")
+            self.state = RouteState.TURNING_RIGHT
+            self._turn_frames = 0
+            self._reacquired_frames = 0
+            return self._turn_or_stop()
 
         if self.state is RouteState.TURNING_RIGHT:
             return self._turn_or_stop()

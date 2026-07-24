@@ -41,7 +41,7 @@ class ClockwiseRectanglePlannerTests(unittest.TestCase):
             [
                 RouteIntent.STRAIGHT,
                 RouteIntent.STRAIGHT,
-                RouteIntent.STRAIGHT,
+                RouteIntent.TURN_RIGHT,
                 RouteIntent.TURN_RIGHT,
                 RouteIntent.TURN_RIGHT,
             ],
@@ -56,9 +56,9 @@ class ClockwiseRectanglePlannerTests(unittest.TestCase):
 
     def test_new_edge_needs_three_frames_before_straight(self):
         planner = ClockwiseRectanglePlanner()
-        for item in (Observation(0.03, 0.43), Observation(0.05, 0.45), LOST, LOST):
+        for item in (Observation(0.03, 0.43), Observation(0.05, 0.45), LOST):
             planner.step(item)
-        decisions = [planner.step(Observation(-0.02, 0.01)) for _ in range(3)]
+        decisions = [planner.step(Observation(-0.02, 0.01), new_line_ready=True) for _ in range(3)]
         self.assertEqual(
             [item.intent for item in decisions],
             [RouteIntent.TURN_RIGHT, RouteIntent.TURN_RIGHT, RouteIntent.STRAIGHT],
@@ -81,6 +81,16 @@ class ClockwiseRectanglePlannerTests(unittest.TestCase):
         decisions = [planner.step(observation) for _ in range(3)]
         self.assertTrue(all(item.state is RouteState.RIGHT_CORNER_ARMED for item in decisions))
         self.assertTrue(all(item.reason == "right_corner_latched" for item in decisions))
+
+    def test_turning_ignores_old_corner_line_until_new_edge_is_ready(self):
+        planner = ClockwiseRectanglePlanner()
+        observation = Observation(0.01, 0.02)
+        planner.step(observation, right_corner_ahead=True)
+        planner.step(observation, right_corner_ahead=True)
+        planner.step(LOST)
+        decisions = [planner.step(observation, new_line_ready=False) for _ in range(3)]
+        self.assertTrue(all(item.intent is RouteIntent.TURN_RIGHT for item in decisions))
+        self.assertTrue(all(item.reason == "turning_until_new_line" for item in decisions))
 
 
 if __name__ == "__main__":
