@@ -21,6 +21,13 @@ class CameraMetricsTests(unittest.TestCase):
         missing = sorted(item for item in referenced_ids if f'id="{item}"' not in template)
         self.assertEqual(missing, [])
 
+    def test_drive_editor_only_exposes_the_two_connected_drive_outputs(self) -> None:
+        template = (Path(__file__).parents[1] / "robot_web" / "templates" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="rfValue"', template)
+        self.assertIn('id="lfValue"', template)
+        self.assertNotIn('id="lrValue"', template)
+        self.assertNotIn('id="rrValue"', template)
+
     def test_r_card_trigger_is_checked_before_input_focus_guard(self) -> None:
         script = (Path(__file__).parents[1] / "robot_web" / "static" / "app.js").read_text(encoding="utf-8")
         keydown = script.split('addEventListener("keydown"', 1)[1].split('addEventListener("keyup"', 1)[0]

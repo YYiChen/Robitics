@@ -1,7 +1,7 @@
 const $ = selector => document.querySelector(selector);
 const video = $("#video"), webrtcVideo = $("#webrtcVideo"), highresVideo = $("#highresVideo"), save = $("#save");
 const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:false});
-let folder, aborter, count = 0, configLoaded = false, keysSending = false, keysQueued = false;
+let folder, aborter, count = 0, profiles = {}, configLoaded = false, keysSending = false, keysQueued = false;
 let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, highresProfileDirty = false, highresProfileBusy = false, highresFpsDirty = false, highresFpsBusy = false, exposureDirty = false, exposureBusy = false, colorCorrectionDirty = false, colorCorrectionBusy = false, videoRetryTimer;
 let servoBusy = false, queuedServoAngle = null, steeringCenterAngle = 90, steeringReversed = true;
 let feedBusy = false, dealBusy = false;
@@ -483,10 +483,50 @@ $("#applyServoSettings").onclick = async () => {
   } catch (error) { note(error.message); }
 };
 
+function profileFor(action) {
+  return profiles[action] || {rf:0, lf:0, lr:0, rr:0};
+}
+function boundedPwm(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(-255, Math.min(255, Math.round(number))) : 0;
+}
+function fillDriveProfileEditor() {
+  const profile = profileFor($("#profileAction").value);
+  $("#rfValue").value = boundedPwm(profile.rf);
+  $("#lfValue").value = boundedPwm(profile.lf);
+  updateDriveProfilePreview();
+}
+function driveProfileFromEditor() {
+  return {
+    ...profileFor($("#profileAction").value),
+    rf: boundedPwm($("#rfValue").value),
+    lf: boundedPwm($("#lfValue").value),
+  };
+}
+function updateDriveProfilePreview() {
+  const profile = driveProfileFromEditor();
+  $("#profilePreview").textContent = `M1 ${profile.rf} · M2 ${profile.lf}`;
+}
+for (const input of document.querySelectorAll("#rfValue,#lfValue")) input.addEventListener("input", updateDriveProfilePreview);
+$("#profileAction").onchange = fillDriveProfileEditor;
+$("#applyProfile").onclick = async () => {
+  profiles[$("#profileAction").value] = driveProfileFromEditor();
+  try {
+    const response = await fetch("/api/config", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({profiles})});
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw Error(data.error || "行驶电机配置保存失败");
+    profiles = data.config.profiles;
+    fillDriveProfileEditor();
+    note("M1/M2 当前动作 PWM 已应用并保存");
+  } catch (error) { note(error.message); }
+};
+
 function fillConfig(config) {
+  profiles = config.profiles || profiles;
   $("#speedMode").checked = !!config.speed_mode; $("#targetSpeed").value = config.target_speed; $("#kp").value = config.kp; $("#ki").value = config.ki; $("#kd").value = config.kd;
   steeringCenterAngle = Number(config.servo_center_angle ?? 90); steeringReversed = !!config.servo_qe_reversed;
   $("#servoCenterAngle").value = steeringCenterAngle; $("#servoSpeedDps").value = config.servo_speed_dps ?? 45; $("#servoAccelerationDps2").value = config.servo_acceleration_dps2 ?? 120; $("#servoQeReversed").checked = steeringReversed;
+  fillDriveProfileEditor();
 }
 $("#applyPid").onclick = async () => { const payload = {speed_mode:$("#speedMode").checked, target_speed:Number($("#targetSpeed").value), kp:Number($("#kp").value), ki:Number($("#ki").value), kd:Number($("#kd").value)};
   try { const response = await fetch("/api/config", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)}); if (!response.ok) throw Error("PID 参数提交失败"); note("PID 参数已应用并保存"); } catch (error) { note(error.message); }
