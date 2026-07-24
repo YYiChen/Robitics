@@ -14,6 +14,8 @@ class StubRobotClient(RobotWebClient):
             return {"robot": {"arduino_online": True}}
         if path == "/api/action":
             return {"ok": True, "action": payload["action"]}
+        if path == "/api/drive":
+            return {"ok": True, **payload}
         if path == "/api/config":
             return {"ok": True, "config": payload}
         return {"ok": True}
@@ -36,6 +38,14 @@ class RobotWebClientTests(unittest.TestCase):
         client.require_arduino_online()
         client.stop()
         self.assertEqual(client.calls[-1], ("/api/stop", {}))
+
+    def test_send_drive_pwm_uses_non_persistent_drive_endpoint(self):
+        client = StubRobotClient()
+        self.assertEqual(client.send_drive_pwm(140, 80), (140, 80))
+        self.assertEqual(
+            client.calls,
+            [("/api/drive", {"right_pwm": 140, "left_pwm": 80})],
+        )
 
 
 if __name__ == "__main__":

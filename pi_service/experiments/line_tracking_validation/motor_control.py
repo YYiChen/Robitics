@@ -22,10 +22,11 @@ class MotorControlConfig:
     controller_url: str
     straight_pwm: int = 110
     pivot_pwm: int = 155
-    curve_outer_pwm: int = 200
+    curve_outer_pwm: int = 180
     curve_inner_pwm: int = 60
     correction_deadband: float = 0.05
-    command_interval_seconds: float = 0.18
+    p_gain: float = 450.0
+    command_interval_seconds: float = 0.05
 
 
 def action_for_decision(
@@ -51,13 +52,31 @@ def action_for_decision(
     return "F"
 
 
+def proportional_drive_pwm(
+    observation: LineObservation,
+    config: MotorControlConfig,
+) -> tuple[int, int] | None:
+    """Map normalized image offset to right/left PWM with P control only."""
+    if observation.offset is None:
+        return None
+    error = float(observation.offset)
+    if abs(error) <= config.correction_deadband:
+        return config.straight_pwm, config.straight_pwm
+
+    # Positive offset means the line is right of centre: left must be faster.
+    correction = abs(error) * config.p_gain
+    outer = min(config.curve_outer_pwm, round(config.straight_pwm + correction))
+    inner = max(config.curve_inner_pwm, round(config.straight_pwm - correction))
+    return (inner, outer) if error > 0 else (outer, inner)
+
+
 class RobotWebMotorExecutor:
     """Configure and heartbeat the Pi ``/api/action`` control endpoint."""
 
     def __init__(self, config: MotorControlConfig) -> None:
         self.config = config
         self.client = RobotWebClient(RobotClientConfig(config.controller_url))
-        self._last_action: str | None = None
+        self._last_action: str | tuple[int, int] | None = None
         self._last_sent_at = 0.0
 
     def configure(self) -> None:
@@ -94,7 +113,26 @@ class RobotWebMotorExecutor:
         self.stop()
 
     def apply(self, decision: PlannerDecision, observation: LineObservation) -> str:
+        if (
+            decision.intent is RouteIntent.STRAIGHT
+            and decision.state is not RouteState.APPROACHING_RIGHT_CORNER
+        ):
+            drive_pwm = proportional_drive_pwm(observation, self.config)
+            if drive_pwm is not None:
+                return self._apply_direct_drive(drive_pwm)
+
         action = action_for_decision(decision, observation, self.config)
+        return self._apply_action(action)
+
+    def _apply_direct_drive(self, drive_pwm: tuple[int, int]) -> str:
+        now = time.monotonic()
+        if drive_pwm == self._last_action and now - self._last_sent_at < self.config.command_interval_seconds:
+            return f"P(R={drive_pwm[0]},L={drive_pwm[1]})"
+        self.client.send_drive_pwm(*drive_pwm)
+        self._last_action, self._last_sent_at = drive_pwm, now
+        return f"P(R={drive_pwm[0]},L={drive_pwm[1]})"
+
+    def _apply_action(self, action: str) -> str:
         now = time.monotonic()
         if action == self._last_action and now - self._last_sent_at < self.config.command_interval_seconds:
             return action

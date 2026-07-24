@@ -60,6 +60,16 @@ class RobotWebClient:
             raise ValueError(f"unsupported robot action: {action}")
         return str(self._request("/api/action", {"action": action})["action"])
 
+    def send_drive_pwm(self, right_pwm: int, left_pwm: int) -> tuple[int, int]:
+        """Send one bounded, non-persistent M1/M2 differential command."""
+        if not -255 <= right_pwm <= 255 or not -255 <= left_pwm <= 255:
+            raise ValueError("drive PWM must be in [-255, 255]")
+        response = self._request(
+            "/api/drive",
+            {"right_pwm": right_pwm, "left_pwm": left_pwm},
+        )
+        return int(response["right_pwm"]), int(response["left_pwm"])
+
     def stop(self) -> None:
         self._request("/api/stop", {})
 

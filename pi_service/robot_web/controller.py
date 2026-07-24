@@ -11,6 +11,7 @@ from pathlib import Path
 import serial
 
 HEARTBEAT_SECONDS = 0.20
+DIRECT_DRIVE_SECONDS = 0.05
 SERVO_TICK_SECONDS = 0.05
 CLIENT_TIMEOUT_SECONDS = 0.80
 CARD_COMMAND_ACK_TIMEOUT_SECONDS = 1.20
@@ -96,6 +97,7 @@ class RobotController:
             self._save_config()
         self.serial_lock = threading.RLock()
         self.serial = None; self.action = "STOP"; self.held_keys: set[str] = set(); self.last_client_seen = 0.0
+        self.direct_drive: tuple[int, int] | None = None
         self.steering_direction = 0; self.last_steering_seen = 0.0
         self._last_sent_steering_direction: int | None = None
         self._last_steering_sent_at = 0.0
@@ -171,6 +173,7 @@ class RobotController:
         self._stop.set()
         with self.lock:
             self.held_keys.clear()
+            self.direct_drive = None
             self.action = "STOP"; self.steering_direction = 0
             snapshot = asdict(self.config)
         try:
@@ -212,8 +215,28 @@ class RobotController:
         with self.lock:
             # Compatibility endpoint for terminal/curl diagnostics.  The web
             # interface itself uses update_keys so releasing a key stops now.
-            self.held_keys.clear(); self.action, self.last_client_seen = action, time.monotonic()
+            self.held_keys.clear(); self.direct_drive = None
+            self.action, self.last_client_seen = action, time.monotonic()
         return action
+
+    def set_direct_drive(self, right_pwm: object, left_pwm: object) -> tuple[int, int]:
+        """Apply bounded M1/M2 PWM without changing persisted profiles.
+
+        This is intended for short-lived closed-loop clients such as visual
+        line following.  The normal 0.8 second client heartbeat timeout still
+        converts it to STOP when the client disappears.
+        """
+        try:
+            right, left = int(right_pwm), int(left_pwm)
+        except (TypeError, ValueError):
+            raise ValueError("左右电机 PWM 必须是整数") from None
+        if not -255 <= right <= 255 or not -255 <= left <= 255:
+            raise ValueError("左右电机 PWM 必须在 -255 到 255 之间")
+        with self.lock:
+            self.held_keys.clear()
+            self.direct_drive = (right, left)
+            self.action, self.last_client_seen = "PID", time.monotonic()
+        return right, left
     @staticmethod
     def _action_from_keys(keys: set[str]) -> str:
         if "x" in keys: return "SPL"
@@ -232,6 +255,7 @@ class RobotController:
         steering = max(-1, min(1, steering))
         with self.lock:
             now = time.monotonic()
+            self.direct_drive = None
             self.held_keys, self.action, self.last_client_seen = keys, self._action_from_keys(keys), now
             self.steering_direction, self.last_steering_seen = steering, now
             return self.action
@@ -255,7 +279,8 @@ class RobotController:
         return result
     def stop_now(self) -> None:
         with self.lock:
-            self.held_keys.clear(); self.action = "STOP"; self.steering_direction = 0
+            self.held_keys.clear(); self.direct_drive = None
+            self.action = "STOP"; self.steering_direction = 0
         self._write("STOP")
     @staticmethod
     def _timed_motor_parameters(raw_pwm: object, raw_duration_ms: object) -> tuple[int, int]:
@@ -422,7 +447,8 @@ class RobotController:
         puts the controller in STOP and waits in _connect for boot to finish.
         """
         with self.lock:
-            self.held_keys.clear(); self.action, self.last_client_seen = "STOP", 0.0; self.steering_direction = 0
+            self.held_keys.clear(); self.direct_drive = None
+            self.action, self.last_client_seen = "STOP", 0.0; self.steering_direction = 0
             self.last_rx = 0.0; self.error = ""
         self._close_serial(send_stop=True)
         self._connect()
@@ -516,7 +542,9 @@ class RobotController:
         while not self._stop.wait(SERVO_TICK_SECONDS):
             now = time.monotonic()
             with self.lock:
-                action = self.action if now - self.last_client_seen <= CLIENT_TIMEOUT_SECONDS else "STOP"
+                client_is_current = now - self.last_client_seen <= CLIENT_TIMEOUT_SECONDS
+                action = self.action if client_is_current else "STOP"
+                direct_drive = self.direct_drive if client_is_current else None
                 if action == "STOP": self.held_keys.clear(); self.action = "STOP"
                 cfg = Config(**asdict(self.config))
             self._sync_steering(now, cfg)
@@ -525,7 +553,11 @@ class RobotController:
                 next_servo_query = now + HEARTBEAT_SECONDS
             if now < next_motor:
                 continue
-            if cfg.speed_mode:
+            if direct_drive is not None:
+                # Visual P control owns the instantaneous M1/M2 command.
+                # It is intentionally separate from Arduino wheel-speed PID.
+                self._write("M," + ",".join(map(str, (*direct_drive, 0, 0))))
+            elif cfg.speed_mode:
                 left, right, front_left, front_right = self._speed(action, cfg)
                 self._write(f"V,{left:.1f},{right:.1f}")
                 # The Arduino applies right/left PID to M1/M2 and ignores the
@@ -533,7 +565,7 @@ class RobotController:
                 self._write("M,0,0,0,0")
             else:
                 self._write("M," + ",".join(map(str, self._raw(action, cfg))))
-            next_motor = now + HEARTBEAT_SECONDS
+            next_motor = now + (DIRECT_DRIVE_SECONDS if direct_drive is not None else HEARTBEAT_SECONDS)
             with self.serial_lock:
                 port = self.serial
                 if port:

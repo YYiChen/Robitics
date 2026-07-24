@@ -46,6 +46,13 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
     def action():
         try: return jsonify(ok=True, action=controller.select_action((request.get_json(silent=True) or {}).get("action", "STOP")))
         except ValueError as exc: return jsonify(ok=False, error=str(exc)), 400
+    @app.post("/api/drive")
+    def drive():
+        payload = request.get_json(silent=True) or {}
+        try:
+            right, left = controller.set_direct_drive(payload.get("right_pwm"), payload.get("left_pwm"))
+            return jsonify(ok=True, right_pwm=right, left_pwm=left)
+        except ValueError as exc: return jsonify(ok=False, error=str(exc)), 400
     @app.post("/api/keys")
     def keys():
         payload = request.get_json(silent=True) or {}
