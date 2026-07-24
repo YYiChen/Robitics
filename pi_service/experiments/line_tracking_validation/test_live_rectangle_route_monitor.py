@@ -2,7 +2,11 @@ import unittest
 
 import numpy as np
 
-from live_rectangle_route_monitor import keep_near_connected_points, track_corridor
+from live_rectangle_route_monitor import (
+    has_connected_right_branch,
+    keep_near_connected_points,
+    track_corridor,
+)
 from track_line.observations import LineDetectionResult, LineObservation
 
 
@@ -57,6 +61,31 @@ class TrackCorridorTests(unittest.TestCase):
         self.assertEqual(filtered.observation.valid_bands, 2)
         self.assertEqual(filtered.observation.rejection_reason, "far_candidate_disconnected")
         self.assertAlmostEqual(filtered.observation.heading, 0.0)
+
+    def test_detects_connected_horizontal_right_arm(self):
+        mask = np.zeros((100, 120), dtype=np.uint8)
+        mask[35:95, 50:62] = 255
+        mask[35:48, 50:112] = 255
+        observation = LineObservation(
+            frame_index=0,
+            timestamp_ns=1,
+            offset=0.0,
+            heading=0.0,
+            curvature=0.0,
+            confidence=0.8,
+            line_lost=False,
+            valid_bands=2,
+            points_normalized=((0.47, 0.42), (0.47, 0.78)),
+        )
+        result = LineDetectionResult(
+            observation=observation,
+            mask=mask,
+            roi_top=0,
+            points_px=((56, 42), (56, 78)),
+            band_boundaries_px=(0, 33, 66, 100),
+        )
+
+        self.assertTrue(has_connected_right_branch(result))
 
 
 if __name__ == "__main__":

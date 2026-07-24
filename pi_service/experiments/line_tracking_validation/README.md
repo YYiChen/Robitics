@@ -48,6 +48,10 @@ http://100.80.46.54:5000/video_feed
 另一块噪点，会从标线中删掉并显示 `far_candidate_disconnected`；此时程序不再
 用该错误点计算转向趋势。
 
+当近线所属的连通胶带在拐点高度向右伸出足够长的水平臂时，预览会显示
+`RIGHT BRANCH: DETECTED`。该信号连续两帧后进入 `RIGHT_CORNER_ARMED`；待旧竖线
+消失，才显示 `TURN_RIGHT`。
+
 命令行调试示例（需要提高处理频率时改为 `--process-fps 15`）：
 
 ```powershell

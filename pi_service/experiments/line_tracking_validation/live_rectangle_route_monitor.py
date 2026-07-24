@@ -175,20 +175,62 @@ def keep_near_connected_points(result, frame_shape):
     return replace(result, observation=observation, points_px=kept_points)
 
 
-def render_decision(frame, decision: PlannerDecision):
+def _component_label_near_point(labels, result) -> int:
+    """Return the dominant foreground component near the closest line point."""
+    if not result.points_px:
+        return 0
+    x, y = result.points_px[-1]
+    mask_y = y - result.roi_top
+    window = labels[
+        max(0, mask_y - 8) : min(labels.shape[0], mask_y + 9),
+        max(0, x - 8) : min(labels.shape[1], x + 9),
+    ]
+    foreground = window[window > 0]
+    if foreground.size == 0:
+        return 0
+    candidates, counts = np.unique(foreground, return_counts=True)
+    return int(candidates[np.argmax(counts)])
+
+
+def has_connected_right_branch(result, *, minimum_width_ratio: float = 0.12) -> bool:
+    """Recognise a horizontal right arm joined to the current near guide line."""
+    if len(result.points_px) < 2:
+        return False
+    _count, labels = cv2.connectedComponents(result.mask, connectivity=8)
+    label = _component_label_near_point(labels, result)
+    if label == 0:
+        return False
+
+    component_y, component_x = np.where(labels == label)
+    pivot_x, pivot_y_global = result.points_px[-2]
+    pivot_y = pivot_y_global - result.roi_top
+    band_height = max(1, result.band_boundaries_px[2] - result.band_boundaries_px[1])
+    nearby = component_x[np.abs(component_y - pivot_y) <= max(12, band_height // 3)]
+    if nearby.size == 0:
+        return False
+    right_extent = int(np.max(nearby)) - pivot_x
+    left_extent = pivot_x - int(np.min(nearby))
+    minimum_width = int(round(result.mask.shape[1] * minimum_width_ratio))
+    return right_extent >= minimum_width and right_extent > left_extent * 1.25
+
+
+def render_decision(frame, decision: PlannerDecision, *, right_branch_detected: bool):
     color = {
         "STRAIGHT": (0, 220, 0),
         "TURN_RIGHT": (0, 165, 255),
         "STOP": (0, 0, 255),
     }[decision.intent.value]
     output = frame.copy()
-    cv2.rectangle(output, (10, 76), (620, 143), (20, 20, 20), cv2.FILLED)
+    cv2.rectangle(output, (10, 76), (620, 170), (20, 20, 20), cv2.FILLED)
     cv2.putText(output, f"ROUTE: {decision.intent.value}", (18, 104), cv2.FONT_HERSHEY_SIMPLEX, 0.78, color, 2, cv2.LINE_AA)
     cv2.putText(output, f"{decision.state.value}: {decision.reason}", (18, 132), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 1, cv2.LINE_AA)
+    branch_text = "RIGHT BRANCH: DETECTED" if right_branch_detected else "RIGHT BRANCH: not detected"
+    branch_color = (0, 165, 255) if right_branch_detected else (170, 170, 170)
+    cv2.putText(output, branch_text, (18, 158), cv2.FONT_HERSHEY_SIMPLEX, 0.52, branch_color, 1, cv2.LINE_AA)
     return output
 
 
-def emit(frame_index: int, result, decision: PlannerDecision) -> None:
+def emit(frame_index: int, result, decision: PlannerDecision, *, right_branch_detected: bool) -> None:
     print(
         json.dumps(
             {
@@ -197,6 +239,7 @@ def emit(frame_index: int, result, decision: PlannerDecision) -> None:
                 "route_intent": decision.intent.value,
                 "route_state": decision.state.value,
                 "reason": decision.reason,
+                "right_branch_detected": right_branch_detected,
             },
             ensure_ascii=False,
             separators=(",", ":"),
@@ -238,11 +281,13 @@ def main() -> int:
             )
             result = detector.detect(detector_frame, frame_index=analysed_frames, timestamp_ns=time.monotonic_ns())
             result = keep_near_connected_points(result, detector_frame.shape)
-            decision = planner.step(result.observation)
-            emit(analysed_frames, result, decision)
+            right_branch = has_connected_right_branch(result)
+            decision = planner.step(result.observation, right_corner_ahead=right_branch)
+            emit(analysed_frames, result, decision, right_branch_detected=right_branch)
             annotated = render_decision(
                 draw_track_corridor(render_debug(detector_frame, result), corridor_polygon),
                 decision,
+                right_branch_detected=right_branch,
             )
             analysed_frames += 1
 

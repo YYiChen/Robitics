@@ -71,10 +71,19 @@ class ClockwiseRectanglePlanner:
         self._turn_frames = 0
         self._reacquired_frames = 0
 
-    def step(self, observation: LineEvidence) -> PlannerDecision:
-        """Return the route intent for one detector observation."""
+    def step(
+        self,
+        observation: LineEvidence,
+        *,
+        right_corner_ahead: bool = False,
+    ) -> PlannerDecision:
+        """Return the route intent for one detector observation.
+
+        ``right_corner_ahead`` is a geometric branch detector's explicit
+        evidence. It takes precedence over the weaker far-band heading cue.
+        """
         if self._usable(observation):
-            return self._on_line(observation)
+            return self._on_line(observation, right_corner_ahead=right_corner_ahead)
         return self._on_line_lost()
 
     def _usable(self, observation: LineEvidence) -> bool:
@@ -85,7 +94,12 @@ class ClockwiseRectanglePlanner:
             and observation.confidence >= self.config.minimum_confidence
         )
 
-    def _on_line(self, observation: LineEvidence) -> PlannerDecision:
+    def _on_line(
+        self,
+        observation: LineEvidence,
+        *,
+        right_corner_ahead: bool,
+    ) -> PlannerDecision:
         self._missing_frames = 0
 
         if self.state is RouteState.TURNING_RIGHT:
@@ -99,7 +113,7 @@ class ClockwiseRectanglePlanner:
             self._reset_follow()
             return self._decision(RouteIntent.STOP, "line_reappeared_after_safety_stop")
 
-        if self._right_corner_evidence(observation):
+        if right_corner_ahead or self._right_corner_evidence(observation):
             self._right_evidence_frames += 1
         else:
             self._right_evidence_frames = 0

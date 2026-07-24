@@ -65,6 +65,14 @@ class ClockwiseRectanglePlannerTests(unittest.TestCase):
         )
         self.assertEqual(decisions[-1].reason, "new_edge_confirmed")
 
+    def test_explicit_right_branch_arms_even_when_far_heading_is_unavailable(self):
+        planner = ClockwiseRectanglePlanner()
+        observation = Observation(0.01, 0.02)
+        planner.step(observation, right_corner_ahead=True)
+        decision = planner.step(observation, right_corner_ahead=True)
+        self.assertEqual(planner.state, RouteState.RIGHT_CORNER_ARMED)
+        self.assertEqual(decision.reason, "right_corner_seen_ahead")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
