@@ -13,6 +13,7 @@ from line_stop_planner import LineIntent
 
 class OffsetObservation(Protocol):
     offset: float | None
+    valid_bands: int
 
 
 @dataclass(frozen=True)
@@ -40,7 +41,15 @@ class StraightMotorConfig:
 def drive_pwm_for_offset(observation: OffsetObservation, config: StraightMotorConfig) -> tuple[int, int]:
     """Return (right, left) PWM; the non-zero correction is never below 20."""
     offset = observation.offset
-    if offset is None or abs(offset) <= config.correction_deadband:
+    # At the physical end of a straight tape only one or two horizontal bands
+    # often remain. Keep the vehicle straight during that brief degradation;
+    # the line-stop planner will then latch STOP instead of steering toward a
+    # fragment of the old line.
+    if (
+        offset is None
+        or getattr(observation, "valid_bands", 3) < 3
+        or abs(offset) <= config.correction_deadband
+    ):
         return config.straight_pwm, config.straight_pwm
 
     correction = max(

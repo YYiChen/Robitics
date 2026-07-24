@@ -10,6 +10,7 @@ class Observation:
     offset: float | None = 0.0
     line_lost: bool = False
     confidence: float = 0.8
+    valid_bands: int = 3
 
 
 class StraightLineStopTests(unittest.TestCase):
@@ -34,6 +35,7 @@ class StraightLineStopTests(unittest.TestCase):
         self.assertEqual(drive_pwm_for_offset(Observation(offset=0.0), config), (65, 65))
         self.assertEqual(drive_pwm_for_offset(Observation(offset=0.06), config), (45, 85))
         self.assertEqual(drive_pwm_for_offset(Observation(offset=-0.06), config), (85, 45))
+        self.assertEqual(drive_pwm_for_offset(Observation(offset=0.4, valid_bands=2), config), (65, 65))
 
 
 if __name__ == "__main__":

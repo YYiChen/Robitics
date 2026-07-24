@@ -28,6 +28,7 @@ from track_line.visualization import render_debug  # noqa: E402
 
 from line_stop_planner import LineStopConfig, StraightLineStopPlanner  # noqa: E402
 from straight_motor_control import StraightMotorConfig, StraightMotorExecutor  # noqa: E402
+from debug_web import DebugMjpegPublisher  # noqa: E402
 
 
 DEFAULT_CONFIG = TRACK_LINE_SRC / "track_line" / "config.dark_line.json"
@@ -46,6 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--maximum-correction-pwm", type=int, default=60)
     parser.add_argument("--enable-motors", action="store_true")
     parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--debug-web-port", type=int, default=0)
     return parser.parse_args()
 
 
@@ -68,8 +70,8 @@ def overlay(frame, decision, motor_action: str, observation):
 
 def main() -> int:
     args = parse_args()
-    if args.process_fps < 0:
-        raise ValueError("--process-fps cannot be negative")
+    if args.process_fps < 0 or not 0 <= args.debug_web_port <= 65535:
+        raise ValueError("--process-fps or --debug-web-port is invalid")
     detector = OpenCVLineDetector(LineDetectorConfig.from_json(args.config))
     planner = StraightLineStopPlanner(LineStopConfig(line_lost_stop_frames=args.line_lost_stop_frames))
     executor = None
@@ -87,6 +89,9 @@ def main() -> int:
     capture = cv2.VideoCapture(source_value(args.source))
     if not capture.isOpened():
         raise RuntimeError(f"cannot open source: {args.source}")
+    debug_web = DebugMjpegPublisher(args.debug_web_port) if args.debug_web_port else None
+    if debug_web:
+        print(f"debug_web=http://0.0.0.0:{args.debug_web_port}", flush=True)
 
     minimum_interval = 0.0 if args.process_fps == 0 else 1.0 / args.process_fps
     last_processed_at = 0.0
@@ -106,6 +111,17 @@ def main() -> int:
             motor_action = executor.apply(decision.intent, result.observation) if executor else "DISPLAY_ONLY"
             print(json.dumps({"frame": frame_index, "intent": decision.intent.value, "reason": decision.reason, "lost_frames": decision.lost_frames, "offset": result.observation.offset, "motor": motor_action}, ensure_ascii=False), flush=True)
             annotated = overlay(render_debug(frame, result), decision, motor_action, result.observation)
+            if debug_web:
+                debug_web.publish(
+                    annotated,
+                    {
+                        "intent": decision.intent.value,
+                        "reason": decision.reason,
+                        "lost_frames": decision.lost_frames,
+                        "offset": result.observation.offset,
+                        "motor": motor_action,
+                    },
+                )
             frame_index += 1
             if not args.headless:
                 cv2.imshow("straight line stop validation (Q/Esc stops)", annotated)
@@ -115,6 +131,8 @@ def main() -> int:
         capture.release()
         if executor is not None:
             executor.stop()
+        if debug_web is not None:
+            debug_web.close()
         cv2.destroyAllWindows()
     return 0
 

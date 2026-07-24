@@ -30,3 +30,6 @@ chmod +x /home/g11/Desktop/pi_service/experiments/straight_line_stop_validation/
 
 `Ctrl+C` 会发送 `STOP` 并关闭本次启动的网页服务。这个实验仍需要
 `third_party/DeskMate-Advance/src/track_line/`，供 OpenCV 检测黑线。
+
+运行后在电脑打开 `http://<树莓派 IP>:5052`，即可查看黑线、检测点、直行/停车
+判断、连续丢线帧数、偏差和实际下发的左右轮 PWM。该模块不会显示或执行任何右转逻辑。
