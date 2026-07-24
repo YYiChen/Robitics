@@ -6,13 +6,11 @@ the live monitor receives ``--enable-motors``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 import time
 from typing import Protocol
-from urllib.error import URLError
-from urllib.request import Request, urlopen
 
 from rectangle_route_planner import PlannerDecision, RouteIntent
+from pi_service.robot_client import RobotClientConfig, RobotWebClient
 
 
 class LineObservation(Protocol):
@@ -51,33 +49,14 @@ class RobotWebMotorExecutor:
 
     def __init__(self, config: MotorControlConfig) -> None:
         self.config = config
-        self.base_url = config.controller_url.rstrip("/")
+        self.client = RobotWebClient(RobotClientConfig(config.controller_url))
         self._last_action: str | None = None
         self._last_sent_at = 0.0
 
-    def _request(self, path: str, payload: dict | None = None) -> dict:
-        data = None if payload is None else json.dumps(payload).encode("utf-8")
-        request = Request(
-            f"{self.base_url}{path}",
-            data=data,
-            method="GET" if payload is None else "POST",
-            headers={"Content-Type": "application/json"} if payload is not None else {},
-        )
-        try:
-            with urlopen(request, timeout=0.6) as response:
-                decoded = json.loads(response.read().decode("utf-8"))
-        except (URLError, OSError, ValueError) as exc:
-            raise RuntimeError(f"robot controller request {path} failed: {exc}") from exc
-        if not decoded.get("ok", True):
-            raise RuntimeError(str(decoded.get("error", f"robot controller rejected {path}")))
-        return decoded
-
     def configure(self) -> None:
         """Require an online Arduino, then apply the requested PWM profiles."""
-        status = self._request("/api/status")
+        status = self.client.require_arduino_online()
         robot = status.get("robot", {})
-        if not robot.get("arduino_online"):
-            raise RuntimeError("Arduino is not online; automatic driving was not armed")
         current = robot.get("config", {})
         profiles = dict(current.get("profiles", {}))
         straight = self.config.straight_pwm
@@ -91,8 +70,7 @@ class RobotWebMotorExecutor:
                 "PR": {"rf": -pivot, "lf": pivot, "lr": pivot, "rr": -pivot},
             }
         )
-        self._request(
-            "/api/config",
+        self.client.configure_drive(
             {
                 "speed_mode": False,
                 "straight_pwm": straight,
@@ -109,13 +87,13 @@ class RobotWebMotorExecutor:
         now = time.monotonic()
         if action == self._last_action and now - self._last_sent_at < self.config.command_interval_seconds:
             return action
-        self._request("/api/action", {"action": action})
+        self.client.send_action(action)
         self._last_action, self._last_sent_at = action, now
         return action
 
     def stop(self) -> None:
         try:
-            self._request("/api/stop", {})
+            self.client.stop()
         finally:
             self._last_action = "STOP"
             self._last_sent_at = time.monotonic()

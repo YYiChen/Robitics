@@ -18,10 +18,12 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 REPOSITORY_ROOT = HERE.parents[2]
+PI_SERVICE_ROOT = REPOSITORY_ROOT / "pi_service"
 TRACK_LINE_SRC = REPOSITORY_ROOT / "third_party" / "DeskMate-Advance" / "src"
 if not TRACK_LINE_SRC.is_dir():
     raise RuntimeError(f"track_line source is missing: {TRACK_LINE_SRC}")
 sys.path.insert(0, str(TRACK_LINE_SRC))
+sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from track_line.config import LineDetectorConfig  # noqa: E402
 from track_line.detector import OpenCVLineDetector  # noqa: E402
