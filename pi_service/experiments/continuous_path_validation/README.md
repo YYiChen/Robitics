@@ -7,3 +7,14 @@
 短暂丢线期间会保持最后一次有效的左右轮 PWM（包括转弯差速），而不是退化成直行；这用于通过胶带接缝、运动模糊和斜角的短视觉空档。
 
 浏览器预览端口为 `5054`。
+
+## 日常调参和启动
+
+只修改 `tuning.py`：每个 PWM、丢线预测时间、转向力度都带中文注释。之后运行：
+
+```bash
+chmod +x /home/g11/Desktop/pi_service/experiments/continuous_path_validation/run_pi_continuous_path.sh
+/home/g11/Desktop/pi_service/experiments/continuous_path_validation/run_pi_continuous_path.sh
+```
+
+脚本会开启电机；按 `Ctrl+C` 停车并退出。

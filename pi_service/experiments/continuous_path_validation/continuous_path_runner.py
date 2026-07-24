@@ -23,6 +23,19 @@ from debug_web import DebugMjpegPublisher  # noqa: E402
 from track_line.config import LineDetectorConfig  # noqa: E402
 from track_line.detector import OpenCVLineDetector  # noqa: E402
 from track_line.visualization import render_debug  # noqa: E402
+from tuning import (  # noqa: E402
+    DEBUG_WEB_PORT,
+    HEADING_WEIGHT,
+    LAUNCH_PWM,
+    LINE_LOST_PREDICTION_SECONDS,
+    LINE_LOST_STOP_FRAMES,
+    LINE_LOST_STOP_SECONDS,
+    LOOKAHEAD_GAIN,
+    MAXIMUM_CORRECTION_PWM,
+    MINIMUM_CORRECTION_PWM,
+    PROCESS_FPS,
+    STRAIGHT_PWM,
+)
 
 
 DEFAULT_CONFIG = TRACK_LINE_SRC / "track_line" / "config.dark_line.json"
@@ -33,17 +46,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source", default="http://127.0.0.1:5000/video_feed")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--controller-url", default="http://127.0.0.1:5000")
-    parser.add_argument("--process-fps", type=float, default=20.0)
-    parser.add_argument("--line-lost-stop-frames", type=int, default=3)
-    parser.add_argument("--line-lost-prediction-seconds", type=float, default=0.75)
-    parser.add_argument("--line-lost-stop-seconds", type=float, default=1.00)
-    parser.add_argument("--straight-pwm", type=int, default=75)
-    parser.add_argument("--launch-pwm", type=int, default=155)
-    parser.add_argument("--lookahead-gain", type=float, default=160.0)
-    parser.add_argument("--heading-weight", type=float, default=0.25)
-    parser.add_argument("--minimum-correction-pwm", type=int, default=20)
-    parser.add_argument("--maximum-correction-pwm", type=int, default=70)
-    parser.add_argument("--debug-web-port", type=int, default=5054)
+    parser.add_argument("--process-fps", type=float, default=PROCESS_FPS)
+    parser.add_argument("--line-lost-stop-frames", type=int, default=LINE_LOST_STOP_FRAMES)
+    parser.add_argument("--line-lost-prediction-seconds", type=float, default=LINE_LOST_PREDICTION_SECONDS)
+    parser.add_argument("--line-lost-stop-seconds", type=float, default=LINE_LOST_STOP_SECONDS)
+    parser.add_argument("--straight-pwm", type=int, default=STRAIGHT_PWM)
+    parser.add_argument("--launch-pwm", type=int, default=LAUNCH_PWM)
+    parser.add_argument("--lookahead-gain", type=float, default=LOOKAHEAD_GAIN)
+    parser.add_argument("--heading-weight", type=float, default=HEADING_WEIGHT)
+    parser.add_argument("--minimum-correction-pwm", type=int, default=MINIMUM_CORRECTION_PWM)
+    parser.add_argument("--maximum-correction-pwm", type=int, default=MAXIMUM_CORRECTION_PWM)
+    parser.add_argument("--debug-web-port", type=int, default=DEBUG_WEB_PORT)
     parser.add_argument("--enable-motors", action="store_true")
     parser.add_argument("--headless", action="store_true")
     return parser.parse_args()
