@@ -21,6 +21,11 @@ class CameraMetricsTests(unittest.TestCase):
         missing = sorted(item for item in referenced_ids if f'id="{item}"' not in template)
         self.assertEqual(missing, [])
 
+    def test_r_card_trigger_is_checked_before_input_focus_guard(self) -> None:
+        script = (Path(__file__).parents[1] / "robot_web" / "static" / "app.js").read_text(encoding="utf-8")
+        keydown = script.split('addEventListener("keydown"', 1)[1].split('addEventListener("keyup"', 1)[0]
+        self.assertLess(keydown.index('toLowerCase() === "r"'), keydown.index("editing(event)"))
+
     def test_reports_encoded_and_stream_bandwidth(self) -> None:
         camera = CameraStreamer(width=1280, height=720, fps=15)
         camera._record_encoded(100_000, 12.5)

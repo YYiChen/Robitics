@@ -410,8 +410,12 @@ for (const button of document.querySelectorAll("[data-steering]")) {
 for (const button of document.querySelectorAll("[data-feed]")) button.addEventListener("click", feedCards);
 for (const button of document.querySelectorAll("[data-deal]")) button.addEventListener("click", dealCard);
 for (const button of document.querySelectorAll("[data-servo-center]")) button.addEventListener("click", centerServo);
-addEventListener("keydown", event => { if (editing(event) || event.repeat) return; if (event.code === "Space") { event.preventDefault(); releaseKeys(); return; }
+addEventListener("keydown", event => { if (event.repeat) return;
+  // R is a global M4 trigger. Keep it available after the operator edits a
+  // numeric PWM/time field, where focus otherwise remains inside the input.
   if (event.key?.toLowerCase() === "r") { event.preventDefault(); dealCard(); return; }
+  if (editing(event)) return;
+  if (event.code === "Space") { event.preventDefault(); releaseKeys(); return; }
   if (event.key?.toLowerCase() === "z") { event.preventDefault(); centerServo(); return; }
   const steering = event.key?.toLowerCase(); if (steering === "q" || steering === "e") { event.preventDefault(); setSteeringKey(steering, true); return; }
   const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, true); }
