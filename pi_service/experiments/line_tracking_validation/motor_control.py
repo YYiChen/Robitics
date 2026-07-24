@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import time
 from typing import Protocol
 
-from rectangle_route_planner import PlannerDecision, RouteIntent
+from rectangle_route_planner import PlannerDecision, RouteIntent, RouteState
 from pi_service.robot_client import RobotClientConfig, RobotWebClient
 
 
@@ -20,9 +20,9 @@ class LineObservation(Protocol):
 @dataclass(frozen=True)
 class MotorControlConfig:
     controller_url: str
-    straight_pwm: int = 120
-    pivot_pwm: int = 150
-    curve_inner_pwm: int = 80
+    straight_pwm: int = 90
+    pivot_pwm: int = 120
+    curve_inner_pwm: int = 60
     correction_deadband: float = 0.05
     command_interval_seconds: float = 0.18
 
@@ -37,6 +37,10 @@ def action_for_decision(
         return "STOP"
     if decision.intent is RouteIntent.TURN_RIGHT:
         return "PR"
+    if decision.state is RouteState.APPROACHING_RIGHT_CORNER:
+        # The planner deliberately bridges a short camera-only blind zone
+        # before the physical corner. Keep travelling forward in that zone.
+        return "F"
     if observation.offset is None:
         return "STOP"
     if observation.offset < -config.correction_deadband:

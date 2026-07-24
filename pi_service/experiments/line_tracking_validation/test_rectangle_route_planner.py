@@ -28,7 +28,7 @@ class ClockwiseRectanglePlannerTests(unittest.TestCase):
         self.assertEqual(planner.state, RouteState.FOLLOW)
 
     def test_confirmed_right_corner_turns_after_line_end(self):
-        planner = ClockwiseRectanglePlanner()
+        planner = ClockwiseRectanglePlanner(RectanglePlannerConfig(missing_before_turn=1))
         observations = (
             Observation(0.02, 0.42),
             Observation(0.05, 0.45),
@@ -58,14 +58,28 @@ class ClockwiseRectanglePlannerTests(unittest.TestCase):
         self.assertEqual(decision.reason, "unexpected_line_loss")
 
     def test_fixed_clockwise_route_turns_right_when_line_ends_without_branch_evidence(self):
-        planner = ClockwiseRectanglePlanner()
+        planner = ClockwiseRectanglePlanner(RectanglePlannerConfig(missing_before_turn=2))
+        first = planner.step(LOST)
         decision = planner.step(LOST)
+        self.assertEqual(first.intent, RouteIntent.STRAIGHT)
+        self.assertEqual(first.state, RouteState.APPROACHING_RIGHT_CORNER)
+        self.assertEqual(first.reason, "line_end_confirming")
         self.assertEqual(decision.intent, RouteIntent.TURN_RIGHT)
         self.assertEqual(decision.state, RouteState.TURNING_RIGHT)
-        self.assertEqual(decision.reason, "fixed_route_line_end")
+        self.assertEqual(decision.reason, "fixed_route_line_end_confirmed")
+
+    def test_line_reacquired_while_approaching_corner_cancels_turn(self):
+        planner = ClockwiseRectanglePlanner(RectanglePlannerConfig(missing_before_turn=3))
+        planner.step(LOST)
+        decision = planner.step(Observation(0.01, 0.01))
+        self.assertEqual(decision.intent, RouteIntent.STRAIGHT)
+        self.assertEqual(decision.state, RouteState.FOLLOW)
+        self.assertEqual(decision.reason, "line_reacquired_before_turn")
 
     def test_fixed_route_turn_still_stops_at_safety_timeout(self):
-        planner = ClockwiseRectanglePlanner(RectanglePlannerConfig(max_turn_frames=2))
+        planner = ClockwiseRectanglePlanner(
+            RectanglePlannerConfig(max_turn_frames=2, missing_before_turn=1)
+        )
         decisions = [planner.step(LOST) for _ in range(3)]
         self.assertEqual(
             [item.intent for item in decisions],
@@ -74,7 +88,7 @@ class ClockwiseRectanglePlannerTests(unittest.TestCase):
         self.assertEqual(decisions[-1].reason, "right_turn_timeout")
 
     def test_new_edge_needs_three_frames_before_straight(self):
-        planner = ClockwiseRectanglePlanner()
+        planner = ClockwiseRectanglePlanner(RectanglePlannerConfig(missing_before_turn=1))
         for item in (Observation(0.03, 0.43), Observation(0.05, 0.45), LOST):
             planner.step(item)
         decisions = [planner.step(Observation(-0.02, 0.01), new_line_ready=True) for _ in range(3)]
@@ -102,7 +116,7 @@ class ClockwiseRectanglePlannerTests(unittest.TestCase):
         self.assertTrue(all(item.reason == "right_corner_latched" for item in decisions))
 
     def test_turning_ignores_old_corner_line_until_new_edge_is_ready(self):
-        planner = ClockwiseRectanglePlanner()
+        planner = ClockwiseRectanglePlanner(RectanglePlannerConfig(missing_before_turn=1))
         observation = Observation(0.01, 0.02)
         planner.step(observation, right_corner_ahead=True)
         planner.step(observation, right_corner_ahead=True)

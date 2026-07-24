@@ -23,6 +23,7 @@ class LineEvidence(Protocol):
 class RouteState(str, Enum):
     FOLLOW = "FOLLOW"
     RIGHT_CORNER_ARMED = "RIGHT_CORNER_ARMED"
+    APPROACHING_RIGHT_CORNER = "APPROACHING_RIGHT_CORNER"
     TURNING_RIGHT = "TURNING_RIGHT"
     LOST = "LOST"
 
@@ -51,7 +52,10 @@ class RectanglePlannerConfig:
     right_offset_threshold: float = 0.12
     corner_confirmation_frames: int = 2
     corner_disarm_frames: int = 4
-    missing_before_turn: int = 1
+    # At the default 10 FPS this is a 0.6 s blind, slow-forward approach.
+    # It compensates for a forward-facing camera seeing the old edge disappear
+    # before the wheelbase has reached the physical corner.
+    missing_before_turn: int = 6
     reacquire_frames: int = 3
     max_turn_frames: int = 100
     fixed_right_turn_on_line_end: bool = True
@@ -122,6 +126,10 @@ class ClockwiseRectanglePlanner:
             self._reset_follow()
             return self._decision(RouteIntent.STRAIGHT, "new_edge_confirmed")
 
+        if self.state is RouteState.APPROACHING_RIGHT_CORNER:
+            self._reset_follow()
+            return self._decision(RouteIntent.STRAIGHT, "line_reacquired_before_turn")
+
         if self.state is RouteState.LOST:
             self._reset_follow()
             return self._decision(RouteIntent.STOP, "line_reappeared_after_safety_stop")
@@ -157,14 +165,25 @@ class ClockwiseRectanglePlanner:
     def _on_line_lost(self) -> PlannerDecision:
         self._missing_frames += 1
 
-        if self.state is RouteState.RIGHT_CORNER_ARMED:
-            return self._begin_right_turn("right_corner_line_end_confirmed")
-
         if self.state is RouteState.TURNING_RIGHT:
             return self._turn_or_stop("turning_searching_new_edge")
 
-        if self.config.fixed_right_turn_on_line_end:
-            return self._begin_right_turn("fixed_route_line_end")
+        expects_right_corner = (
+            self.state is RouteState.RIGHT_CORNER_ARMED
+            or self.state is RouteState.APPROACHING_RIGHT_CORNER
+            or self.config.fixed_right_turn_on_line_end
+        )
+        if expects_right_corner and self._missing_frames < self.config.missing_before_turn:
+            self.state = RouteState.APPROACHING_RIGHT_CORNER
+            return self._decision(RouteIntent.STRAIGHT, "line_end_confirming")
+
+        if expects_right_corner:
+            reason = (
+                "right_corner_line_end_confirmed"
+                if self._right_evidence_frames >= self.config.corner_confirmation_frames
+                else "fixed_route_line_end_confirmed"
+            )
+            return self._begin_right_turn(reason)
 
         self.state = RouteState.LOST
         return self._decision(RouteIntent.STOP, "unexpected_line_loss")

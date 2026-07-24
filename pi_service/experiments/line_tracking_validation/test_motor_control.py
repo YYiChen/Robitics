@@ -26,6 +26,15 @@ class MotorActionMappingTests(unittest.TestCase):
         self.assertEqual(action_for_decision(stop, Observation(0.4), config), "STOP")
         self.assertEqual(action_for_decision(turn, Observation(None), config), "PR")
 
+    def test_approaching_corner_keeps_moving_forward_during_short_line_loss(self):
+        decision = PlannerDecision(
+            RouteIntent.STRAIGHT,
+            RouteState.APPROACHING_RIGHT_CORNER,
+            "line_end_confirming",
+        )
+        config = MotorControlConfig("http://robot")
+        self.assertEqual(action_for_decision(decision, Observation(None), config), "F")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
