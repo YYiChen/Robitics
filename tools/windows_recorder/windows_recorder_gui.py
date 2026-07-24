@@ -17,7 +17,7 @@ class RecorderWindow(ttk.Frame):
         self.recorder: MjpegRecorder | None = None
         self.thread: threading.Thread | None = None
         self.url = tk.StringVar(value="http://树莓派IP:5000/video_feed")
-        self.output = tk.StringVar(value=str(Path.home() / "Desktop" / "Robitics" / "Pic"))
+        self.output = tk.StringVar(value=str(Path.home() / "Desktop" / "Robitics" / "data" / "captures"))
         self.status = tk.StringVar(value="请先填写树莓派 IP，并选择保存位置。")
         self.grid(sticky="nsew")
         self._build()

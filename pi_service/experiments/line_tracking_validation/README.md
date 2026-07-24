@@ -15,7 +15,7 @@ SEARCH --持续超过上限--> LOST（STOP）
 在 Windows 项目根目录运行：
 
 ```powershell
-py -3 -m unittest discover -s .\pi_service\line_tracking_validation -p 'test_*.py' -v
+py -3 -m unittest discover -s .\pi_service\experiments\line_tracking_validation -p 'test_*.py' -v
 ```
 
 测试覆盖左直角、右直角以及丢线后安全停止。它不读取摄像头、不控制电机，也不修改现有网页控制程序。

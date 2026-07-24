@@ -85,7 +85,7 @@ class MjpegRecorder:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="将树莓派 MJPEG 视频流按固定帧率保存为本机 JPG")
     parser.add_argument("--stream-url", required=True, help="例如 http://100.80.46.54:5000/video_feed")
-    parser.add_argument("--output-dir", type=Path, default=Path(r"C:\Users\32126\Desktop\Robitics\Pic"))
+    parser.add_argument("--output-dir", type=Path, default=Path(r"C:\Users\32126\Desktop\Robitics\data\captures"))
     parser.add_argument("--fps", type=float, default=5.0, help="保存帧率，默认 5 FPS")
     parser.add_argument("--min-free-gb", type=float, default=5.0, help="最少保留的磁盘空间，默认 5 GB")
     return parser.parse_args()

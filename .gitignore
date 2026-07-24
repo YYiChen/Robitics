@@ -5,13 +5,17 @@ __pycache__/
 logs/
 run/
 captures/
+data/captures/
 pi_service/robot_web/robot_config.json
 pi_service/robot_web/drive_config.json
 pi_service/robot_web/camera_config.json
 pi_service/vendor/
 
-# Browser-side captured images must never enter source control.
-Pic/
+# Independent sibling repositories keep their own Git history.
+deskmate/
+third_party/
+.agents/
+.codex/
 
 # Local IDE and operating-system files
 .vscode/
@@ -20,18 +24,7 @@ Pic/
 Thumbs.db
 Desktop.ini
 
-# Historical material is preserved by Git archive branches, not main.
-Day1/
-Day2/
-Day3/
-Day4/
-robot_web_package/
-robot_web_package.zip
-robot_motor_heartbeat/
-robot_motor_heartbeat_75pct_safe/
-csi_stream.py
-wasd_robot_control.py
-wasd_motor_bridge_control(2).py
+# Historical material is preserved under archive/ and remains tracked.
 *.pptx
 *.png
 *.xmind
