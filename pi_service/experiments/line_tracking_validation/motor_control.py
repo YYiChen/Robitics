@@ -23,7 +23,7 @@ class MotorControlConfig:
     straight_pwm: int = 120
     pivot_pwm: int = 150
     curve_inner_pwm: int = 80
-    correction_deadband: float = 0.07
+    correction_deadband: float = 0.05
     command_interval_seconds: float = 0.18
 
 
@@ -33,10 +33,12 @@ def action_for_decision(
     config: MotorControlConfig,
 ) -> str:
     """Map safe route intent to the Pi controller's existing action names."""
-    if decision.intent is RouteIntent.STOP or observation.offset is None:
+    if decision.intent is RouteIntent.STOP:
         return "STOP"
     if decision.intent is RouteIntent.TURN_RIGHT:
         return "PR"
+    if observation.offset is None:
+        return "STOP"
     if observation.offset < -config.correction_deadband:
         return "FL"
     if observation.offset > config.correction_deadband:

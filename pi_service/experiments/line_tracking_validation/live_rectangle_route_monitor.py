@@ -219,23 +219,25 @@ def has_connected_right_branch(result, *, minimum_width_ratio: float = 0.12) -> 
     return right_extent >= minimum_width and right_extent > left_extent * 1.25
 
 
-def render_decision(frame, decision: PlannerDecision, *, right_branch_detected: bool):
+def render_decision(frame, decision: PlannerDecision, *, right_branch_detected: bool, motor_action: str):
     color = {
         "STRAIGHT": (0, 220, 0),
         "TURN_RIGHT": (0, 165, 255),
         "STOP": (0, 0, 255),
     }[decision.intent.value]
     output = frame.copy()
-    cv2.rectangle(output, (10, 76), (620, 170), (20, 20, 20), cv2.FILLED)
+    cv2.rectangle(output, (10, 76), (620, 197), (20, 20, 20), cv2.FILLED)
     cv2.putText(output, f"ROUTE: {decision.intent.value}", (18, 104), cv2.FONT_HERSHEY_SIMPLEX, 0.78, color, 2, cv2.LINE_AA)
     cv2.putText(output, f"{decision.state.value}: {decision.reason}", (18, 132), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 1, cv2.LINE_AA)
     branch_text = "RIGHT BRANCH: DETECTED" if right_branch_detected else "RIGHT BRANCH: not detected"
     branch_color = (0, 165, 255) if right_branch_detected else (170, 170, 170)
     cv2.putText(output, branch_text, (18, 158), cv2.FONT_HERSHEY_SIMPLEX, 0.52, branch_color, 1, cv2.LINE_AA)
+    motor_color = (100, 220, 255) if motor_action != "DISPLAY_ONLY" else (170, 170, 170)
+    cv2.putText(output, f"MOTOR: {motor_action}", (18, 185), cv2.FONT_HERSHEY_SIMPLEX, 0.52, motor_color, 1, cv2.LINE_AA)
     return output
 
 
-def emit(frame_index: int, result, decision: PlannerDecision, *, right_branch_detected: bool) -> None:
+def emit(frame_index: int, result, decision: PlannerDecision, *, right_branch_detected: bool, motor_action: str) -> None:
     print(
         json.dumps(
             {
@@ -245,6 +247,7 @@ def emit(frame_index: int, result, decision: PlannerDecision, *, right_branch_de
                 "route_state": decision.state.value,
                 "reason": decision.reason,
                 "right_branch_detected": right_branch_detected,
+                "motor_action": motor_action,
             },
             ensure_ascii=False,
             separators=(",", ":"),
@@ -294,11 +297,12 @@ def main() -> int:
             right_branch = has_connected_right_branch(result)
             decision = planner.step(result.observation, right_corner_ahead=right_branch)
             motor_action = motor_executor.apply(decision, result.observation) if motor_executor else "DISPLAY_ONLY"
-            emit(analysed_frames, result, decision, right_branch_detected=right_branch)
+            emit(analysed_frames, result, decision, right_branch_detected=right_branch, motor_action=motor_action)
             annotated = render_decision(
                 draw_track_corridor(render_debug(detector_frame, result), corridor_polygon),
                 decision,
                 right_branch_detected=right_branch,
+                motor_action=motor_action,
             )
             analysed_frames += 1
 

@@ -24,7 +24,7 @@ class MotorActionMappingTests(unittest.TestCase):
         stop = PlannerDecision(RouteIntent.STOP, RouteState.LOST, "test")
         self.assertEqual(action_for_decision(turn, Observation(-0.4), config), "PR")
         self.assertEqual(action_for_decision(stop, Observation(0.4), config), "STOP")
-        self.assertEqual(action_for_decision(turn, Observation(None), config), "STOP")
+        self.assertEqual(action_for_decision(turn, Observation(None), config), "PR")
 
 
 if __name__ == "__main__":
