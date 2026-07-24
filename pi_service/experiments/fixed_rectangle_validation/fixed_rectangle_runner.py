@@ -72,14 +72,15 @@ def main() -> int:
     if args.process_fps < 0 or not 0 <= args.debug_web_port <= 65535:
         raise ValueError("invalid process or web port setting")
     detector = OpenCVLineDetector(LineDetectorConfig.from_json(args.config))
-    planner = FixedClockwiseRectanglePlanner(FixedRectangleConfig(
+    planner_config = FixedRectangleConfig(
         line_lost_corner_frames=args.line_lost_corner_frames,
         corner_forward_seconds=args.corner_forward_seconds,
         right_turn_seconds=args.right_turn_seconds,
         reacquire_frames=args.reacquire_frames,
         reacquire_timeout_seconds=args.reacquire_timeout_seconds,
         corners_to_complete=args.corners_to_complete,
-    ))
+    )
+    planner = FixedClockwiseRectanglePlanner(planner_config)
     executor = None
     if args.enable_motors:
         executor = RectangleMotorExecutor(RectangleMotorConfig(
@@ -106,6 +107,13 @@ def main() -> int:
             last = now
             result = detector.detect(frame, frame_index=frame_index, timestamp_ns=time.monotonic_ns())
             decision = planner.step(result.observation, now)
+            # In observation-only mode users often open the page before
+            # placing the vehicle on the tape. That must not leave the visual
+            # dashboard permanently reporting a stale route failure. Real
+            # motor mode keeps the strict stop latch unchanged.
+            if executor is None and decision.state.value == "LOST" and not result.observation.line_lost:
+                planner = FixedClockwiseRectanglePlanner(planner_config)
+                decision = planner.step(result.observation, now)
             motor_action = executor.apply(decision.intent, result.observation) if executor else "DISPLAY_ONLY"
             print(json.dumps({"frame": frame_index, "intent": decision.intent.value, "state": decision.state.value, "reason": decision.reason, "corner": decision.corner_count, "motor": motor_action}, ensure_ascii=False), flush=True)
             annotated = overlay(render_debug(frame, result), decision, motor_action)
