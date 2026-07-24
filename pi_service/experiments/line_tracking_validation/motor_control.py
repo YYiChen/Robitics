@@ -20,8 +20,8 @@ class LineObservation(Protocol):
 @dataclass(frozen=True)
 class MotorControlConfig:
     controller_url: str
-    straight_pwm: int = 90
-    pivot_pwm: int = 150
+    straight_pwm: int = 105
+    pivot_pwm: int = 165
     curve_inner_pwm: int = 60
     correction_deadband: float = 0.05
     command_interval_seconds: float = 0.18
