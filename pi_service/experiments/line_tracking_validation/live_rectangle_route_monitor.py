@@ -267,7 +267,7 @@ def main() -> int:
     if args.enable_motors:
         motor_executor = RobotWebMotorExecutor(MotorControlConfig(args.controller_url))
         motor_executor.configure()
-        print("motor_control=armed straight_pwm=90 pivot_pwm=120", flush=True)
+        print("motor_control=armed straight_pwm=90 pivot_pwm=150", flush=True)
     capture = cv2.VideoCapture(source_value(args.source))
     if not capture.isOpened():
         raise RuntimeError(f"cannot open source: {args.source}")

@@ -52,10 +52,10 @@ class RectanglePlannerConfig:
     right_offset_threshold: float = 0.12
     corner_confirmation_frames: int = 2
     corner_disarm_frames: int = 4
-    # At the default 10 FPS this is a 0.6 s blind, slow-forward approach.
+    # At the default 10 FPS this is a 0.3 s blind, slow-forward approach.
     # It compensates for a forward-facing camera seeing the old edge disappear
     # before the wheelbase has reached the physical corner.
-    missing_before_turn: int = 6
+    missing_before_turn: int = 3
     reacquire_frames: int = 3
     max_turn_frames: int = 100
     fixed_right_turn_on_line_end: bool = True
