@@ -35,7 +35,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--controller-url", default="http://127.0.0.1:5000")
     parser.add_argument("--process-fps", type=float, default=20.0)
     parser.add_argument("--line-lost-stop-frames", type=int, default=3)
-    parser.add_argument("--line-lost-stop-seconds", type=float, default=0.45)
+    parser.add_argument("--line-lost-prediction-seconds", type=float, default=0.75)
+    parser.add_argument("--line-lost-stop-seconds", type=float, default=1.00)
     parser.add_argument("--straight-pwm", type=int, default=75)
     parser.add_argument("--launch-pwm", type=int, default=155)
     parser.add_argument("--lookahead-gain", type=float, default=160.0)
@@ -71,6 +72,7 @@ def main() -> int:
     detector = OpenCVLineDetector(LineDetectorConfig.from_json(args.config))
     planner = ContinuousPathPlanner(ContinuousPathConfig(
         line_lost_stop_frames=args.line_lost_stop_frames,
+        line_lost_prediction_seconds=args.line_lost_prediction_seconds,
         line_lost_stop_seconds=args.line_lost_stop_seconds,
     ))
     executor = None

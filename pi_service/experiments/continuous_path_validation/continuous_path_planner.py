@@ -21,15 +21,18 @@ class PathObservation(Protocol):
 class ContinuousPathConfig:
     minimum_confidence: float = 0.38
     line_lost_stop_frames: int = 3
-    line_lost_stop_seconds: float = 0.45
+    line_lost_prediction_seconds: float = 0.75
+    line_lost_stop_seconds: float = 1.00
 
     def __post_init__(self) -> None:
         if not 0 <= self.minimum_confidence <= 1:
             raise ValueError("minimum_confidence must be in [0, 1]")
         if self.line_lost_stop_frames < 1:
             raise ValueError("line_lost_stop_frames must be positive")
-        if self.line_lost_stop_seconds < 0:
-            raise ValueError("line_lost_stop_seconds must be non-negative")
+        if self.line_lost_prediction_seconds < 0 or self.line_lost_stop_seconds < 0:
+            raise ValueError("line loss durations must be non-negative")
+        if self.line_lost_prediction_seconds > self.line_lost_stop_seconds:
+            raise ValueError("prediction duration must not exceed stop duration")
 
 
 @dataclass(frozen=True)
@@ -77,10 +80,12 @@ class ContinuousPathPlanner:
         if self._loss_started_at is None:
             self._loss_started_at = now
         lost_seconds = now - self._loss_started_at
+        if lost_seconds < self.config.line_lost_prediction_seconds:
+            return PathDecision(PathIntent.FOLLOW_PATH, "blind_zone_predict_last_path", self._lost_frames)
         if (
             self._lost_frames >= self.config.line_lost_stop_frames
             and lost_seconds >= self.config.line_lost_stop_seconds
         ):
             self._stopped = True
             return PathDecision(PathIntent.STOP, "line_lost_stop_waiting_for_reacquire", self._lost_frames)
-        return PathDecision(PathIntent.FOLLOW_PATH, "brief_line_loss_keep_heading", self._lost_frames)
+        return PathDecision(PathIntent.FOLLOW_PATH, "blind_zone_coast_to_safety_stop", self._lost_frames)

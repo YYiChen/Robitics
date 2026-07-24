@@ -27,14 +27,16 @@ class ContinuousPathTests(unittest.TestCase):
         self.assertEqual(pair, (35, 115))
         self.assertEqual(label, "HOLD_LAST_PATH")
 
-    def test_brief_loss_keeps_heading_then_stops_and_resumes(self):
+    def test_blind_zone_predicts_then_stops_and_resumes(self):
         planner = ContinuousPathPlanner()
         self.assertEqual(planner.step(Observation(), 0).intent, PathIntent.FOLLOW_PATH)
         self.assertEqual(planner.step(Observation(True, 0, None), .10).intent, PathIntent.FOLLOW_PATH)
         self.assertEqual(planner.step(Observation(True, 0, None), .20).intent, PathIntent.FOLLOW_PATH)
         self.assertEqual(planner.step(Observation(True, 0, None), .30).intent, PathIntent.FOLLOW_PATH)
-        self.assertEqual(planner.step(Observation(True, 0, None), .60).intent, PathIntent.STOP)
-        resumed = planner.step(Observation(), .70)
+        predicted = planner.step(Observation(True, 0, None), .90)
+        self.assertEqual(predicted.reason, "blind_zone_coast_to_safety_stop")
+        self.assertEqual(planner.step(Observation(True, 0, None), 1.20).intent, PathIntent.STOP)
+        resumed = planner.step(Observation(), 1.30)
         self.assertEqual(resumed.intent, PathIntent.FOLLOW_PATH)
         self.assertEqual(resumed.reason, "line_reacquired_resume_following")
 
