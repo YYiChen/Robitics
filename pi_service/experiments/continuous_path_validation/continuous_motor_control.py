@@ -27,22 +27,27 @@ class ContinuousMotorConfig:
     heading_weight: float = 0.25
     minimum_correction_pwm: int = 20
     maximum_correction_pwm: int = 70
+    minimum_wheel_pwm: int = 55
 
 
 def path_drive_pwm(observation: PathObservation, config: ContinuousMotorConfig) -> tuple[int, int]:
     target = observation.lookahead_offset
+    base_pwm = max(config.straight_pwm, config.minimum_wheel_pwm)
     if target is None:
-        return config.straight_pwm, config.straight_pwm
+        return base_pwm, base_pwm
     heading = observation.heading or 0.0
     error = float(max(-1.0, min(1.0, target + config.heading_weight * heading)))
     if abs(error) <= config.correction_deadband:
-        return config.straight_pwm, config.straight_pwm
+        return base_pwm, base_pwm
     correction = max(
         config.minimum_correction_pwm,
         min(config.maximum_correction_pwm, math.ceil(abs(error) * config.lookahead_gain)),
     )
-    inner = max(0, config.straight_pwm - correction)
-    outer = min(255, config.straight_pwm + correction)
+    # Never command a nearly-zero inner wheel during a continuous turn: with
+    # this loaded four-wheel chassis that can produce driver current noise but
+    # insufficient torque to overcome static friction.
+    inner = max(config.minimum_wheel_pwm, base_pwm - correction)
+    outer = min(255, base_pwm + correction)
     # Positive error means the target is right of image centre: slow the right
     # wheel and speed up the left wheel to arc right. The same rule works for
     # any polygon, smooth curve, or line orientation visible ahead.

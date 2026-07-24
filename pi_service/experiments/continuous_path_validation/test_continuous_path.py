@@ -18,6 +18,14 @@ class ContinuousPathTests(unittest.TestCase):
         right, left = path_drive_pwm(Observation(lookahead_offset=.25), ContinuousMotorConfig("http://example"))
         self.assertLess(right, left)
 
+    def test_turn_never_drops_inner_wheel_below_running_threshold(self):
+        right, left = path_drive_pwm(
+            Observation(lookahead_offset=.9),
+            ContinuousMotorConfig("http://example", straight_pwm=90, maximum_correction_pwm=70, minimum_wheel_pwm=55),
+        )
+        self.assertGreaterEqual(right, 55)
+        self.assertGreaterEqual(left, 55)
+
     def test_short_line_loss_keeps_last_turning_pair(self):
         pair, label = drive_pwm_with_last_path(
             Observation(True, 0, None),

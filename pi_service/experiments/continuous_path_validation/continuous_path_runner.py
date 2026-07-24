@@ -33,6 +33,7 @@ from tuning import (  # noqa: E402
     LOOKAHEAD_GAIN,
     MAXIMUM_CORRECTION_PWM,
     MINIMUM_CORRECTION_PWM,
+    MINIMUM_WHEEL_PWM,
     PROCESS_FPS,
     STRAIGHT_PWM,
 )
@@ -56,6 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--heading-weight", type=float, default=HEADING_WEIGHT)
     parser.add_argument("--minimum-correction-pwm", type=int, default=MINIMUM_CORRECTION_PWM)
     parser.add_argument("--maximum-correction-pwm", type=int, default=MAXIMUM_CORRECTION_PWM)
+    parser.add_argument("--minimum-wheel-pwm", type=int, default=MINIMUM_WHEEL_PWM)
     parser.add_argument("--debug-web-port", type=int, default=DEBUG_WEB_PORT)
     parser.add_argument("--enable-motors", action="store_true")
     parser.add_argument("--headless", action="store_true")
@@ -98,6 +100,7 @@ def main() -> int:
             heading_weight=args.heading_weight,
             minimum_correction_pwm=args.minimum_correction_pwm,
             maximum_correction_pwm=args.maximum_correction_pwm,
+            minimum_wheel_pwm=args.minimum_wheel_pwm,
         ))
         executor.arm()
     capture = cv2.VideoCapture(source_value(args.source))
