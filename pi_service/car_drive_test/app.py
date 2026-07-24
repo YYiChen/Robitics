@@ -1,4 +1,4 @@
-"""Minimal whole-car test page: CSI MJPEG preview plus M3/M4 drive heartbeat."""
+"""Minimal whole-car test page: CSI MJPEG preview plus M1/M2 drive heartbeat."""
 from __future__ import annotations
 
 import argparse

@@ -2,9 +2,9 @@
   Whole-car drive test: Arduino Mega + Motor Shield V1/L293D.
 
   Active outputs:
-    M3 = right-side motor
-    M4 = left-side motor
-    M1/M2 = unused and always released
+    M1 = right-side motor
+    M2 = left-side motor
+    M3/M4 = unused and always released
 
   Serial commands at 9600 baud (each followed by a newline):
     F / B / L / R / STOP
@@ -28,8 +28,10 @@ const unsigned long REVERSE_PAUSE_MS = 80UL;
 const int8_t LEFT_FORWARD_SIGN = 1;
 const int8_t RIGHT_FORWARD_SIGN = 1;
 
-AF_DCMotor motor3(3);  // right side
-AF_DCMotor motor4(4);  // left side
+AF_DCMotor motor1(1);  // right side
+AF_DCMotor motor2(2);  // left side
+AF_DCMotor motor3(3);  // unused
+AF_DCMotor motor4(4);  // unused
 
 int currentLeft = 0;
 int currentRight = 0;
@@ -48,7 +50,9 @@ void applyOne(AF_DCMotor &motor, int value) {
 }
 
 void stopDrive(bool announce = true) {
+  motor1.setSpeed(0); motor2.setSpeed(0);
   motor3.setSpeed(0); motor4.setSpeed(0);
+  motor1.run(RELEASE); motor2.run(RELEASE);
   motor3.run(RELEASE); motor4.run(RELEASE);
   currentLeft = currentRight = 0;
   if (announce) Serial.println(F("DRIVE,STOP"));
@@ -64,9 +68,9 @@ void applySides(int left, int right) {
     delay(REVERSE_PAUSE_MS);
   }
 
-  // M3 is physically right, M4 physically left.
-  applyOne(motor3, right * RIGHT_FORWARD_SIGN);
-  applyOne(motor4, left * LEFT_FORWARD_SIGN);
+  // M1 is physically right, M2 physically left.
+  applyOne(motor1, right * RIGHT_FORWARD_SIGN);
+  applyOne(motor2, left * LEFT_FORWARD_SIGN);
   currentLeft = left;
   currentRight = right;
 
@@ -125,7 +129,7 @@ void setup() {
   Serial.begin(9600);
   stopDrive(false);
   lastCommandMs = millis();
-  Serial.println(F("READY:CAR_DRIVE_TEST,M3=RIGHT,M4=LEFT,TIMEOUT=700"));
+  Serial.println(F("READY:CAR_DRIVE_TEST,M1=RIGHT,M2=LEFT,TIMEOUT=700"));
 }
 
 void loop() {
