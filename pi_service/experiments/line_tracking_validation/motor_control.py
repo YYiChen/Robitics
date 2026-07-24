@@ -25,7 +25,8 @@ class MotorControlConfig:
     curve_outer_pwm: int = 180
     curve_inner_pwm: int = 60
     correction_deadband: float = 0.05
-    p_gain: float = 450.0
+    p_gain: float = 200.0
+    pwm_max_step: int = 12
     command_interval_seconds: float = 0.05
 
 
@@ -78,6 +79,8 @@ class RobotWebMotorExecutor:
         self.client = RobotWebClient(RobotClientConfig(config.controller_url))
         self._last_action: str | tuple[int, int] | None = None
         self._last_sent_at = 0.0
+        self._last_drive_pwm: tuple[int, int] | None = None
+        self._direct_drive_supported = True
 
     def configure(self) -> None:
         """Require an online Arduino, then apply the requested PWM profiles."""
@@ -118,19 +121,41 @@ class RobotWebMotorExecutor:
             and decision.state is not RouteState.APPROACHING_RIGHT_CORNER
         ):
             drive_pwm = proportional_drive_pwm(observation, self.config)
-            if drive_pwm is not None:
+            if drive_pwm is not None and self._direct_drive_supported:
                 return self._apply_direct_drive(drive_pwm)
 
         action = action_for_decision(decision, observation, self.config)
-        return self._apply_action(action)
+        applied = self._apply_action(action)
+        return f"P_FALLBACK:{applied}" if not self._direct_drive_supported else applied
 
     def _apply_direct_drive(self, drive_pwm: tuple[int, int]) -> str:
+        drive_pwm = self._limit_pwm_step(drive_pwm)
         now = time.monotonic()
         if drive_pwm == self._last_action and now - self._last_sent_at < self.config.command_interval_seconds:
             return f"P(R={drive_pwm[0]},L={drive_pwm[1]})"
-        self.client.send_drive_pwm(*drive_pwm)
+        try:
+            self.client.send_drive_pwm(*drive_pwm)
+        except RuntimeError as exc:
+            if "HTTP Error 404" not in str(exc):
+                raise
+            # An older Pi robot-web service has no /api/drive endpoint. Keep
+            # the vehicle controllable with the pre-P static profiles instead
+            # of killing the vision loop.
+            self._direct_drive_supported = False
+            action = "F" if drive_pwm[0] == drive_pwm[1] else "FL" if drive_pwm[0] > drive_pwm[1] else "FR"
+            return f"P_FALLBACK:{self._apply_action(action)}"
         self._last_action, self._last_sent_at = drive_pwm, now
+        self._last_drive_pwm = drive_pwm
         return f"P(R={drive_pwm[0]},L={drive_pwm[1]})"
+
+    def _limit_pwm_step(self, target: tuple[int, int]) -> tuple[int, int]:
+        if self._last_drive_pwm is None:
+            return target
+        limit = self.config.pwm_max_step
+        return tuple(
+            max(previous - limit, min(previous + limit, requested))
+            for previous, requested in zip(self._last_drive_pwm, target)
+        )
 
     def _apply_action(self, action: str) -> str:
         now = time.monotonic()
@@ -145,4 +170,5 @@ class RobotWebMotorExecutor:
             self.client.stop()
         finally:
             self._last_action = "STOP"
+            self._last_drive_pwm = None
             self._last_sent_at = time.monotonic()

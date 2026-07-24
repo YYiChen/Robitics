@@ -1,13 +1,29 @@
 from dataclasses import dataclass
 import unittest
 
-from motor_control import MotorControlConfig, action_for_decision, proportional_drive_pwm
+from motor_control import (
+    MotorControlConfig,
+    RobotWebMotorExecutor,
+    action_for_decision,
+    proportional_drive_pwm,
+)
 from rectangle_route_planner import PlannerDecision, RouteIntent, RouteState
 
 
 @dataclass(frozen=True)
 class Observation:
     offset: float | None
+
+
+class OldRobotServiceClient:
+    def __init__(self):
+        self.actions = []
+
+    def send_drive_pwm(self, right_pwm, left_pwm):
+        raise RuntimeError("robot controller request /api/drive failed: HTTP Error 404: NOT FOUND")
+
+    def send_action(self, action):
+        self.actions.append(action)
 
 
 class MotorActionMappingTests(unittest.TestCase):
@@ -40,9 +56,17 @@ class MotorActionMappingTests(unittest.TestCase):
     def test_p_control_scales_right_and_left_wheel_pwm_from_line_offset(self):
         config = MotorControlConfig("http://robot")
         self.assertEqual(proportional_drive_pwm(Observation(0.0), config), (110, 110))
-        self.assertEqual(proportional_drive_pwm(Observation(0.10), config), (65, 155))
-        self.assertEqual(proportional_drive_pwm(Observation(-0.10), config), (155, 65))
+        self.assertEqual(proportional_drive_pwm(Observation(0.10), config), (90, 130))
+        self.assertEqual(proportional_drive_pwm(Observation(-0.10), config), (130, 90))
         self.assertEqual(proportional_drive_pwm(Observation(1.0), config), (60, 180))
+
+    def test_old_pi_service_falls_back_to_static_correction_without_crashing(self):
+        executor = RobotWebMotorExecutor(MotorControlConfig("http://robot"))
+        old_service = OldRobotServiceClient()
+        executor.client = old_service
+        decision = PlannerDecision(RouteIntent.STRAIGHT, RouteState.FOLLOW, "test")
+        self.assertEqual(executor.apply(decision, Observation(0.10)), "P_FALLBACK:FR")
+        self.assertEqual(old_service.actions, ["FR"])
 
 
 if __name__ == "__main__":
