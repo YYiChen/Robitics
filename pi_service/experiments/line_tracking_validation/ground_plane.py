@@ -21,6 +21,9 @@ class GroundPlaneConfig:
     history_size: int = 5
     smoothing_alpha: float = 0.35
     max_offset_step: float = 0.08
+    # y=0 is far ahead and y=1 is beside the vehicle in the normalized plane.
+    # This point is deliberately ahead of the vehicle, not the closest tape.
+    lookahead_y: float = 0.55
 
 
 class GroundPlaneLineFilter:
@@ -66,8 +69,12 @@ class GroundPlaneLineFilter:
         # Camera-band order is not a contract, so sort explicitly: small y is
         # farther away and large y is closer to the vehicle.
         ground = ground[np.argsort(ground[:, 1])]
-        weights = 0.2 + ground[:, 1]
-        raw_offset = float(np.average(ground[:, 0], weights=weights))
+        # Fit the centreline and evaluate it at a configurable point ahead of
+        # the vehicle.  This is the visual equivalent of a short forward
+        # prediction, so a diagonal new edge is followed instead of being
+        # treated as an instruction to keep pivoting in place.
+        slope, intercept = np.polyfit(ground[:, 1], ground[:, 0], deg=1)
+        raw_offset = float(np.clip(slope * self.config.lookahead_y + intercept, -1.0, 1.0))
         raw_heading = float(ground[0, 0] - ground[-1, 0])
         self._offset_history.append(raw_offset)
         self._heading_history.append(raw_heading)

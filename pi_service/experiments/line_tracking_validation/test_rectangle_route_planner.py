@@ -91,12 +91,19 @@ class ClockwiseRectanglePlannerTests(unittest.TestCase):
         planner = ClockwiseRectanglePlanner(RectanglePlannerConfig(missing_before_turn=1))
         for item in (Observation(0.03, 0.43), Observation(0.05, 0.45), LOST):
             planner.step(item)
-        decisions = [planner.step(Observation(-0.02, 0.01), new_line_ready=True) for _ in range(3)]
+        decisions = [
+            planner.step(
+                Observation(-0.02, 0.01),
+                new_line_candidate=True,
+                new_line_ready=True,
+            )
+            for _ in range(9)
+        ]
         self.assertEqual(
-            [item.intent for item in decisions],
-            [RouteIntent.TURN_RIGHT, RouteIntent.TURN_RIGHT, RouteIntent.STRAIGHT],
+            [item.intent for item in decisions[:3]],
+            [RouteIntent.STRAIGHT, RouteIntent.STRAIGHT, RouteIntent.STRAIGHT],
         )
-        self.assertEqual(decisions[-1].reason, "new_edge_confirmed")
+        self.assertEqual(decisions[-1].reason, "new_edge_confirmed_after_forward_recovery")
 
     def test_explicit_right_branch_arms_even_when_far_heading_is_unavailable(self):
         planner = ClockwiseRectanglePlanner()
@@ -124,6 +131,25 @@ class ClockwiseRectanglePlannerTests(unittest.TestCase):
         decisions = [planner.step(observation, new_line_ready=False) for _ in range(3)]
         self.assertTrue(all(item.intent is RouteIntent.TURN_RIGHT for item in decisions))
         self.assertTrue(all(item.reason == "turning_until_new_line" for item in decisions))
+
+    def test_turning_follows_visible_new_line_forward_before_resuming_route(self):
+        planner = ClockwiseRectanglePlanner(
+            RectanglePlannerConfig(missing_before_turn=1, recovery_forward_frames=3)
+        )
+        observation = Observation(0.01, 0.02)
+        planner.step(observation, right_corner_ahead=True)
+        planner.step(observation, right_corner_ahead=True)
+        planner.step(LOST)
+        decisions = [
+            planner.step(observation, new_line_candidate=True)
+            for _ in range(3)
+        ]
+        self.assertEqual(
+            [item.intent for item in decisions],
+            [RouteIntent.STRAIGHT, RouteIntent.STRAIGHT, RouteIntent.STRAIGHT],
+        )
+        self.assertEqual(decisions[0].state, RouteState.RECOVERING_RIGHT)
+        self.assertEqual(decisions[-1].reason, "new_edge_confirmed_after_forward_recovery")
 
 
 if __name__ == "__main__":

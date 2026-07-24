@@ -83,6 +83,7 @@ def planner_config_for_processing_rate(process_fps: float) -> RectanglePlannerCo
     effective_fps = process_fps if process_fps > 0 else 10.0
     return RectanglePlannerConfig(
         missing_before_turn=max(1, round(0.1 * effective_fps)),
+        recovery_forward_frames=max(1, round(0.3 * effective_fps)),
         max_turn_frames=max(1, round(10.0 * effective_fps)),
     )
 
@@ -315,6 +316,7 @@ def main() -> int:
         "vision_control="
         f"process_fps={args.process_fps:g} "
         f"corner_approach_frames={planner.config.missing_before_turn} "
+        f"recovery_forward_frames={planner.config.recovery_forward_frames} "
         f"max_turn_frames={planner.config.max_turn_frames}",
         flush=True,
     )
@@ -357,16 +359,21 @@ def main() -> int:
                     heading=ground_heading,
                 )
             right_branch = has_connected_right_branch(result)
-            new_line_ready = (
+            new_line_candidate = (
                 not control_observation.line_lost
                 and control_observation.valid_bands >= 2
+                and control_observation.confidence >= planner.config.minimum_confidence
                 and not right_branch
+            )
+            new_line_ready = (
+                new_line_candidate
                 and control_observation.heading is not None
                 and abs(control_observation.heading) <= 0.18
             )
             decision = planner.step(
                 control_observation,
                 right_corner_ahead=right_branch,
+                new_line_candidate=new_line_candidate,
                 new_line_ready=new_line_ready,
             )
             motor_action = motor_executor.apply(decision, control_observation) if motor_executor else "DISPLAY_ONLY"

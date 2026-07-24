@@ -25,6 +25,7 @@ class RouteState(str, Enum):
     RIGHT_CORNER_ARMED = "RIGHT_CORNER_ARMED"
     APPROACHING_RIGHT_CORNER = "APPROACHING_RIGHT_CORNER"
     TURNING_RIGHT = "TURNING_RIGHT"
+    RECOVERING_RIGHT = "RECOVERING_RIGHT"
     LOST = "LOST"
 
 
@@ -57,6 +58,7 @@ class RectanglePlannerConfig:
     # before the wheelbase has reached the physical corner.
     missing_before_turn: int = 3
     reacquire_frames: int = 3
+    recovery_forward_frames: int = 9
     max_turn_frames: int = 100
     fixed_right_turn_on_line_end: bool = True
 
@@ -79,12 +81,14 @@ class ClockwiseRectanglePlanner:
         self._missing_frames = 0
         self._turn_frames = 0
         self._reacquired_frames = 0
+        self._recovery_forward_frames = 0
 
     def step(
         self,
         observation: LineEvidence,
         *,
         right_corner_ahead: bool = False,
+        new_line_candidate: bool = False,
         new_line_ready: bool = False,
     ) -> PlannerDecision:
         """Return the route intent for one detector observation.
@@ -96,6 +100,7 @@ class ClockwiseRectanglePlanner:
             return self._on_line(
                 observation,
                 right_corner_ahead=right_corner_ahead,
+                new_line_candidate=new_line_candidate,
                 new_line_ready=new_line_ready,
             )
         return self._on_line_lost()
@@ -113,18 +118,27 @@ class ClockwiseRectanglePlanner:
         observation: LineEvidence,
         *,
         right_corner_ahead: bool,
+        new_line_candidate: bool,
         new_line_ready: bool,
     ) -> PlannerDecision:
         self._missing_frames = 0
 
         if self.state is RouteState.TURNING_RIGHT:
-            if not new_line_ready:
+            if not new_line_candidate:
                 return self._decision(RouteIntent.TURN_RIGHT, "turning_until_new_line")
-            self._reacquired_frames += 1
-            if self._reacquired_frames < self.config.reacquire_frames:
-                return self._decision(RouteIntent.TURN_RIGHT, "reacquiring_new_edge")
+            self.state = RouteState.RECOVERING_RIGHT
+            self._recovery_forward_frames = 1
+            return self._decision(RouteIntent.STRAIGHT, "right_turn_candidate_follow")
+
+        if self.state is RouteState.RECOVERING_RIGHT:
+            if not new_line_candidate:
+                self.state = RouteState.TURNING_RIGHT
+                return self._decision(RouteIntent.TURN_RIGHT, "right_turn_candidate_lost")
+            self._recovery_forward_frames += 1
+            if self._recovery_forward_frames < self.config.recovery_forward_frames:
+                return self._decision(RouteIntent.STRAIGHT, "right_turn_recovering_forward")
             self._reset_follow()
-            return self._decision(RouteIntent.STRAIGHT, "new_edge_confirmed")
+            return self._decision(RouteIntent.STRAIGHT, "new_edge_confirmed_after_forward_recovery")
 
         if self.state is RouteState.APPROACHING_RIGHT_CORNER:
             self._reset_follow()
@@ -168,6 +182,10 @@ class ClockwiseRectanglePlanner:
         if self.state is RouteState.TURNING_RIGHT:
             return self._turn_or_stop("turning_searching_new_edge")
 
+        if self.state is RouteState.RECOVERING_RIGHT:
+            self.state = RouteState.TURNING_RIGHT
+            return self._turn_or_stop("right_turn_recovery_line_lost")
+
         expects_right_corner = (
             self.state is RouteState.RIGHT_CORNER_ARMED
             or self.state is RouteState.APPROACHING_RIGHT_CORNER
@@ -192,6 +210,7 @@ class ClockwiseRectanglePlanner:
         self.state = RouteState.TURNING_RIGHT
         self._turn_frames = 0
         self._reacquired_frames = 0
+        self._recovery_forward_frames = 0
         return self._turn_or_stop(reason)
 
     def _turn_or_stop(self, reason: str) -> PlannerDecision:
