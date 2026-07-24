@@ -55,9 +55,9 @@ class MotorActionMappingTests(unittest.TestCase):
 
     def test_p_control_scales_right_and_left_wheel_pwm_from_line_offset(self):
         config = MotorControlConfig("http://robot")
-        self.assertEqual(proportional_drive_pwm(Observation(0.0), config), (110, 110))
-        self.assertEqual(proportional_drive_pwm(Observation(0.10), config), (90, 130))
-        self.assertEqual(proportional_drive_pwm(Observation(-0.10), config), (130, 90))
+        self.assertEqual(proportional_drive_pwm(Observation(0.0), config), (85, 85))
+        self.assertEqual(proportional_drive_pwm(Observation(0.10), config), (70, 100))
+        self.assertEqual(proportional_drive_pwm(Observation(-0.10), config), (100, 70))
         self.assertEqual(proportional_drive_pwm(Observation(1.0), config), (60, 180))
 
     def test_old_pi_service_falls_back_to_static_correction_without_crashing(self):
@@ -65,8 +65,8 @@ class MotorActionMappingTests(unittest.TestCase):
         old_service = OldRobotServiceClient()
         executor.client = old_service
         decision = PlannerDecision(RouteIntent.STRAIGHT, RouteState.FOLLOW, "test")
-        self.assertEqual(executor.apply(decision, Observation(0.10)), "P_FALLBACK:FR")
-        self.assertEqual(old_service.actions, ["FR"])
+        self.assertEqual(executor.apply(decision, Observation(0.10)), "LAUNCH:P_FALLBACK:SF")
+        self.assertEqual(old_service.actions, ["SF"])
 
 
 if __name__ == "__main__":

@@ -20,12 +20,16 @@ class LineObservation(Protocol):
 @dataclass(frozen=True)
 class MotorControlConfig:
     controller_url: str
-    straight_pwm: int = 110
+    # Cruise can stay below the static-friction threshold because a brief
+    # launch pulse is sent whenever the vehicle starts moving from rest.
+    straight_pwm: int = 85
+    launch_pwm: int = 145
+    launch_duration_seconds: float = 0.18
     pivot_pwm: int = 155
     curve_outer_pwm: int = 180
     curve_inner_pwm: int = 60
     correction_deadband: float = 0.05
-    p_gain: float = 200.0
+    p_gain: float = 150.0
     pwm_max_step: int = 12
     command_interval_seconds: float = 0.05
 
@@ -81,6 +85,8 @@ class RobotWebMotorExecutor:
         self._last_sent_at = 0.0
         self._last_drive_pwm: tuple[int, int] | None = None
         self._direct_drive_supported = True
+        self._launch_until = 0.0
+        self._forward_active = False
 
     def configure(self) -> None:
         """Require an online Arduino, then apply the requested PWM profiles."""
@@ -89,12 +95,14 @@ class RobotWebMotorExecutor:
         current = robot.get("config", {})
         profiles = dict(current.get("profiles", {}))
         straight = self.config.straight_pwm
+        launch = self.config.launch_pwm
         outer = self.config.curve_outer_pwm
         inner = self.config.curve_inner_pwm
         pivot = self.config.pivot_pwm
         profiles.update(
             {
                 "F": {"rf": straight, "lf": straight, "lr": straight, "rr": straight},
+                "SF": {"rf": launch, "lf": launch, "lr": launch, "rr": launch},
                 # FL: right side is the outside of a left correction; FR is
                 # the mirror image.  Keep correction power independent from
                 # normal straight-line power.
@@ -116,6 +124,18 @@ class RobotWebMotorExecutor:
         self.stop()
 
     def apply(self, decision: PlannerDecision, observation: LineObservation) -> str:
+        now = time.monotonic()
+        is_forward = decision.intent is RouteIntent.STRAIGHT
+        if is_forward and not self._forward_active:
+            self._forward_active = True
+            self._launch_until = now + self.config.launch_duration_seconds
+        if not is_forward:
+            self._forward_active = False
+            self._last_drive_pwm = None
+
+        if is_forward and now < self._launch_until:
+            return self._apply_launch()
+
         if (
             decision.intent is RouteIntent.STRAIGHT
             and decision.state is not RouteState.APPROACHING_RIGHT_CORNER
@@ -128,7 +148,18 @@ class RobotWebMotorExecutor:
         applied = self._apply_action(action)
         return f"P_FALLBACK:{applied}" if not self._direct_drive_supported else applied
 
-    def _apply_direct_drive(self, drive_pwm: tuple[int, int]) -> str:
+    def _apply_launch(self) -> str:
+        launch_pwm = (self.config.launch_pwm, self.config.launch_pwm)
+        if self._direct_drive_supported:
+            return "LAUNCH:" + self._apply_direct_drive(launch_pwm, fallback_action="SF")
+        return "LAUNCH:" + self._apply_action("SF")
+
+    def _apply_direct_drive(
+        self,
+        drive_pwm: tuple[int, int],
+        *,
+        fallback_action: str | None = None,
+    ) -> str:
         drive_pwm = self._limit_pwm_step(drive_pwm)
         now = time.monotonic()
         if drive_pwm == self._last_action and now - self._last_sent_at < self.config.command_interval_seconds:
@@ -142,7 +173,9 @@ class RobotWebMotorExecutor:
             # the vehicle controllable with the pre-P static profiles instead
             # of killing the vision loop.
             self._direct_drive_supported = False
-            action = "F" if drive_pwm[0] == drive_pwm[1] else "FL" if drive_pwm[0] > drive_pwm[1] else "FR"
+            action = fallback_action or (
+                "F" if drive_pwm[0] == drive_pwm[1] else "FL" if drive_pwm[0] > drive_pwm[1] else "FR"
+            )
             return f"P_FALLBACK:{self._apply_action(action)}"
         self._last_action, self._last_sent_at = drive_pwm, now
         self._last_drive_pwm = drive_pwm
@@ -171,4 +204,6 @@ class RobotWebMotorExecutor:
         finally:
             self._last_action = "STOP"
             self._last_drive_pwm = None
+            self._forward_active = False
+            self._launch_until = 0.0
             self._last_sent_at = time.monotonic()
