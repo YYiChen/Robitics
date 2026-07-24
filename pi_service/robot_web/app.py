@@ -148,7 +148,7 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
     @app.get("/api/status")
     def status():
         return jsonify(
-            api_version="robot-console-2026-07-24-card-ack-v3",
+            api_version="robot-console-2026-07-24-card-combined-v4",
             capabilities={"system_metrics": True, "highres_fps_control": hasattr(camera, "set_highres_fps"), "highres_fps_max": 30, "card_deal": True, "card_feed": True},
             robot=controller.status(),
             camera=camera.status_dict(),

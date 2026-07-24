@@ -354,19 +354,26 @@ async function sendKeys() {
       $("#action").textContent = data.action;
       if (data.deal && dealRequestSent && data.deal.token === dealRequestSent.token) {
         if (data.deal.state === "pending") {
-          note(`P 已送达树莓派：M4 PWM ${dealRequestSent.pwm}，正在等待 Arduino 确认`);
+          note(`P 已送达树莓派：正在等待 M3、M4 的 Arduino 确认`);
           continue;
         }
         const request = dealRequestSent;
         if (pendingDealRequest?.token === dealRequestSent.token) pendingDealRequest = null;
-        note(data.deal.state === "error"
-          ? `M4 未启动：${data.deal.error || data.deal.reply || "Arduino 未确认"}`
-          : data.deal.state === "legacy"
-          ? `M4 已确认运行（旧固件固定 PWM 255、1 秒），回包：${data.deal.reply}`
-          : data.deal.state === "busy"
-            ? `M4 正在运行，本次没有重复启动，回包：${data.deal.reply}`
-            : `M4 已确认运行：PWM ${request.pwm}，${request.seconds} 秒，回包：${data.deal.reply}`);
-        resetDealControls(data.deal.state === "error" ? 0 : request.duration_ms);
+        const feedResult = data.deal.feed || {}, dealResult = data.deal.deal || {};
+        const feedText = feedResult.state === "error"
+          ? `M3失败：${feedResult.error || feedResult.reply || "未确认"}`
+          : feedResult.state === "busy"
+            ? `M3已在运行：${feedResult.reply}`
+            : `M3已运行 PWM ${request.feed_pwm}/${request.feed_seconds}秒：${feedResult.reply}`;
+        const dealText = dealResult.state === "error"
+          ? `M4失败：${dealResult.error || dealResult.reply || "未确认"}`
+          : dealResult.state === "busy"
+            ? `M4已在运行：${dealResult.reply}`
+            : dealResult.state === "legacy"
+              ? `M4按旧固件固定参数运行：${dealResult.reply}`
+              : `M4已运行 PWM ${request.deal_pwm}/${request.deal_seconds}秒：${dealResult.reply}`;
+        note(`${feedText}；${dealText}`);
+        resetDealControls(data.deal.state === "error" ? 0 : Math.max(request.feed_duration_ms, request.deal_duration_ms));
       }
     } catch (error) {
       if (dealRequestSent) {
@@ -413,13 +420,24 @@ async function feedCards() {
 }
 async function dealCard() {
   if (dealBusy) return;
-  let settings;
-  try { settings = timedMotorSettings("deal"); } catch (error) { note(error.message); return; }
+  let feedSettings, dealSettings;
+  try {
+    feedSettings = timedMotorSettings("feed");
+    dealSettings = timedMotorSettings("deal");
+  } catch (error) { note(error.message); return; }
   dealBusy = true;
   const button = document.querySelector("[data-deal]");
   if (button) button.disabled = true;
-  pendingDealRequest = {...settings, token:`${Date.now()}-${++dealRequestSerial}`};
-  note(`P 出牌命令发送中：M4 PWM ${settings.pwm}，${settings.seconds} 秒；正在等待 Arduino 确认`);
+  pendingDealRequest = {
+    token:`${Date.now()}-${++dealRequestSerial}`,
+    feed_pwm:feedSettings.pwm,
+    feed_duration_ms:feedSettings.duration_ms,
+    feed_seconds:feedSettings.seconds,
+    deal_pwm:dealSettings.pwm,
+    deal_duration_ms:dealSettings.duration_ms,
+    deal_seconds:dealSettings.seconds,
+  };
+  note(`P 组合命令发送中：M3 PWM ${feedSettings.pwm}/${feedSettings.seconds}秒，M4 PWM ${dealSettings.pwm}/${dealSettings.seconds}秒`);
   await sendKeys();
 }
 function resetDealControls(delayMs) {

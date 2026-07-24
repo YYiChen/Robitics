@@ -119,7 +119,13 @@ class ControllerPersistenceTests(unittest.TestCase):
                 controller._parse("ERR:BAD_COMMAND" if "," in command else "OK:DEAL")
                 return True
             controller._write = write_with_fallback
-            request = {"token": "p-1", "pwm": 200, "duration_ms": 1200}
+            request = {
+                "token": "p-1",
+                "feed_pwm": 200,
+                "feed_duration_ms": 5000,
+                "deal_pwm": 200,
+                "deal_duration_ms": 1200,
+            }
             first = controller.deal_from_key_request(request)
             deadline = time.monotonic() + 1.0
             while first["state"] == "pending" and time.monotonic() < deadline:
@@ -127,9 +133,38 @@ class ControllerPersistenceTests(unittest.TestCase):
                 first = controller.deal_from_key_request(request)
             second = controller.deal_from_key_request(request)
             self.assertEqual(first, second)
-            self.assertEqual(first["state"], "legacy")
-            self.assertEqual(commands, ["DEAL,200,1200", "DEAL"])
+            self.assertEqual(first["state"], "partial")
+            self.assertEqual(first["feed"]["state"], "error")
+            self.assertEqual(first["deal"]["state"], "legacy")
+            self.assertEqual(commands, ["FEED,200,5000", "DEAL,200,1200", "DEAL"])
             self.assertEqual(controller.card_motor_protocol, "legacy")
+
+    def test_p_request_runs_m3_and_m4_with_independent_presets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = RobotController("unused", Path(directory) / "drive_config.json")
+            controller._parse("READY:MOTOR_BRIDGE,M1=RIGHT,M2=LEFT,M3=FEED_ADJUSTABLE,M4=DEAL_ADJUSTABLE,SERVO=23,IMU=OK")
+            commands: list[str] = []
+            def write_both_acks(command: str) -> bool:
+                commands.append(command)
+                controller._parse("OK:FEED,180,2500" if command.startswith("FEED") else "OK:DEAL,210,900")
+                return True
+            controller._write = write_both_acks
+            request = {
+                "token": "p-both",
+                "feed_pwm": 180,
+                "feed_duration_ms": 2500,
+                "deal_pwm": 210,
+                "deal_duration_ms": 900,
+            }
+            result = controller.deal_from_key_request(request)
+            deadline = time.monotonic() + 1.0
+            while result["state"] == "pending" and time.monotonic() < deadline:
+                time.sleep(.01)
+                result = controller.deal_from_key_request(request)
+            self.assertEqual(result["state"], "running")
+            self.assertEqual(result["feed"]["reply"], "OK:FEED,180,2500")
+            self.assertEqual(result["deal"]["reply"], "OK:DEAL,210,900")
+            self.assertEqual(commands, ["FEED,180,2500", "DEAL,210,900"])
 
     def test_steering_syncs_direction_and_limits_to_arduino(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

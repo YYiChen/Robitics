@@ -42,6 +42,12 @@ class CameraMetricsTests(unittest.TestCase):
         catch_body = send_keys.split("catch (error)", 1)[1]
         self.assertNotIn("if (pendingDealRequest) {", catch_body)
 
+    def test_p_event_carries_independent_m3_and_m4_presets(self) -> None:
+        script = (Path(__file__).parents[1] / "robot_web" / "static" / "app.js").read_text(encoding="utf-8")
+        deal_card = script.split("async function dealCard()", 1)[1].split("function resetDealControls", 1)[0]
+        for field in ("feed_pwm", "feed_duration_ms", "deal_pwm", "deal_duration_ms"):
+            self.assertIn(field, deal_card)
+
     def test_reports_encoded_and_stream_bandwidth(self) -> None:
         camera = CameraStreamer(width=1280, height=720, fps=15)
         camera._record_encoded(100_000, 12.5)
@@ -204,7 +210,7 @@ class CameraMetricsTests(unittest.TestCase):
         response = app.test_client().get("/api/status")
         self.assertEqual(response.status_code, 200)
         body = response.get_json()
-        self.assertEqual(body["api_version"], "robot-console-2026-07-24-card-ack-v3")
+        self.assertEqual(body["api_version"], "robot-console-2026-07-24-card-combined-v4")
         self.assertTrue(body["capabilities"]["system_metrics"])
         self.assertTrue(body["capabilities"]["highres_fps_control"])
         self.assertEqual(body["capabilities"]["highres_fps_max"], 30)
@@ -232,21 +238,33 @@ class CameraMetricsTests(unittest.TestCase):
                 return "F"
 
             def deal_from_key_request(self, request):
-                self.commands.append(("KEY_DEAL", request["pwm"], request["duration_ms"]))
-                return {"token": request["token"], "state": "running", "reply": "OK:DEAL,200,750"}
+                self.commands.append(("KEY_BOTH", request["feed_pwm"], request["feed_duration_ms"], request["deal_pwm"], request["deal_duration_ms"]))
+                return {
+                    "token": request["token"],
+                    "state": "running",
+                    "feed": {"state": "running", "reply": "OK:FEED,180,2500"},
+                    "deal": {"state": "running", "reply": "OK:DEAL,200,750"},
+                }
 
         controller = Controller()
         client = create_app(controller, CameraStreamer()).test_client()
         self.assertEqual(client.post("/api/feed", json={"pwm": 180, "duration_ms": 2500}).status_code, 200)
         self.assertEqual(client.post("/api/deal", json={"pwm": 200, "duration_ms": 750}).status_code, 200)
-        key_response = client.post("/api/keys", json={"keys": ["w"], "deal_request": {"token": "p1", "pwm": 200, "duration_ms": 750}})
+        key_response = client.post("/api/keys", json={"keys": ["w"], "deal_request": {
+            "token": "p1",
+            "feed_pwm": 180,
+            "feed_duration_ms": 2500,
+            "deal_pwm": 200,
+            "deal_duration_ms": 750,
+        }})
         self.assertEqual(key_response.status_code, 200)
-        self.assertEqual(key_response.get_json()["deal"]["reply"], "OK:DEAL,200,750")
+        self.assertEqual(key_response.get_json()["deal"]["feed"]["reply"], "OK:FEED,180,2500")
+        self.assertEqual(key_response.get_json()["deal"]["deal"]["reply"], "OK:DEAL,200,750")
         self.assertEqual(controller.commands, [
             ("FEED", 180, 2500),
             ("DEAL", 200, 750),
             ("KEYS", ["w"]),
-            ("KEY_DEAL", 200, 750),
+            ("KEY_BOTH", 180, 2500, 200, 750),
         ])
 
 

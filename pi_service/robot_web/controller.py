@@ -351,9 +351,13 @@ class RobotController:
         token = str(request.get("token", "")).strip()
         if not token:
             raise ValueError("出牌事件缺少 token")
-        pwm, duration_ms = self._timed_motor_parameters(
-            request.get("pwm", 255),
-            request.get("duration_ms", 1000),
+        feed_pwm, feed_duration_ms = self._timed_motor_parameters(
+            request.get("feed_pwm", 255),
+            request.get("feed_duration_ms", 5000),
+        )
+        deal_pwm, deal_duration_ms = self._timed_motor_parameters(
+            request.get("deal_pwm", request.get("pwm", 255)),
+            request.get("deal_duration_ms", request.get("duration_ms", 1000)),
         )
         with self._deal_request_lock:
             if token == self._last_deal_request_token:
@@ -362,17 +366,38 @@ class RobotController:
             self._last_deal_request_result = {"token": token, "state": "pending", "reply": ""}
             threading.Thread(
                 target=self._complete_deal_request,
-                args=(token, pwm, duration_ms),
+                args=(token, feed_pwm, feed_duration_ms, deal_pwm, deal_duration_ms),
                 daemon=True,
                 name="card-deal-request",
             ).start()
             return self._last_deal_request_result
-    def _complete_deal_request(self, token: str, pwm: int, duration_ms: int) -> None:
+    def _complete_deal_request(
+        self,
+        token: str,
+        feed_pwm: int,
+        feed_duration_ms: int,
+        deal_pwm: int,
+        deal_duration_ms: int,
+    ) -> None:
+        feed_result: dict
+        deal_result: dict
         try:
-            state = self.deal_card(pwm, duration_ms)
-            result = {"token": token, "state": state, "reply": self.card_command_reply}
+            feed_state = self.feed_cards(feed_pwm, feed_duration_ms)
+            feed_result = {"state": feed_state, "reply": self.card_command_reply}
         except (RuntimeError, ValueError) as exc:
-            result = {"token": token, "state": "error", "reply": self.card_command_reply, "error": str(exc)}
+            feed_result = {"state": "error", "reply": self.card_command_reply, "error": str(exc)}
+        try:
+            deal_state = self.deal_card(deal_pwm, deal_duration_ms)
+            deal_result = {"state": deal_state, "reply": self.card_command_reply}
+        except (RuntimeError, ValueError) as exc:
+            deal_result = {"state": "error", "reply": self.card_command_reply, "error": str(exc)}
+        failed = sum(item["state"] == "error" for item in (feed_result, deal_result))
+        result = {
+            "token": token,
+            "state": "error" if failed == 2 else "partial" if failed == 1 else "running",
+            "feed": feed_result,
+            "deal": deal_result,
+        }
         with self._deal_request_lock:
             if token == self._last_deal_request_token:
                 self._last_deal_request_result = result
