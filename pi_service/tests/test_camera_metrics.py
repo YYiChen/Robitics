@@ -183,10 +183,34 @@ class CameraMetricsTests(unittest.TestCase):
         response = app.test_client().get("/api/status")
         self.assertEqual(response.status_code, 200)
         body = response.get_json()
-        self.assertEqual(body["api_version"], "robot-console-2026-07-16-steering")
+        self.assertEqual(body["api_version"], "robot-console-2026-07-24-card-motors")
         self.assertTrue(body["capabilities"]["system_metrics"])
         self.assertTrue(body["capabilities"]["highres_fps_control"])
         self.assertEqual(body["capabilities"]["highres_fps_max"], 30)
+        self.assertTrue(body["capabilities"]["card_feed"])
+        self.assertTrue(body["capabilities"]["card_deal"])
+
+    @unittest.skipUnless(importlib.util.find_spec("flask"), "Flask is installed on the Raspberry Pi deployment target")
+    def test_card_motor_endpoints_forward_live_power_and_duration(self) -> None:
+        from app import create_app
+
+        class Controller:
+            def __init__(self):
+                self.commands = []
+
+            def feed_cards(self, pwm, duration_ms):
+                self.commands.append(("FEED", pwm, duration_ms))
+                return "requested"
+
+            def deal_card(self, pwm, duration_ms):
+                self.commands.append(("DEAL", pwm, duration_ms))
+                return "requested"
+
+        controller = Controller()
+        client = create_app(controller, CameraStreamer()).test_client()
+        self.assertEqual(client.post("/api/feed", json={"pwm": 180, "duration_ms": 2500}).status_code, 200)
+        self.assertEqual(client.post("/api/deal", json={"pwm": 200, "duration_ms": 750}).status_code, 200)
+        self.assertEqual(controller.commands, [("FEED", 180, 2500), ("DEAL", 200, 750)])
 
 
 if __name__ == "__main__":

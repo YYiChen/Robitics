@@ -13,7 +13,8 @@
 //
 //   Motor control:
 //     M,m1,m2,m3,m4\n         raw drive PWM (-255..255); M3/M4 fields ignored
-//     DEAL\n                   run the M4 dealing motor once
+//     FEED,pwm,timeMs\n        run M3 with adjustable power and duration
+//     DEAL,pwm,timeMs\n        run M4 with adjustable power and duration
 //
 //   Speed control (left/right drive):
 //     V,leftPPS,rightPPS\n    target speed in pulses/sec (signed)
@@ -37,8 +38,8 @@
 //   Active motor mapping:
 //     M1 = right-side vehicle drive
 //     M2 = left-side vehicle drive
-//     M3 = continuous card-feed motor
-//     M4 = one-shot dealing motor
+//     M3 = adjustable timed card-feed motor
+//     M4 = adjustable timed dealing motor
 //
 //   Hall encoders:
 //     Pin 18 (INT3) = left drive wheel (M2)
@@ -69,10 +70,14 @@ const unsigned long STOPPED_REPORT_INTERVAL_MS = 1000;
 // briefly to reduce current and mechanical shock.
 const unsigned long REVERSE_PAUSE_MS = 80;
 
-// Card mechanism. Signed values preserve the tested BACKWARD direction.
-constexpr int CARD_FEED_COMMAND = -255;       // M3: continuous
-constexpr int CARD_DEAL_COMMAND = -255;       // M4: one shot
-constexpr unsigned long CARD_DEAL_TIME_MS = 1000UL;
+// Card mechanism. Both motors keep the tested BACKWARD direction; the web
+// supplies an unsigned PWM and duration for every trigger.
+constexpr uint8_t DEFAULT_CARD_FEED_PWM = 255;
+constexpr uint8_t DEFAULT_CARD_DEAL_PWM = 255;
+constexpr unsigned long DEFAULT_CARD_FEED_TIME_MS = 5000UL;
+constexpr unsigned long DEFAULT_CARD_DEAL_TIME_MS = 1000UL;
+constexpr unsigned long MIN_CARD_MOTOR_TIME_MS = 100UL;
+constexpr unsigned long MAX_CARD_MOTOR_TIME_MS = 60000UL;
 
 // ============================================================
 // One forward-facing ultrasonic sensor.  It stops forward travel only.
@@ -224,6 +229,10 @@ int currentMotorCommands[4] = {0, 0, 0, 0};
 unsigned long lastStoppedReportTime = 0;
 bool cardDealRunning = false;
 unsigned long cardDealStartedAt = 0;
+unsigned long cardDealDurationMs = DEFAULT_CARD_DEAL_TIME_MS;
+bool cardFeedRunning = false;
+unsigned long cardFeedStartedAt = 0;
+unsigned long cardFeedDurationMs = DEFAULT_CARD_FEED_TIME_MS;
 
 // ============================================================
 // MPU-6500 IMU state variables
@@ -352,25 +361,46 @@ void releaseAllMotors() {
 #endif
 #include "motor_control.h"
 
-void startContinuousCardFeed() {
-  applyOneMotor(motor3, CARD_FEED_COMMAND);
-  currentMotorCommands[2] = CARD_FEED_COMMAND;
+bool startCardFeed(uint8_t pwm, unsigned long durationMs) {
+  if (cardFeedRunning) {
+    return false;
+  }
+  const int command = -(int)pwm;
+  applyOneMotor(motor3, command);
+  currentMotorCommands[2] = command;
+  cardFeedStartedAt = millis();
+  cardFeedDurationMs = durationMs;
+  cardFeedRunning = true;
+  return true;
 }
 
-bool startCardDeal() {
+void updateCardFeed() {
+  if (!cardFeedRunning ||
+      millis() - cardFeedStartedAt < cardFeedDurationMs) {
+    return;
+  }
+  applyOneMotor(motor3, 0);
+  currentMotorCommands[2] = 0;
+  cardFeedRunning = false;
+  Serial.println(F("FEED:DONE"));
+}
+
+bool startCardDeal(uint8_t pwm, unsigned long durationMs) {
   if (cardDealRunning) {
     return false;
   }
-  applyOneMotor(motor4, CARD_DEAL_COMMAND);
-  currentMotorCommands[3] = CARD_DEAL_COMMAND;
+  const int command = -(int)pwm;
+  applyOneMotor(motor4, command);
+  currentMotorCommands[3] = command;
   cardDealStartedAt = millis();
+  cardDealDurationMs = durationMs;
   cardDealRunning = true;
   return true;
 }
 
 void updateCardDeal() {
   if (!cardDealRunning ||
-      millis() - cardDealStartedAt < CARD_DEAL_TIME_MS) {
+      millis() - cardDealStartedAt < cardDealDurationMs) {
     return;
   }
   applyOneMotor(motor4, 0);
@@ -910,6 +940,33 @@ bool parseMotorCommand(char *line, int output[4]) {
   return token == nullptr;
 }
 
+bool parseTimedMotorPayload(
+  char *payload,
+  uint8_t &pwm,
+  unsigned long &durationMs
+) {
+  char *comma = strchr(payload, ',');
+  if (comma == nullptr) {
+    return false;
+  }
+
+  *comma = '\0';
+  int parsedPwm = 0;
+  int parsedDurationMs = 0;
+  if (!parseIntegerStrict(payload, parsedPwm)
+      || !parseIntegerStrict(comma + 1, parsedDurationMs)
+      || parsedPwm < 0
+      || parsedPwm > 255
+      || parsedDurationMs < (int)MIN_CARD_MOTOR_TIME_MS
+      || parsedDurationMs > (int)MAX_CARD_MOTOR_TIME_MS) {
+    return false;
+  }
+
+  pwm = (uint8_t)parsedPwm;
+  durationMs = (unsigned long)parsedDurationMs;
+  return true;
+}
+
 void executeLine(char *line) {
   while (*line == ' ' || *line == '\t') {
     ++line;
@@ -927,11 +984,39 @@ void executeLine(char *line) {
     return;
   }
 
+  // M3 feed is locally timed and does not refresh the drive watchdog.
+  if (strcmp(line, "FEED") == 0 || strncmp(line, "FEED,", 5) == 0) {
+    uint8_t pwm = DEFAULT_CARD_FEED_PWM;
+    unsigned long durationMs = DEFAULT_CARD_FEED_TIME_MS;
+    if (line[4] != '\0' && !parseTimedMotorPayload(line + 5, pwm, durationMs)) {
+      Serial.println(F("ERR:FEED_POWER_TIME"));
+      return;
+    }
+    if (startCardFeed(pwm, durationMs)) {
+      Serial.print(F("OK:FEED,"));
+      Serial.print(pwm);
+      Serial.print(',');
+      Serial.println(durationMs);
+    } else {
+      Serial.println(F("BUSY:FEED"));
+    }
+    return;
+  }
+
   // One-shot card dealing does not refresh the vehicle-drive watchdog.
   // Repeated requests while M4 is active are ignored instead of extending it.
-  if (strcmp(line, "DEAL") == 0) {
-    if (startCardDeal()) {
-      Serial.println(F("OK:DEAL"));
+  if (strcmp(line, "DEAL") == 0 || strncmp(line, "DEAL,", 5) == 0) {
+    uint8_t pwm = DEFAULT_CARD_DEAL_PWM;
+    unsigned long durationMs = DEFAULT_CARD_DEAL_TIME_MS;
+    if (line[4] != '\0' && !parseTimedMotorPayload(line + 5, pwm, durationMs)) {
+      Serial.println(F("ERR:DEAL_POWER_TIME"));
+      return;
+    }
+    if (startCardDeal(pwm, durationMs)) {
+      Serial.print(F("OK:DEAL,"));
+      Serial.print(pwm);
+      Serial.print(',');
+      Serial.println(durationMs);
     } else {
       Serial.println(F("BUSY:DEAL"));
     }
@@ -1144,7 +1229,6 @@ void setup() {
   Serial.begin(9600);
 
   releaseAllMotors();
-  startContinuousCardFeed();
   lastValidCommandTime = millis();
   timeoutStopped = true;
 
@@ -1178,9 +1262,9 @@ void setup() {
   imuPresent = initMPU6500();
 
   if (imuPresent) {
-    Serial.println(F("READY:MOTOR_BRIDGE,M1=RIGHT,M2=LEFT,M3=CARD_CONTINUOUS,M4=DEAL_1000MS,SERVO=23,IMU=OK"));
+    Serial.println(F("READY:MOTOR_BRIDGE,M1=RIGHT,M2=LEFT,M3=FEED_ADJUSTABLE,M4=DEAL_ADJUSTABLE,SERVO=23,IMU=OK"));
   } else {
-    Serial.println(F("READY:MOTOR_BRIDGE,M1=RIGHT,M2=LEFT,M3=CARD_CONTINUOUS,M4=DEAL_1000MS,SERVO=23,IMU=ABSENT"));
+    Serial.println(F("READY:MOTOR_BRIDGE,M1=RIGHT,M2=LEFT,M3=FEED_ADJUSTABLE,M4=DEAL_ADJUSTABLE,SERVO=23,IMU=ABSENT"));
   }
 }
 
@@ -1224,6 +1308,7 @@ void loop() {
   // Keep sensor sampling independent from remote-control command timing.
   updateUltrasonic();
   updateServoMotion();
+  updateCardFeed();
   updateCardDeal();
 
   // An obstacle may appear after a previously safe forward command.  Stop it

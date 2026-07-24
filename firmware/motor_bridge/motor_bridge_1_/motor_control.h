@@ -30,9 +30,9 @@ void resetDriveControlState() {
   pidOutputRight = 0;
 }
 
-// M1/M2 are the vehicle drive motors. Card motors M3/M4 deliberately keep
-// their independent state when the drive watchdog, STOP, or obstacle guard
-// stops the vehicle.
+// M1/M2 are the vehicle drive motors. Timed card motors M3/M4 deliberately
+// keep their independent state when the drive watchdog, STOP, or obstacle
+// guard stops the vehicle.
 void releaseDriveMotors() {
   motor1.setSpeed(0); motor2.setSpeed(0);
   motor1.run(RELEASE); motor2.run(RELEASE);
@@ -42,7 +42,7 @@ void releaseDriveMotors() {
 }
 
 // Full release is reserved for initialisation. Runtime drive stops use
-// releaseDriveMotors() so M3 can remain continuous and M4 can finish safely.
+// releaseDriveMotors() so active M3/M4 cycles can finish safely.
 void releaseAllMotors() {
   releaseDriveMotors();
   motor3.setSpeed(0); motor4.setSpeed(0);

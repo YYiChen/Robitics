@@ -4,7 +4,7 @@ const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:f
 let folder, aborter, count = 0, configLoaded = false, keysSending = false, keysQueued = false;
 let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, highresProfileDirty = false, highresProfileBusy = false, highresFpsDirty = false, highresFpsBusy = false, exposureDirty = false, exposureBusy = false, colorCorrectionDirty = false, colorCorrectionBusy = false, videoRetryTimer;
 let servoBusy = false, queuedServoAngle = null, steeringCenterAngle = 90, steeringReversed = true;
-let dealBusy = false;
+let feedBusy = false, dealBusy = false;
 let visualServoAngle = 90, visualServoVelocity = 0, visualSteeringDirection = 0, visualServoLastAt = performance.now();
 let receivedFrameCount = 0, receivedFrameWindowAt = performance.now(), browserReceiveFps = 0, statusRttMs = null;
 let activeVideoTransport = "mjpeg", currentWebrtcUrl = "";
@@ -347,23 +347,53 @@ async function sendKeys() {
 function setKey(key, pressed) { if (pressed) heldKeys.add(key); else heldKeys.delete(key); sendKeys(); }
 function setSteeringKey(key, pressed) { if (pressed) heldSteeringKeys.add(key); else heldSteeringKeys.delete(key); syncVisualSteeringDirection(); sendKeys(); }
 function releaseKeys() { heldKeys.clear(); heldSteeringKeys.clear(); syncVisualSteeringDirection(); sendKeys(); }
+function timedMotorSettings(prefix) {
+  const pwm = Number($(`#${prefix}Pwm`).value);
+  const seconds = Number($(`#${prefix}Seconds`).value);
+  if (!Number.isInteger(pwm) || pwm < 0 || pwm > 255) throw Error("PWM 必须是 0 到 255 的整数");
+  if (!Number.isFinite(seconds) || seconds < .1 || seconds > 60) throw Error("运行时间必须在 0.1 到 60 秒之间");
+  return {pwm, duration_ms: Math.round(seconds * 1000), seconds};
+}
+async function feedCards() {
+  if (feedBusy) return;
+  const button = document.querySelector("[data-feed]");
+  let settings;
+  try { settings = timedMotorSettings("feed"); } catch (error) { note(error.message); return; }
+  feedBusy = true;
+  if (button) button.disabled = true;
+  try {
+    const response = await requestJson("/api/feed", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(settings)}, 3500);
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw Error(data.error || "M3 送牌命令发送失败");
+    note(`已触发 M3：PWM ${settings.pwm}，运行 ${settings.seconds} 秒`);
+  } catch (error) {
+    note(error.message);
+  } finally {
+    setTimeout(() => {
+      feedBusy = false;
+      if (button) button.disabled = false;
+    }, settings.duration_ms);
+  }
+}
 async function dealCard() {
   if (dealBusy) return;
+  let settings;
+  try { settings = timedMotorSettings("deal"); } catch (error) { note(error.message); return; }
   dealBusy = true;
   const button = document.querySelector("[data-deal]");
   if (button) button.disabled = true;
   try {
-    const response = await requestJson("/api/deal", {method:"POST"}, 3500);
+    const response = await requestJson("/api/deal", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(settings)}, 3500);
     const data = await response.json();
     if (!response.ok || !data.ok) throw Error(data.error || "出牌命令发送失败");
-    note("已触发出牌：M4 运转 1 秒");
+    note(`已触发 M4：PWM ${settings.pwm}，运行 ${settings.seconds} 秒`);
   } catch (error) {
     note(error.message);
   } finally {
     setTimeout(() => {
       dealBusy = false;
       if (button) button.disabled = false;
-    }, 1000);
+    }, settings.duration_ms);
   }
 }
 for (const button of document.querySelectorAll("[data-action]")) {
@@ -377,6 +407,7 @@ for (const button of document.querySelectorAll("[data-steering]")) {
   button.addEventListener("pointerdown", event => { event.preventDefault(); button.setPointerCapture(event.pointerId); setSteeringKey(key, true); });
   for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) button.addEventListener(name, event => { event.preventDefault(); setSteeringKey(key, false); });
 }
+for (const button of document.querySelectorAll("[data-feed]")) button.addEventListener("click", feedCards);
 for (const button of document.querySelectorAll("[data-deal]")) button.addEventListener("click", dealCard);
 for (const button of document.querySelectorAll("[data-servo-center]")) button.addEventListener("click", centerServo);
 addEventListener("keydown", event => { if (editing(event) || event.repeat) return; if (event.code === "Space") { event.preventDefault(); releaseKeys(); return; }

@@ -100,7 +100,7 @@ class RobotController:
         self._last_steering_sent_at = 0.0
         self._last_sent_servo_limits: tuple[float, float] | None = None
         self._servo_target_angle: float | None = None
-        self.imu = self.speed = self.ultrasonic = None; self.servo_angle: int | None = None; self.motor_output: list[int] | None = None; self.card_deal_state = "idle"; self.reply = self.error = ""; self.last_rx = 0.0
+        self.imu = self.speed = self.ultrasonic = None; self.servo_angle: int | None = None; self.motor_output: list[int] | None = None; self.card_feed_state = self.card_deal_state = "idle"; self.reply = self.error = ""; self.last_rx = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._shutdown_lock = threading.Lock()
@@ -246,13 +246,35 @@ class RobotController:
         with self.lock:
             self.held_keys.clear(); self.action = "STOP"; self.steering_direction = 0
         self._write("STOP")
-    def deal_card(self) -> str:
-        """Request one Arduino-timed M4 dealing cycle."""
+    @staticmethod
+    def _timed_motor_parameters(raw_pwm: object, raw_duration_ms: object) -> tuple[int, int]:
+        try:
+            pwm = int(raw_pwm)
+            duration_ms = int(raw_duration_ms)
+        except (TypeError, ValueError):
+            raise ValueError("电机功率和运行时间必须是整数") from None
+        if not 0 <= pwm <= 255:
+            raise ValueError("电机 PWM 必须在 0 到 255 之间")
+        if not 100 <= duration_ms <= 60000:
+            raise ValueError("电机运行时间必须在 100 到 60000 毫秒之间")
+        return pwm, duration_ms
+    def deal_card(self, raw_pwm: object = 255, raw_duration_ms: object = 1000) -> str:
+        """Request one adjustable Arduino-timed M4 dealing cycle."""
+        pwm, duration_ms = self._timed_motor_parameters(raw_pwm, raw_duration_ms)
         with self.lock:
             self.card_deal_state = "requested"
-        self._write("DEAL")
+        self._write(f"DEAL,{pwm},{duration_ms}")
         if self.error:
             raise RuntimeError(f"发送出牌命令失败：{self.error}")
+        return "requested"
+    def feed_cards(self, raw_pwm: object = 255, raw_duration_ms: object = 5000) -> str:
+        """Request one adjustable Arduino-timed M3 feed cycle."""
+        pwm, duration_ms = self._timed_motor_parameters(raw_pwm, raw_duration_ms)
+        with self.lock:
+            self.card_feed_state = "requested"
+        self._write(f"FEED,{pwm},{duration_ms}")
+        if self.error:
+            raise RuntimeError(f"发送送牌命令失败：{self.error}")
         return "requested"
     def set_servo_angle(self, raw_angle: object, *, fast: bool = False, track_target: bool = True) -> int:
         """Set a smooth target or request a mechanical-speed SG90 return."""
@@ -289,7 +311,7 @@ class RobotController:
         if action == "STOP": return (0, 0, 0, 0)
         profile = cfg.profiles.get(action, default_profiles()[action])
         # M1 is right drive and M2 is left drive. M3/M4 are card motors and
-        # are controlled exclusively by Arduino's fixed feeder/deal logic.
+        # are controlled exclusively by Arduino's adjustable timed commands.
         return (profile["rf"], profile["lf"], 0, 0)
     @staticmethod
     def _speed(action: str, cfg: Config) -> tuple[float, float, int, int]:
@@ -332,12 +354,16 @@ class RobotController:
                 self.servo_angle = int(text.split(",", 1)[1])
             elif text.startswith("SVP,"):
                 self.servo_angle = int(text.split(",", 1)[1])
-            elif text == "OK:DEAL" or text == "BUSY:DEAL":
+            elif text.startswith("OK:DEAL") or text == "BUSY:DEAL":
                 self.card_deal_state = "running"
             elif text == "DEAL:DONE":
                 self.card_deal_state = "idle"
+            elif text.startswith("OK:FEED") or text == "BUSY:FEED":
+                self.card_feed_state = "running"
+            elif text == "FEED:DONE":
+                self.card_feed_state = "idle"
             elif text in {"OK:STOP", "STATUS:STOPPED", "STATUS:DRIVE_STOPPED", "TIMEOUT:STOP"} or text.startswith("BLOCK:"):
-                outputs = list(self.motor_output or [0, 0, -255, 0])
+                outputs = list(self.motor_output or [0, 0, 0, 0])
                 outputs[0] = outputs[1] = 0
                 self.motor_output = outputs
         except ValueError: pass
@@ -374,6 +400,6 @@ class RobotController:
                 for command in ("IMU", "SPD", "US", "OUT"): self._write(command)
                 next_query = now + .5
     def status(self) -> dict:
-        with self.lock: cfg, action, seen, deal_state = asdict(self.config), self.action, self.last_client_seen, self.card_deal_state
+        with self.lock: cfg, action, seen, feed_state, deal_state = asdict(self.config), self.action, self.last_client_seen, self.card_feed_state, self.card_deal_state
         serial_open = bool(self.serial and self.serial.is_open); age = time.monotonic() - self.last_rx if self.last_rx else None
-        return {"serial":serial_open,"arduino_online":serial_open and age is not None and age <= 1.5,"last_rx_age":age,"error":self.error,"reply":self.reply,"config":cfg,"config_path":str(self.config_path),"config_source":self.config_source,"config_error":self.config_error,"action":action,"keys":sorted(self.held_keys),"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"steering_direction":self.steering_direction,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic,"servo_angle":self.servo_angle,"motor_output":self.motor_output,"card_deal_state":deal_state}
+        return {"serial":serial_open,"arduino_online":serial_open and age is not None and age <= 1.5,"last_rx_age":age,"error":self.error,"reply":self.reply,"config":cfg,"config_path":str(self.config_path),"config_source":self.config_source,"config_error":self.config_error,"action":action,"keys":sorted(self.held_keys),"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"steering_direction":self.steering_direction,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic,"servo_angle":self.servo_angle,"motor_output":self.motor_output,"card_feed_state":feed_state,"card_deal_state":deal_state}
