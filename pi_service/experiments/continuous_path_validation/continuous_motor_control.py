@@ -49,6 +49,17 @@ def path_drive_pwm(observation: PathObservation, config: ContinuousMotorConfig) 
     return (inner, outer) if error > 0 else (outer, inner)
 
 
+def drive_pwm_with_last_path(
+    observation: PathObservation,
+    config: ContinuousMotorConfig,
+    last_path_pair: tuple[int, int] | None,
+) -> tuple[tuple[int, int], str]:
+    """Keep the last curvature through a short visual dropout."""
+    if observation.lookahead_offset is None and last_path_pair is not None:
+        return last_path_pair, "HOLD_LAST_PATH"
+    return path_drive_pwm(observation, config), "LOOKAHEAD_P"
+
+
 class ContinuousMotorExecutor:
     def __init__(self, config: ContinuousMotorConfig) -> None:
         self.config = config
@@ -56,6 +67,7 @@ class ContinuousMotorExecutor:
         self._forward_active = False
         self._launch_until = 0.0
         self._stopped = False
+        self._last_path_pair: tuple[int, int] | None = None
 
     def arm(self) -> None:
         self.client.require_arduino_online()
@@ -71,7 +83,13 @@ class ContinuousMotorExecutor:
         if now < self._launch_until:
             pair, label = (self.config.launch_pwm, self.config.launch_pwm), "LAUNCH"
         else:
-            pair, label = path_drive_pwm(observation, self.config), "LOOKAHEAD_P"
+            pair, label = drive_pwm_with_last_path(
+                observation,
+                self.config,
+                self._last_path_pair,
+            )
+            if observation.lookahead_offset is not None:
+                self._last_path_pair = pair
         right, left = self.client.send_drive_pwm(*pair)
         self._stopped = False
         return f"{label}(R={right},L={left})"
@@ -82,4 +100,5 @@ class ContinuousMotorExecutor:
         self.client.stop()
         self._forward_active = False
         self._launch_until = 0.0
+        self._last_path_pair = None
         self._stopped = True

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import unittest
 
-from continuous_motor_control import ContinuousMotorConfig, path_drive_pwm
+from continuous_motor_control import ContinuousMotorConfig, drive_pwm_with_last_path, path_drive_pwm
 from continuous_path_planner import ContinuousPathPlanner, PathIntent
 
 
@@ -17,6 +17,15 @@ class ContinuousPathTests(unittest.TestCase):
     def test_right_lookahead_arcs_right(self):
         right, left = path_drive_pwm(Observation(lookahead_offset=.25), ContinuousMotorConfig("http://example"))
         self.assertLess(right, left)
+
+    def test_short_line_loss_keeps_last_turning_pair(self):
+        pair, label = drive_pwm_with_last_path(
+            Observation(True, 0, None),
+            ContinuousMotorConfig("http://example"),
+            (35, 115),
+        )
+        self.assertEqual(pair, (35, 115))
+        self.assertEqual(label, "HOLD_LAST_PATH")
 
     def test_brief_loss_keeps_heading_then_stops_and_resumes(self):
         planner = ContinuousPathPlanner()
