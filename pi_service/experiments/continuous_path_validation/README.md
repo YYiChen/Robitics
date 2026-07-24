@@ -18,3 +18,4 @@ chmod +x /home/g11/Desktop/pi_service/experiments/continuous_path_validation/run
 ```
 
 脚本会开启电机；按 `Ctrl+C` 停车并退出。
+若本地 `robot_web` 服务尚未运行，脚本会自动启动它并等待 `/api/status` 就绪；若服务本来已由另一个终端启动，脚本会复用该服务。
