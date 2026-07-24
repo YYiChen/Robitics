@@ -382,6 +382,7 @@ async function dealCard() {
   dealBusy = true;
   const button = document.querySelector("[data-deal]");
   if (button) button.disabled = true;
+  note(`P 出牌命令发送中：M4 PWM ${settings.pwm}，${settings.seconds} 秒`);
   try {
     const response = await requestJson("/api/deal", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(settings)}, 3500);
     const data = await response.json();
@@ -411,16 +412,16 @@ for (const button of document.querySelectorAll("[data-feed]")) button.addEventLi
 for (const button of document.querySelectorAll("[data-deal]")) button.addEventListener("click", dealCard);
 for (const button of document.querySelectorAll("[data-servo-center]")) button.addEventListener("click", centerServo);
 addEventListener("keydown", event => { if (event.repeat) return;
-  // R is a global M4 trigger. Keep it available after the operator edits a
-  // numeric PWM/time field, where focus otherwise remains inside the input.
-  if (event.key?.toLowerCase() === "r") { event.preventDefault(); dealCard(); return; }
+  // P is reserved exclusively for M4 dealing. Use KeyboardEvent.code as well
+  // so the physical key still works with a Chinese input method enabled.
+  if (event.code === "KeyP" || event.key?.toLowerCase() === "p") { event.preventDefault(); dealCard(); return; }
   if (editing(event)) return;
   if (event.code === "Space") { event.preventDefault(); releaseKeys(); return; }
   if (event.key?.toLowerCase() === "z") { event.preventDefault(); centerServo(); return; }
   const steering = event.key?.toLowerCase(); if (steering === "q" || steering === "e") { event.preventDefault(); setSteeringKey(steering, true); return; }
   const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, true); }
 });
-addEventListener("keyup", event => { if (editing(event)) return; if (event.key?.toLowerCase() === "r") { event.preventDefault(); return; } const steering = event.key?.toLowerCase(); if (steering === "q" || steering === "e") { event.preventDefault(); setSteeringKey(steering, false); return; } const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, false); } });
+addEventListener("keyup", event => { if (editing(event)) return; if (event.code === "KeyP" || event.key?.toLowerCase() === "p") { event.preventDefault(); return; } const steering = event.key?.toLowerCase(); if (steering === "q" || steering === "e") { event.preventDefault(); setSteeringKey(steering, false); return; } const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, false); } });
 addEventListener("blur", releaseKeys); addEventListener("beforeunload", () => navigator.sendBeacon("/api/stop")); setInterval(sendKeys, 180);
 async function sendHeartbeat() { try { await requestJson("/api/heartbeat", {method:"POST", keepalive:true}, 500); } catch (_) {} }
 setInterval(sendHeartbeat, 180);
