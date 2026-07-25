@@ -46,25 +46,33 @@ function updateAutonomousUi(autonomous) {
   unavailable.classList.toggle("hidden", available);
   if (!available) image.removeAttribute("src");
   const tuning = autonomous.tuning || {};
-  for (const input of document.querySelectorAll("[data-route-tuning]")) {
-    const key = input.dataset.routeTuning;
+  const activeTuningInputs = document.querySelectorAll(scanlineI ? "[data-scanline-tuning]" : "[data-route-tuning]");
+  for (const input of activeTuningInputs) {
+    const key = scanlineI ? input.dataset.scanlineTuning : input.dataset.routeTuning;
     if (Object.prototype.hasOwnProperty.call(tuning, key) && document.activeElement !== input) input.value = tuning[key];
-    input.disabled = !available || scanlineI;
+    input.disabled = !available;
   }
+  $("#scanlineRouteTuning").classList.toggle("hidden", !scanlineI);
+  $("#genericRouteTuning").classList.toggle("hidden", scanlineI);
+  $("#genericRouteTuningNote").classList.toggle("hidden", scanlineI);
   const tuningState = $("#routeTuningState");
-  if (tuningState) tuningState.textContent = available ? (scanlineI ? "扫描线 I 型固定安全参数" : "实时参数") : "路线预判未开启";
-  $("#applyRouteTuning").disabled = !available || scanlineI;
+  if (tuningState) tuningState.textContent = available ? (scanlineI ? "扫描线 I 型实时参数" : "实时参数") : "路线预判未开启";
+  $("#applyRouteTuning").disabled = !available;
+  $("#applyRouteTuning").textContent = scanlineI ? "实时应用并保存 I 型速度参数" : "实时应用并保存路线参数";
 }
 $("#autonomousToggle").onclick = toggleAutonomousDrive;
 $("#applyRouteTuning").onclick = async () => {
   const payload = {};
-  for (const input of document.querySelectorAll("[data-route-tuning]")) payload[input.dataset.routeTuning] = Number(input.value);
+  const scanlineI = $("#scanlineRouteTuning").classList.contains("hidden") === false;
+  for (const input of document.querySelectorAll(scanlineI ? "[data-scanline-tuning]" : "[data-route-tuning]")) {
+    payload[scanlineI ? input.dataset.scanlineTuning : input.dataset.routeTuning] = Number(input.value);
+  }
   try {
     const response = await requestJson("/api/autonomous/tuning", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)}, 1500);
     const data = await response.json();
     if (!response.ok || !data.ok) throw Error(data.error || "循迹参数应用失败");
     updateAutonomousUi(data.autonomous || {});
-    note("循迹参数已实时应用，并保存到 tuning.py。");
+    note(scanlineI ? "I 型直行与掉头速度已实时应用并保存。" : "循迹参数已实时应用，并保存到 tuning.py。");
   } catch (error) { note(error.message); }
 };
 

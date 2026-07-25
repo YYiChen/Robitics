@@ -11,7 +11,7 @@ from oled_status import OledStatusService
 from system_metrics import SystemMetrics
 from webrtc_stream import WebRTCStreamer
 from autonomous_route import AutonomousRouteTracker, AutonomousRunGate, RoutePreviewPublisher, load_tuning_config
-from scanline_i_route import ScanlineIShapeRouteTracker
+from scanline_i_route import ScanlineIShapeRouteTracker, load_scanline_tuning_config
 
 def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStreamer | DualStreamCamera, system_metrics: SystemMetrics | None = None, oled: OledStatusService | None = None, route_preview: RoutePreviewPublisher | None = None, route_tracker: AutonomousRouteTracker | None = None) -> Flask:
     app = Flask(__name__)
@@ -207,6 +207,7 @@ def main() -> None:
     parser.add_argument("--route-config", type=Path, default=Path(__file__).resolve().parents[2] / "third_party" / "DeskMate-Advance" / "src" / "track_line" / "config.fixed_green_white_course.json")
     parser.add_argument("--route-process-fps", type=float, default=20.0)
     parser.add_argument("--route-tuning", type=Path, default=Path(__file__).resolve().parents[1] / "experiments" / "continuous_path_validation" / "tuning.py")
+    parser.add_argument("--scanline-tuning", type=Path, default=Path(__file__).resolve().parents[1] / "experiments" / "i_shape_scanline_turnaround_validation" / "scanline_web_tuning.json")
     parser.add_argument("--oled-address", type=lambda value: int(value, 0), default=0x3C)
     parser.add_argument("--oled-i2c-port", type=int, default=1)
     args = parser.parse_args()
@@ -231,7 +232,7 @@ def main() -> None:
     route_tracker = None
     if route_preview is not None and route_gate is not None:
         if args.route_mode == "scanline_i":
-            route_tracker = ScanlineIShapeRouteTracker(controller, camera, route_preview, route_gate)
+            route_tracker = ScanlineIShapeRouteTracker(controller, camera, route_preview, route_gate, load_scanline_tuning_config(args.scanline_tuning))
         else:
             route_config = load_tuning_config(args.route_config, args.route_tuning)
             if args.route_process_fps != 20.0:

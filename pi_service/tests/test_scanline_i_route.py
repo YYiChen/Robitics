@@ -1,0 +1,40 @@
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+
+
+sys.path.insert(0, str(Path(__file__).parents[1] / "robot_web"))
+
+from scanline_i_route import (  # noqa: E402
+    ScanlineIRouteConfig,
+    ScanlineIShapeRouteTracker,
+    load_scanline_tuning_config,
+)
+
+
+class _Gate:
+    def enabled(self):
+        return False
+
+
+class ScanlineIRouteTests(unittest.TestCase):
+    def test_web_tuning_persists_i_shape_speeds_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tuning_path = Path(directory) / "scanline_web_tuning.json"
+            tracker = ScanlineIShapeRouteTracker(None, None, None, _Gate(), ScanlineIRouteConfig(tuning_path=tuning_path))
+            status = tracker.update_tuning({"straight_pwm": 135, "pivot_pwm": 210, "correction_gain": 140})
+            self.assertEqual(status["tuning"]["straight_pwm"], 135)
+            self.assertEqual(status["tuning"]["pivot_pwm"], 210)
+            self.assertEqual(json.loads(tuning_path.read_text(encoding="utf-8"))["correction_gain"], 140)
+            reloaded = load_scanline_tuning_config(tuning_path)
+            self.assertEqual(reloaded.straight_pwm, 135)
+            self.assertEqual(reloaded.pivot_pwm, 210)
+
+    def test_straight_following_uses_differential_pwm_for_off_center_line(self):
+        evidence = SimpleNamespace(line_center_x=400.0, line_centers=((1, 400.0, 20),) * 3)
+        right, left = ScanlineIShapeRouteTracker._straight_pair(evidence, 640, ScanlineIRouteConfig(straight_pwm=120))
+        self.assertLess(right, left)
+        self.assertEqual(right + left, 240)

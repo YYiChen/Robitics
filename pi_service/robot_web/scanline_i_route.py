@@ -1,17 +1,22 @@
 """Port-5000 adapter for the isolated scanline I-shape turnaround algorithm."""
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, replace
+import json
 from pathlib import Path
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[2]
 SCANLINE_EXPERIMENT = ROOT / "pi_service" / "experiments" / "i_shape_scanline_turnaround_validation"
+STRAIGHT_LINE_EXPERIMENT = ROOT / "pi_service" / "experiments" / "straight_line_stop_validation"
 if str(SCANLINE_EXPERIMENT) not in sys.path:
     sys.path.insert(0, str(SCANLINE_EXPERIMENT))
+if str(STRAIGHT_LINE_EXPERIMENT) not in sys.path:
+    sys.path.insert(0, str(STRAIGHT_LINE_EXPERIMENT))
 
 from scanline_i_logic import (  # noqa: E402
     IShapeScanlineAnalyzer,
@@ -19,6 +24,7 @@ from scanline_i_logic import (  # noqa: E402
     TurnaroundConfig,
     TurnaroundState,
 )
+from straight_motor_control import StraightMotorConfig, drive_pwm_for_offset  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -26,8 +32,42 @@ class ScanlineIRouteConfig:
     process_fps: float = 20.0
     straight_pwm: int = 120
     pivot_pwm: int = 200
+    correction_deadband: float = 0.05
+    correction_gain: float = 120.0
+    minimum_correction_pwm: int = 20
+    maximum_correction_pwm: int = 60
     pivot_min_seconds: float = 2.5
     pivot_max_seconds: float = 5.0
+    tuning_path: Path | None = None
+
+
+SCANLINE_TUNING_FIELDS = {
+    "straight_pwm": (int, 0, 255),
+    "pivot_pwm": (int, 0, 255),
+    "correction_deadband": (float, 0.0, 1.0),
+    "correction_gain": (float, 0.0, 1000.0),
+    "minimum_correction_pwm": (int, 0, 255),
+    "maximum_correction_pwm": (int, 0, 255),
+}
+
+
+def load_scanline_tuning_config(tuning_path: Path) -> ScanlineIRouteConfig:
+    """Load only the small, I-shape-specific web tuning file when it exists."""
+    values: dict[str, object] = {}
+    if tuning_path.exists():
+        try:
+            stored = json.loads(tuning_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            stored = {}
+        if isinstance(stored, dict):
+            for field, (converter, low, high) in SCANLINE_TUNING_FIELDS.items():
+                try:
+                    value = converter(stored[field])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if low <= value <= high:
+                    values[field] = value
+    return ScanlineIRouteConfig(tuning_path=tuning_path, **values)
 
 
 class ScanlineIShapeRouteTracker:
@@ -37,6 +77,7 @@ class ScanlineIShapeRouteTracker:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._tuning_lock = threading.RLock()
         self._motor_active = False
         self._status = {"available": True, "running": False, "enabled": False, "mode": "scanline_i", "state": "starting", "detail": "正在启动扫描线 I 型识别", "frame": 0, "confidence": None}
 
@@ -61,7 +102,8 @@ class ScanlineIShapeRouteTracker:
         with self._lock:
             status = dict(self._status)
         status["enabled"] = self.gate.enabled()
-        status["tuning"] = asdict(self.config)
+        with self._tuning_lock:
+            status["tuning"] = {field: getattr(self.config, field) for field in SCANLINE_TUNING_FIELDS}
         return status
 
     def toggle_drive(self) -> dict:
@@ -71,8 +113,46 @@ class ScanlineIShapeRouteTracker:
         self._set_status(enabled=enabled, detail="扫描线自动行驶已开启" if enabled else "扫描线自动行驶已暂停，电机已停止")
         return self.status_dict()
 
-    def update_tuning(self, _payload: dict) -> dict:
-        raise ValueError("扫描线 I 型模式使用固定安全参数；请先在隔离实验验证后再调整")
+    def update_tuning(self, payload: dict) -> dict:
+        """Apply and persist the speeds used only by the scanline I experiment."""
+        changes: dict[str, object] = {}
+        for field, (converter, low, high) in SCANLINE_TUNING_FIELDS.items():
+            if field not in payload:
+                continue
+            try:
+                value = converter(payload[field])
+            except (TypeError, ValueError):
+                raise ValueError(f"{field} 必须是有效数字") from None
+            if not low <= value <= high:
+                raise ValueError(f"{field} 必须在 {low} 到 {high} 之间")
+            changes[field] = value
+        if not changes:
+            raise ValueError("没有可更新的扫描线 I 型参数")
+        with self._tuning_lock:
+            updated = replace(self.config, **changes)
+            if updated.minimum_correction_pwm > updated.maximum_correction_pwm:
+                raise ValueError("最小直线修正 PWM 不能大于最大直线修正 PWM")
+            if updated.tuning_path:
+                updated.tuning_path.parent.mkdir(parents=True, exist_ok=True)
+                values = {field: getattr(updated, field) for field in SCANLINE_TUNING_FIELDS}
+                updated.tuning_path.write_text(json.dumps(values, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            self.config = updated
+        self._set_status(detail="扫描线 I 型直行与掉头参数已实时应用并保存")
+        return self.status_dict()
+
+    @staticmethod
+    def _straight_pair(evidence, frame_width: int, config: ScanlineIRouteConfig) -> tuple[int, int]:
+        offset = None if evidence.line_center_x is None else (evidence.line_center_x - frame_width / 2.0) / max(1.0, frame_width / 2.0)
+        observation = SimpleNamespace(offset=offset, valid_bands=len(evidence.line_centers))
+        motor = StraightMotorConfig(
+            controller_url="in-process",
+            straight_pwm=config.straight_pwm,
+            correction_deadband=config.correction_deadband,
+            correction_gain=config.correction_gain,
+            minimum_correction_pwm=config.minimum_correction_pwm,
+            maximum_correction_pwm=config.maximum_correction_pwm,
+        )
+        return drive_pwm_for_offset(observation, motor)
 
     def _stop_motor(self) -> None:
         if self._motor_active:
@@ -103,7 +183,9 @@ class ScanlineIShapeRouteTracker:
             import numpy as np
 
             analyzer = IShapeScanlineAnalyzer()
-            planner = IShapeTurnaroundPlanner(TurnaroundConfig(pivot_min_seconds=self.config.pivot_min_seconds, pivot_max_seconds=self.config.pivot_max_seconds))
+            with self._tuning_lock:
+                initial_config = self.config
+            planner = IShapeTurnaroundPlanner(TurnaroundConfig(pivot_min_seconds=initial_config.pivot_min_seconds, pivot_max_seconds=initial_config.pivot_max_seconds))
             self._set_status(running=True, state="ready", detail="扫描线 I 型识别运行中；按 M 开启自动行驶")
             interval, last, frame_index = 1.0 / max(1.0, self.config.process_fps), 0.0, 0
             while not self._stop.is_set():
@@ -117,6 +199,8 @@ class ScanlineIShapeRouteTracker:
                     continue
                 result = analyzer.analyze(frame)
                 evidence = result.evidence
+                with self._tuning_lock:
+                    config = self.config
                 motor_text = "PAUSED"
                 if self.gate.enabled():
                     # Only an explicitly M-enabled drive session may advance
@@ -125,12 +209,13 @@ class ScanlineIShapeRouteTracker:
                     if decision.state in (TurnaroundState.FOLLOW_STRAIGHT, TurnaroundState.BAR_MARKED):
                         # A marked bar is deliberately driven through until
                         # the near longitudinal stem disappears.
-                        self.controller.set_direct_drive(self.config.straight_pwm, self.config.straight_pwm)
-                        self._motor_active, motor_text = True, f"STRAIGHT R={self.config.straight_pwm} L={self.config.straight_pwm}"
+                        right_pwm, left_pwm = self._straight_pair(evidence, frame.shape[1], config)
+                        self.controller.set_direct_drive(right_pwm, left_pwm)
+                        self._motor_active, motor_text = True, f"P_STRAIGHT R={right_pwm} L={left_pwm}"
                     elif decision.state is TurnaroundState.PIVOT_180:
                         # Keep the same right-pivot sign convention as the main route mode.
-                        self.controller.set_direct_drive(-self.config.pivot_pwm, self.config.pivot_pwm)
-                        self._motor_active, motor_text = True, f"PIVOT_RIGHT R={-self.config.pivot_pwm} L={self.config.pivot_pwm}"
+                        self.controller.set_direct_drive(-config.pivot_pwm, config.pivot_pwm)
+                        self._motor_active, motor_text = True, f"PIVOT_RIGHT R={-config.pivot_pwm} L={config.pivot_pwm}"
                     else:
                         self._stop_motor()
                         motor_text = "STOP_WAITING_FOR_ENDPOINT_CONFIRMATION"
@@ -141,8 +226,8 @@ class ScanlineIShapeRouteTracker:
                     # the next M press must start a fresh confirmation window.
                     planner = IShapeTurnaroundPlanner(
                         TurnaroundConfig(
-                            pivot_min_seconds=self.config.pivot_min_seconds,
-                            pivot_max_seconds=self.config.pivot_max_seconds,
+                            pivot_min_seconds=config.pivot_min_seconds,
+                            pivot_max_seconds=config.pivot_max_seconds,
                         )
                     )
                     decision = planner.step(evidence, now)
