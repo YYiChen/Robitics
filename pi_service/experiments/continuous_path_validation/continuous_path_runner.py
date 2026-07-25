@@ -131,6 +131,9 @@ def main() -> int:
         ))
         executor.arm()
     capture = cv2.VideoCapture(source_value(args.source))
+    # HTTP/MJPEG sources otherwise tend to retain an old frame in OpenCV's buffer.
+    # Keep only the newest camera frame; this is especially important for a Pi preview.
+    capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     if not capture.isOpened():
         raise RuntimeError(f"cannot open source: {args.source}")
     debug_web = DebugMjpegPublisher(args.debug_web_port) if args.debug_web_port else None

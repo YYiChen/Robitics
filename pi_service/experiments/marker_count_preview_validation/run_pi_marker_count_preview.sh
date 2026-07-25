@@ -46,12 +46,14 @@ curl -fsS "${CONTROLLER_URL}/api/status" >/dev/null 2>&1 || { echo "Camera servi
 mkdir -p "${LOG_DIR}"
 echo "Display-only marker preview: http://<Pi-IP>:${DEBUG_WEB_PORT}"
 echo "Log: ${LOG_FILE}"
+# 10 FPS is sufficient for walking the camera around the route and keeps the
+# browser preview responsive on the Pi. This script remains display-only.
 
 set +e
 python3 -u "${CONTINUOUS_DIR}/continuous_path_runner.py" \
   --source "${CONTROLLER_URL}/video_feed" \
   --config "${TRACK_CONFIG}" \
-  --process-fps 20 \
+  --process-fps 10 \
   --debug-web-port "${DEBUG_WEB_PORT}" \
   --headless \
   2>&1 | tee "${LOG_FILE}"

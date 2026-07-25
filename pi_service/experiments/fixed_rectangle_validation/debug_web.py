@@ -30,20 +30,25 @@ class DebugMjpegPublisher:
                         "<style>body{margin:0;background:#111;color:#ddd;font-family:sans-serif}"
                         "main{max-width:960px;margin:auto;padding:12px}img{width:100%;display:block}p{color:#9ecbff}</style>"
                         "<main><h2>固定顺时针矩形</h2><p>丢线后固定前进、固定右转、重新找线。</p>"
-                        "<img src='/video_feed' alt='fixed rectangle debug stream'></main>"
+                        "<p id='status'>等待第一帧…</p><img src='/video_feed' alt='fixed rectangle debug stream'></main>"
+                        "<script>setInterval(async()=>{try{const s=await fetch('/api/status',{cache:'no-store'}).then(r=>r.json());"
+                        "document.getElementById('status').textContent='实时预览帧 '+(s.preview_sequence??0)+' | 处理时间 '+(s.wall_time??'等待中')}catch(e){}},500)</script>"
                     ).encode("utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html; charset=utf-8")
                     self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
                     self.end_headers()
                     self.wfile.write(body)
                     return
                 if path == "/api/status":
                     with publisher._condition:
-                        body = json.dumps(publisher._status, ensure_ascii=False).encode("utf-8")
+                        status = {**publisher._status, "preview_sequence": publisher._sequence}
+                        body = json.dumps(status, ensure_ascii=False).encode("utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json; charset=utf-8")
                     self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
                     self.end_headers()
                     self.wfile.write(body)
                     return
@@ -68,6 +73,9 @@ class DebugMjpegPublisher:
                         self.wfile.write(f"Content-Length: {len(jpeg)}\r\n\r\n".encode("ascii"))
                         self.wfile.write(jpeg)
                         self.wfile.write(b"\r\n")
+                        # Make each processed frame visible immediately instead of waiting
+                        # for an HTTP buffer to fill on a slow browser connection.
+                        self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError):
                     return
 
