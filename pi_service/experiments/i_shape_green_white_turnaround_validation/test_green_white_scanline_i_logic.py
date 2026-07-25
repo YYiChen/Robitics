@@ -92,6 +92,11 @@ class GreenWhiteScanlineTests(unittest.TestCase):
         self.assertGreater(evidence.red_marker_span or 0, 100)
         self.assertTrue(evidence.junction_detected)
 
+    def test_fast_red_control_keeps_the_green_course_gate(self):
+        layers = self.analyzer.detect_red_bands_fast(green_i_frame(transverse=True, red_band=True))
+        self.assertEqual(len(layers), 1)
+        self.assertGreater(layers[0].span, 100)
+
     def test_perspective_skewed_red_fragments_stay_one_physical_layer(self):
         image = green_i_frame(transverse=True)
         # The two pieces are one physical near band, but fisheye projection

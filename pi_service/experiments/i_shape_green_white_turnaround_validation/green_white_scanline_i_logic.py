@@ -497,6 +497,19 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         self._latest_red_band_layers = tuple(sorted(layers, key=lambda layer: layer.y))
         return (best is not None, None if best is None else best[1], None if best is None else best[2])
 
+    def detect_red_bands_fast(self, frame: np.ndarray, route_center_x: float | None = None) -> tuple[RedBandLayer, ...]:
+        """Return red calibration layers without skeleton or route topology.
+
+        This is the control-path entry point for the fixed two-red-band
+        course.  It still constructs the saturation-derived green course gate
+        before accepting red pixels, so red objects outside the mat cannot
+        trigger a pivot.  The expensive skeleton, junction and white-route
+        analysis remains available to a separate display-only analyzer.
+        """
+        self._make_mask(frame, self.config.blur_kernel, self.config.morphology_kernel)
+        self._detect_red_band_marker(frame, route_center_x)
+        return self._latest_red_band_layers
+
     def analyze(self, frame: np.ndarray):
         result = super().analyze(frame)
         evidence = result.evidence

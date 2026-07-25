@@ -8,9 +8,12 @@ to the Raspberry Pi adapter.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import json
 from pathlib import Path
+from queue import Empty, Full, Queue
 import sys
+from threading import Event, Lock, Thread
 import time
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -102,19 +105,93 @@ def render_complete_overlay(frame, analyzer, component_mask, evidence, red, even
     return output
 
 
+@dataclass(frozen=True)
+class PreviewJob:
+    frame_seq: int
+    captured_at_ms: int
+    frame: np.ndarray
+    event: str
+    red: object
+    pi_centers: list[tuple[int, float, int]]
+    pi_confidence: float
+    control_ms: float
+
+
+def _post_preview(pi_url: str, token: str, job: PreviewJob, annotated: np.ndarray) -> tuple[str, float | None]:
+    ok, preview = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 78])
+    if not ok:
+        return "jpeg_encode_failed", None
+    request = Request(
+        pi_url.rstrip("/") + "/api/vision-adaptor/preview",
+        data=preview.tobytes(),
+        headers={"Content-Type": "image/jpeg", "X-Vision-Adaptor-Token": token, "X-Vision-Frame-Seq": str(job.frame_seq), "X-Vision-Captured-At-Ms": str(job.captured_at_ms)},
+        method="POST",
+    )
+    started = time.monotonic()
+    with urlopen(request, timeout=2) as response:
+        return response.read().decode("utf-8"), round((time.monotonic() - started) * 1000, 1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="PC slow visual analyser; never sends PWM")
     parser.add_argument("--pi-url", default="http://100.80.46.54:5000")
     parser.add_argument("--token", default="")
     parser.add_argument("--log", type=Path, default=HERE.parent / "runtime_logs" / "pc_slow_analyzer.jsonl")
-    parser.add_argument("--status-every", type=int, default=10, help="fetch a compact Pi status after every N accepted PC frames; 0 disables polling")
+    parser.add_argument("--status-every", type=int, default=10, help="fetch a compact Pi status after every N display frames; 0 disables polling")
     parser.add_argument("--max-frames", type=int, default=0, help="process this many frames then exit; 0 means run continuously")
     args = parser.parse_args()
     args.log.parent.mkdir(parents=True, exist_ok=True)
-    analyzer, planner, last_seq, processed = GreenWhiteHybridScanlineAnalyzer(), TwoRedBandPlanner(), -1, 0
-    last_pi_status: dict = {}
-    while True:
+    control_analyzer, planner, last_seq, processed = GreenWhiteHybridScanlineAnalyzer(), TwoRedBandPlanner(), -1, 0
+    preview_queue: Queue[PreviewJob] = Queue(maxsize=1)
+    preview_stop, status_lock = Event(), Lock()
+    latest_pi_status: dict = {}
+
+    def publish_latest(job: PreviewJob) -> None:
         try:
+            preview_queue.put_nowait(job)
+        except Full:
+            try:
+                preview_queue.get_nowait()
+            except Empty:
+                pass
+            preview_queue.put_nowait(job)
+
+    def preview_worker() -> None:
+        nonlocal latest_pi_status
+        analyzer = GreenWhiteHybridScanlineAnalyzer()
+        rendered = 0
+        while not preview_stop.is_set():
+            try:
+                job = preview_queue.get(timeout=.1)
+            except Empty:
+                continue
+            try:
+                started = time.monotonic()
+                analysis = analyzer.analyze(job.frame)
+                evidence = analysis.evidence
+                if args.status_every > 0 and rendered % args.status_every == 0:
+                    status_started = time.monotonic()
+                    status = _pi_runtime_snapshot(args.pi_url)
+                    with status_lock:
+                        latest_pi_status = status | {"status_rtt_ms": round((time.monotonic() - status_started) * 1000, 1)}
+                with status_lock:
+                    pi_status = dict(latest_pi_status)
+                debug = {"frame_seq": job.frame_seq, "capture_age_ms": int(time.time() * 1000) - job.captured_at_ms, "analysis_ms": job.control_ms, "event_rtt_ms": None, "event_response": job.event, "pi_status": pi_status}
+                annotated = render_complete_overlay(job.frame, analyzer, analysis.component_mask, evidence, job.red, job.event, job.pi_centers, job.pi_confidence, debug)
+                response, preview_rtt_ms = _post_preview(args.pi_url, args.token, job, annotated)
+                _append_jsonl(args.log, {"time_ms": int(time.time() * 1000), "kind": "pc_preview_cycle", "frame_seq": job.frame_seq, "event": job.event, "control_red_phase": job.red.phase, "control_ms": job.control_ms, "preview_analysis_ms": round((time.monotonic() - started) * 1000, 1), "preview_rtt_ms": preview_rtt_ms, "preview_response": response, "pi_status": pi_status})
+                print(f"[PC PREVIEW] frame={job.frame_seq} analysis+render={round((time.monotonic() - started) * 1000, 1)}ms upload={preview_rtt_ms}ms")
+                rendered += 1
+            except Exception as exc:
+                _append_jsonl(args.log, {"time_ms": int(time.time() * 1000), "kind": "pc_preview_error", "frame_seq": job.frame_seq, "error": repr(exc)})
+                print(f"[PC PREVIEW] frame={job.frame_seq} error: {exc}", file=sys.stderr)
+
+    worker = Thread(target=preview_worker, daemon=True, name="pc-vision-preview")
+    worker.start()
+    try:
+      while True:
+        try:
+            stage = "frame_fetch"
             loop_started = time.monotonic()
             fetch_started = time.monotonic()
             with urlopen(args.pi_url.rstrip("/") + "/api/vision-adaptor/frame", timeout=2) as response:
@@ -130,18 +207,18 @@ def main() -> None:
             frame = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
             if frame is None:
                 continue
-            analysis_started = time.monotonic()
-            analysis = analyzer.analyze(frame)
-            result = analysis.evidence
-            red = planner.update(analyzer.red_band_layers, frame.shape[1], frame.shape[0])
-            # Red bands own the calibrated I-course timing.  Geometry remains
-            # a conservative warning when red tape is temporarily out of view.
+            stage = "fast_red_control"
+            control_started = time.monotonic()
+            # This is the only visual path allowed to affect the motor.  It
+            # intentionally excludes skeleton/junction/white-route topology.
+            # The fast method still gates red pixels to the green course.
+            layers = control_analyzer.detect_red_bands_fast(frame)
+            red = planner.update(layers, frame.shape[1], frame.shape[0])
             event = red.event
-            if event == "CLEAR_ARM" and (result.junction_detected or result.endpoint_detected):
-                event = "TURN_WINDOW_ARMED"
-            analysis_ms = round((time.monotonic() - analysis_started) * 1000, 1)
+            analysis_ms = round((time.monotonic() - control_started) * 1000, 1)
             body = json.dumps({"token": args.token, "event": event, "frame_seq": frame_seq, "captured_at_ms": captured_at_ms, "event_at_ms": int(time.time() * 1000)}).encode()
             request = Request(args.pi_url.rstrip("/") + "/api/vision-adaptor/event", data=body, headers={"Content-Type": "application/json"}, method="POST")
+            stage = "event_post"
             event_started = time.monotonic()
             try:
                 with urlopen(request, timeout=2) as response:
@@ -152,26 +229,13 @@ def main() -> None:
                 print(f"[PC→PI] frame={frame_seq} event={event} analysis={analysis_ms}ms HTTP {exc.code}: {detail or exc.reason}", file=sys.stderr)
                 continue
             event_rtt_ms = round((time.monotonic() - event_started) * 1000, 1)
-            status_rtt_ms = None
-            if args.status_every > 0 and processed % args.status_every == 0:
-                status_started = time.monotonic()
-                last_pi_status = _pi_runtime_snapshot(args.pi_url)
-                status_rtt_ms = round((time.monotonic() - status_started) * 1000, 1)
-            pi_status = last_pi_status
-            debug = {"frame_seq": frame_seq, "capture_age_ms": int(time.time() * 1000) - captured_at_ms, "analysis_ms": analysis_ms, "event_rtt_ms": event_rtt_ms, "event_response": accepted, "pi_status": pi_status}
-            annotated = render_complete_overlay(frame, analyzer, analysis.component_mask, result, red, event, pi_centers, pi_confidence, debug)
-            ok, preview = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 78])
-            if ok:
-                preview_request = Request(args.pi_url.rstrip("/") + "/api/vision-adaptor/preview", data=preview.tobytes(), headers={"Content-Type": "image/jpeg", "X-Vision-Adaptor-Token": args.token, "X-Vision-Frame-Seq": str(frame_seq), "X-Vision-Captured-At-Ms": str(captured_at_ms)}, method="POST")
-                preview_started = time.monotonic()
-                with urlopen(preview_request, timeout=2) as response:
-                    preview_accepted = response.read().decode()
-                preview_rtt_ms = round((time.monotonic() - preview_started) * 1000, 1)
-            else:
-                preview_accepted, preview_rtt_ms = "jpeg_encode_failed", None
-            record = {"time_ms": int(time.time() * 1000), "kind": "pc_to_pi_cycle", "frame_seq": frame_seq, "captured_at_ms": captured_at_ms, "capture_age_ms": debug["capture_age_ms"], "total_cycle_ms": round((time.monotonic() - loop_started) * 1000, 1), "frame_fetch_ms": fetch_ms, "analysis_ms": analysis_ms, "event_rtt_ms": event_rtt_ms, "status_rtt_ms": status_rtt_ms, "preview_rtt_ms": preview_rtt_ms, "event": event, "red_phase": red.phase, "red_layers": red.layer_count, "turn_y": red.turn_y, "turn_bottom_y": red.turn_bottom_y, "pc_confidence": result.confidence, "pc_line_center_x": result.line_center_x, "pc_endpoint_y": result.endpoint_y, "pc_junction_y": result.junction_y, "pi_fast_confidence": pi_confidence, "pi_fast_centers": pi_centers, "pi_event_response": accepted, "pi_status": pi_status, "preview_response": preview_accepted}
+            stage = "preview_enqueue"
+            publish_latest(PreviewJob(frame_seq, captured_at_ms, frame.copy(), event, red, pi_centers, pi_confidence, analysis_ms))
+            with status_lock:
+                pi_status = dict(latest_pi_status)
+            record = {"time_ms": int(time.time() * 1000), "kind": "pc_control_cycle", "frame_seq": frame_seq, "captured_at_ms": captured_at_ms, "capture_age_ms": int(time.time() * 1000) - captured_at_ms, "total_cycle_ms": round((time.monotonic() - loop_started) * 1000, 1), "frame_fetch_ms": fetch_ms, "control_red_ms": analysis_ms, "event_rtt_ms": event_rtt_ms, "event": event, "red_phase": red.phase, "red_layers": red.layer_count, "turn_y": red.turn_y, "turn_bottom_y": red.turn_bottom_y, "red_layer_views": [{"y": layer.y, "bottom_y": layer.bottom_y, "span": layer.span, "fragments": layer.fragment_count} for layer in layers], "pi_fast_confidence": pi_confidence, "pi_fast_centers": pi_centers, "pi_event_response": accepted, "last_pi_status": pi_status}
             _append_jsonl(args.log, record)
-            print(f"[PC→PI] frame={frame_seq} fetch={fetch_ms}ms analysis={analysis_ms}ms event={event_rtt_ms}ms status={status_rtt_ms}ms preview={preview_rtt_ms}ms total={record['total_cycle_ms']}ms | event={event} PI={pi_status.get('state')} output={pi_status.get('motor_output')}")
+            print(f"[PC CONTROL→PI] frame={frame_seq} fetch={fetch_ms}ms red={analysis_ms}ms event={event_rtt_ms}ms total={record['total_cycle_ms']}ms | event={event}")
             processed += 1
             if args.max_frames and processed >= args.max_frames:
                 return
@@ -185,8 +249,12 @@ def main() -> None:
             print(f"pc adaptor retry: HTTP {exc.code}: {detail or exc.reason}", file=sys.stderr)
             time.sleep(.3)
         except Exception as exc:
+            _append_jsonl(args.log, {"time_ms": int(time.time() * 1000), "kind": "pc_control_error", "stage": locals().get("stage", "unknown"), "frame_seq": locals().get("frame_seq"), "error_type": type(exc).__name__, "error": str(exc)})
             print(f"pc adaptor retry: {exc}", file=sys.stderr)
             time.sleep(.3)
+    finally:
+        preview_stop.set()
+        worker.join(timeout=1.0)
 
 
 if __name__ == "__main__":
