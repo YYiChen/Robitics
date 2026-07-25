@@ -1,8 +1,8 @@
 """Cheap Pi-side near-field white-tape follower.
 
-This deliberately examines only three rows near the camera bottom.  It is a
-fallback/heartbeat controller, not a replacement for the PC's expensive
-green-field, red-marker, skeleton, and junction analysis.
+This deliberately examines only three rows near the camera bottom.  It is the
+reusable low-latency white-line primitive for current and archived adaptors;
+terminal and turning policies belong to their own experiment modules.
 """
 from __future__ import annotations
 
