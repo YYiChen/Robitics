@@ -119,8 +119,14 @@ class EndLineTurnAdaptorRouteTracker:
         return self.status_dict()
 
     def request_manual_turn(self, command: str) -> dict:
-        """M-gated, user-triggered 90/180 turn with red-line final alignment."""
-        commands = {"LEFT_90": ("LEFT", 90, self._turn_90), "RIGHT_90": ("RIGHT", 90, self._turn_90), "LEFT_180": ("LEFT", 180, self._turn_180), "RIGHT_180": ("RIGHT", 180, self._turn_180)}
+        """M-gated turn; profiles are refreshed from disk for every key press."""
+        # The JSON files are the source of truth.  Reload here as well as on
+        # web save so a profile copied/edited on the Pi is effective on the
+        # very next Q/E/U/I press without restarting the web process.
+        with self._tuning_lock:
+            self._turn_90 = load_turn_profile(TURN_90_PATH, self._turn_90)
+            self._turn_180 = load_turn_profile(TURN_180_PATH, self._turn_180)
+            commands = {"LEFT_90": ("LEFT", 90, self._turn_90), "RIGHT_90": ("RIGHT", 90, self._turn_90), "LEFT_180": ("LEFT", 180, self._turn_180), "RIGHT_180": ("RIGHT", 180, self._turn_180)}
         try:
             side, degrees, profile = commands[str(command).upper()]
         except KeyError as exc:

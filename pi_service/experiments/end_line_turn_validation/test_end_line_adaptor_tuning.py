@@ -4,13 +4,16 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 ROBOT_WEB = ROOT / "robot_web"
 if str(ROBOT_WEB) not in sys.path:
     sys.path.insert(0, str(ROBOT_WEB))
 
+import end_line_turn_adaptor as adaptor_module
 from end_line_turn_adaptor import EndLineTurnAdaptorRouteTracker
+from turn_profiles import TurnProfile, save_turn_profile
 
 
 class _Gate:
@@ -41,8 +44,14 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
     def test_manual_turn_is_m_gated_and_uses_90_profile(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "tuning.json"
-            tracker = EndLineTurnAdaptorRouteTracker(None, None, None, _Gate(True), tuning_path=path)
-            status = tracker.request_manual_turn("LEFT_90")
+            turn_90, turn_180 = Path(directory) / "turn_90.json", Path(directory) / "turn_180.json"
+            save_turn_profile(turn_90, TurnProfile(200, 2.5))
+            save_turn_profile(turn_180, TurnProfile(200, 5.0))
+            with patch.object(adaptor_module, "TURN_90_PATH", turn_90), patch.object(adaptor_module, "TURN_180_PATH", turn_180):
+                tracker = EndLineTurnAdaptorRouteTracker(None, None, None, _Gate(True), tuning_path=path)
+                save_turn_profile(turn_90, TurnProfile(137, 1.7))
+                status = tracker.request_manual_turn("LEFT_90")
             self.assertEqual(status["state"], "MANUAL_PRESET")
             self.assertEqual(tracker._pending_turn_side, "LEFT")
             self.assertEqual(tracker._manual_degrees, 90)
+            self.assertEqual(tracker._manual_profile, TurnProfile(137, 1.7))
