@@ -125,11 +125,11 @@ class FourEndpointValidationRouteTracker(GreenWhiteScanlineIShapeRouteTracker):
         output = super()._draw(cv2, frame, result, decision, motor_text)
         target = "—" if decision.active_target is None else decision.active_target.value
         pending = "—" if decision.pending_heading is None else decision.pending_heading.value
-        cv2.rectangle(output, (10, 232), (940, 252), (20, 20, 20), cv2.FILLED)
+        cv2.rectangle(output, (10, 188), (940, 208), (20, 20, 20), cv2.FILLED)
         cv2.putText(
             output,
             f"FOUR-ENDPOINT: target [{target}] heading={decision.heading.value} next={pending}; turn only after bar passed, M3/M4 disabled.",
-            (18, 248), cv2.FONT_HERSHEY_SIMPLEX, .38, (0, 220, 255), 1,
+            (18, 204), cv2.FONT_HERSHEY_SIMPLEX, .38, (0, 220, 255), 1,
         )
         return output
 
