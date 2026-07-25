@@ -73,6 +73,14 @@ class GreenWhiteScanlineTests(unittest.TestCase):
         self.assertTrue(evidence.valid_line)
         self.assertFalse(evidence.line_lost)
 
+    def test_side_entering_tape_on_the_green_mat_is_not_clipped_by_a_centre_roi(self):
+        image = np.full((480, 640, 3), (55, 150, 45), dtype=np.uint8)
+        # This represents the side-entry view during a pivot.  The white tape
+        # remains on the mat but is well left of image centre.
+        cv2.line(image, (110, 479), (215, 80), (245, 245, 245), 24)
+        result = self.analyzer.analyze(image)
+        self.assertGreater(int(np.count_nonzero(result.component_mask)), 0)
+
     def test_confirmed_white_bar_brakes_when_near_red_band_exits_bottom(self):
         planner = IShapeTurnaroundPlanner(
             TurnaroundConfig(

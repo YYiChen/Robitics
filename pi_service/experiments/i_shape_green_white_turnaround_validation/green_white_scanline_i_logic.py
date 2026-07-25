@@ -28,6 +28,13 @@ class GreenWhiteScanlineConfig(HybridScanlineConfig):
     minimum_green_roi_ratio: float = 0.18
     roi_top_ratio: float = 0.38
     green_neighbour_kernel: int = 31
+    # The usable course is the large green connected region near the vehicle,
+    # not a fixed centre trapezoid.  This keeps side-entering turn tape while
+    # excluding the room floor outside the mat.
+    green_field_close_kernel: int = 25
+    green_field_min_area_ratio: float = 0.025
+    green_field_near_anchor_ratio: float = 0.72
+    green_field_white_margin_pixels: int = 36
     # Do not make the HSV mask stricter.  Instead, after its permissive
     # candidate stage, require a route backbone to have green floor on both
     # sides of most of its locally measured widths.
@@ -58,10 +65,44 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         super().__init__(config)
         self.config = config
         self._latest_green_mask: np.ndarray | None = None
+        self._latest_green_field: np.ndarray | None = None
 
     @staticmethod
     def _odd(value: int) -> int:
         return value if value % 2 else value + 1
+
+    def _course_field_mask(self, green: np.ndarray) -> np.ndarray:
+        """Return the green mat component anchored in the near camera field.
+
+        White tape cuts small holes through the green fabric, so close those
+        first.  Selecting one large lower connected component lets a turning
+        line enter from either side of the image; unlike a fixed ROI, no
+        centre position is assumed.
+        """
+        config = self.config
+        close_size = self._odd(max(3, config.green_field_close_kernel))
+        closed = cv2.morphologyEx(
+            green,
+            cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_size, close_size)),
+        )
+        count, labels, stats, _centroids = cv2.connectedComponentsWithStats(closed, connectivity=8)
+        height, width = green.shape
+        near_start = int(round(height * config.green_field_near_anchor_ratio))
+        near_labels = labels[near_start:, :]
+        minimum_area = int(round(width * height * config.green_field_min_area_ratio))
+        best_label, best_score = 0, float("-inf")
+        for label in range(1, count):
+            _x, _y, _component_width, _component_height, area = map(int, stats[label])
+            near_area = int(np.count_nonzero(near_labels == label))
+            if area < minimum_area or near_area == 0:
+                continue
+            score = near_area * 4.0 + area
+            if score > best_score:
+                best_label, best_score = label, score
+        if best_label == 0:
+            return np.zeros_like(green)
+        return np.where(labels == best_label, 255, 0).astype(np.uint8)
 
     def _make_mask(self, frame: np.ndarray, blur_kernel: int, morphology_kernel: int) -> np.ndarray:
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -77,19 +118,22 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
             np.array((config.green_hue_max, 255, 255), dtype=np.uint8),
         )
         # `_select_route_component` runs immediately after `_make_mask` in
-        # the inherited analyzer.  Retain this frame's green evidence for its
-        # geometry check; the white candidate threshold itself stays broad.
+        # the inherited analyzer.  Retain raw green for side probes, and its
+        # connected course field for the spatial candidate gate.
         self._latest_green_mask = green
-        height = frame.shape[0]
-        roi_start = min(height - 1, max(0, int(round(height * config.roi_top_ratio))))
-        green_roi_ratio = float(np.count_nonzero(green[roi_start:])) / max(1, green[roi_start:].size)
-        if green_roi_ratio < config.minimum_green_roi_ratio:
+        green_field = self._course_field_mask(green)
+        self._latest_green_field = green_field
+        if not np.any(green_field):
             return np.zeros_like(white)
-        # White tape replaces the green beneath it.  Keep white pixels only
-        # when they are immediately surrounded by the expected green floor.
-        neighbour_size = self._odd(max(3, config.green_neighbour_kernel))
-        neighbour = cv2.dilate(green, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (neighbour_size, neighbour_size)))
-        mask = cv2.bitwise_and(white, neighbour)
+        # Tape replaces the green beneath it.  Permit it inside the recovered
+        # mat field or within a tape-width margin of it, regardless of whether
+        # it appears left, right, or centre during a turn.
+        margin = self._odd(max(3, config.green_field_white_margin_pixels * 2 + 1))
+        course_allowed = cv2.dilate(
+            green_field,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (margin, margin)),
+        )
+        mask = cv2.bitwise_and(white, course_allowed)
         cleanup_size = self._odd(max(3, morphology_kernel))
         cleanup = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (cleanup_size, cleanup_size))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, cleanup)
