@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sys
@@ -49,6 +50,7 @@ class ScanlineIRouteConfig:
     maximum_correction_pwm: int = 60
     pivot_min_seconds: float = 2.5
     pivot_max_seconds: float = 5.0
+    bar_mark_timeout_seconds: float = 4.0
     early_junction_trigger_y_ratio: float = 0.75
     early_line_lost_confirm_frames: int = 1
     tuning_path: Path | None = None
@@ -64,6 +66,7 @@ SCANLINE_TUNING_FIELDS = {
     "maximum_correction_pwm": (int, 0, 255),
     "pivot_min_seconds": (float, 0.0, 20.0),
     "pivot_max_seconds": (float, 0.1, 30.0),
+    "bar_mark_timeout_seconds": (float, 0.2, 15.0),
     "early_junction_trigger_y_ratio": (float, 0.35, 0.98),
     "early_line_lost_confirm_frames": (int, 1, 10),
 }
@@ -101,6 +104,8 @@ class ScanlineIShapeRouteTracker:
         self._lock = threading.Lock()
         self._tuning_lock = threading.RLock()
         self._motor_active = False
+        self._run_log = None
+        self._last_logged_lookahead: tuple[float | None, int | None] | None = None
         self._status = {"available": True, "running": False, "enabled": False, "mode": self.route_mode, "state": "starting", "detail": "正在启动扫描线 I 型识别", "frame": 0, "confidence": None}
 
     def start(self) -> None:
@@ -193,9 +198,42 @@ class ScanlineIShapeRouteTracker:
         return TurnaroundConfig(
             pivot_min_seconds=config.pivot_min_seconds,
             pivot_max_seconds=config.pivot_max_seconds,
+            bar_mark_timeout_seconds=config.bar_mark_timeout_seconds,
             early_junction_trigger_y_ratio=config.early_junction_trigger_y_ratio,
             early_line_lost_confirm_frames=config.early_line_lost_confirm_frames,
         )
+
+    def _open_run_log(self, config: ScanlineIRouteConfig) -> None:
+        if not config.tuning_path:
+            return
+        log_dir = config.tuning_path.parent / "runtime_logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        self._run_log = (log_dir / f"{self.route_mode}_{stamp}.jsonl").open("a", encoding="utf-8")
+
+    def _write_run_log(self, evidence, decision, frame_index: int, now: float, motor_text: str, commanded: tuple[int, int] | None) -> None:
+        if self._run_log is None:
+            return
+        lookahead = (evidence.lookahead_x, evidence.lookahead_y)
+        changed = self._last_logged_lookahead is not None and lookahead != self._last_logged_lookahead
+        self._last_logged_lookahead = lookahead
+        controller_status = self.controller.status() if hasattr(self.controller, "status") else {}
+        record = {
+            "time_utc": datetime.now(timezone.utc).isoformat(), "monotonic_seconds": now, "frame": frame_index,
+            "confidence": evidence.confidence, "state": decision.state.value, "reason": decision.reason,
+            "endpoint": {"detected": evidence.endpoint_detected, "y": evidence.endpoint_y, "width": evidence.endpoint_width},
+            "junction": {"detected": evidence.junction_detected, "y": evidence.junction_y, "arms": evidence.junction_arm_count},
+            "commanded_pwm": None if commanded is None else {"right": commanded[0], "left": commanded[1]},
+            "motor_text": motor_text, "motor_output": controller_status.get("motor_output"),
+            "route_position_changed": changed, "lookahead": {"x": evidence.lookahead_x, "y": evidence.lookahead_y},
+        }
+        self._run_log.write(json.dumps(record, ensure_ascii=False) + "\n")
+        self._run_log.flush()
+
+    def _close_run_log(self) -> None:
+        if self._run_log is not None:
+            self._run_log.close()
+            self._run_log = None
 
     def _create_analyzer(self, config: ScanlineIRouteConfig):
         return HybridScanlineAnalyzer() if config.use_hybrid else IShapeScanlineAnalyzer()
@@ -240,6 +278,7 @@ class ScanlineIShapeRouteTracker:
             with self._tuning_lock:
                 initial_config = self.config
             analyzer = self._create_analyzer(initial_config)
+            self._open_run_log(initial_config)
             self._set_status(running=True, state="ready", **self._ready_status(initial_config))
             planner = IShapeTurnaroundPlanner(self._planner_config(initial_config))
             interval, last, frame_index = 1.0 / max(1.0, self.config.process_fps), 0.0, 0
@@ -257,6 +296,7 @@ class ScanlineIShapeRouteTracker:
                 with self._tuning_lock:
                     config = self.config
                 motor_text = "PAUSED"
+                commanded: tuple[int, int] | None = None
                 if self.gate.enabled():
                     # Only an explicitly M-enabled drive session may advance
                     # endpoint confirmation or pivot timing.
@@ -267,10 +307,12 @@ class ScanlineIShapeRouteTracker:
                         # the stem-loss confirmation authorizes braking.
                         right_pwm, left_pwm = self._straight_pair(evidence, frame.shape[1], config)
                         self.controller.set_direct_drive(right_pwm, left_pwm)
+                        commanded = (right_pwm, left_pwm)
                         self._motor_active, motor_text = True, f"P_STRAIGHT R={right_pwm} L={left_pwm}"
                     elif decision.state is TurnaroundState.PIVOT_180:
                         # Keep the same right-pivot sign convention as the main route mode.
                         self.controller.set_direct_drive(-config.pivot_pwm, config.pivot_pwm)
+                        commanded = (-config.pivot_pwm, config.pivot_pwm)
                         self._motor_active, motor_text = True, f"PIVOT_RIGHT R={-config.pivot_pwm} L={config.pivot_pwm}"
                     else:
                         self._stop_motor()
@@ -286,10 +328,13 @@ class ScanlineIShapeRouteTracker:
                 ok, encoded = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 if ok:
                     self.publisher.publish(encoded.tobytes())
+                if self.gate.enabled() or frame_index % max(1, int(config.process_fps)) == 0:
+                    self._write_run_log(evidence, decision, frame_index, now, motor_text, commanded)
                 self._set_status(state=decision.state.value, detail=decision.reason, frame=frame_index, confidence=evidence.confidence, endpoint_detected=evidence.endpoint_detected, endpoint_y=evidence.endpoint_y, endpoint_width=evidence.endpoint_width, junction_detected=evidence.junction_detected, junction_y=evidence.junction_y, junction_arm_count=evidence.junction_arm_count, lookahead_x=evidence.lookahead_x, lookahead_y=evidence.lookahead_y, path_length_px=evidence.path_length_px, motor=motor_text)
                 frame_index += 1
         except Exception as exc:
             self._set_status(running=False, state="error", detail=str(exc))
         finally:
             self._stop_motor()
+            self._close_run_log()
             self._set_status(running=False)

@@ -33,7 +33,7 @@ def t_junction_frame(stem_top=80, bar_y=200):
     return image
 
 
-def planner_evidence(*, endpoint=False, lost=False, junction_y=None, height=480):
+def planner_evidence(*, endpoint=False, endpoint_y=360, lost=False, junction_y=None, height=480):
     """Small deterministic evidence fixture for planner state-machine tests."""
     return ScanlineEvidence(
         confidence=0.9 if not lost else 0.0,
@@ -42,7 +42,7 @@ def planner_evidence(*, endpoint=False, lost=False, junction_y=None, height=480)
         line_center_x=320.0 if not lost else None,
         line_centers=((430, 320.0, 20),) if not lost else (),
         endpoint_detected=endpoint,
-        endpoint_y=360 if endpoint else None,
+        endpoint_y=endpoint_y if endpoint else None,
         endpoint_width=400 if endpoint else None,
         normal_tape_width=20.0,
         junction_detected=junction_y is not None,
@@ -248,7 +248,7 @@ class HybridScanlineAnalyzerTests(unittest.TestCase):
             TurnaroundConfig(junction_confirm_frames=1, endpoint_confirm_frames=2)
         )
         self.assertIs(planner.step(planner_evidence(junction_y=220), 0.0).state, TurnaroundState.EARLY_BAR_PREDICTED)
-        self.assertIs(planner.step(planner_evidence(endpoint=True), 0.1).state, TurnaroundState.BAR_MARKED)
+        self.assertIs(planner.step(planner_evidence(endpoint=True, endpoint_y=300), 0.1).state, TurnaroundState.BAR_MARKED)
 
     def test_one_endpoint_frame_without_early_prediction_is_not_enough(self):
         """The normal path retains its two-frame endpoint safety check."""
@@ -261,7 +261,7 @@ class HybridScanlineAnalyzerTests(unittest.TestCase):
             TurnaroundConfig(junction_confirm_frames=1, endpoint_confirm_frames=2, line_lost_confirm_frames=3, early_junction_trigger_y_ratio=0.75, early_line_lost_confirm_frames=1)
         )
         self.assertIs(planner.step(planner_evidence(junction_y=390), 0.0).state, TurnaroundState.EARLY_BAR_PREDICTED)
-        self.assertIs(planner.step(planner_evidence(endpoint=True), 0.1).state, TurnaroundState.BAR_MARKED)
+        self.assertIs(planner.step(planner_evidence(endpoint=True, endpoint_y=300), 0.1).state, TurnaroundState.BAR_MARKED)
         self.assertIs(planner.step(planner_evidence(lost=True), 0.2).state, TurnaroundState.BRAKE_BEFORE_PIVOT)
 
     def test_far_latched_junction_keeps_normal_lost_frame_confirmation(self):
@@ -270,8 +270,17 @@ class HybridScanlineAnalyzerTests(unittest.TestCase):
             TurnaroundConfig(junction_confirm_frames=1, endpoint_confirm_frames=2, line_lost_confirm_frames=3, early_junction_trigger_y_ratio=0.75, early_line_lost_confirm_frames=1)
         )
         self.assertIs(planner.step(planner_evidence(junction_y=200), 0.0).state, TurnaroundState.EARLY_BAR_PREDICTED)
-        self.assertIs(planner.step(planner_evidence(endpoint=True), 0.1).state, TurnaroundState.BAR_MARKED)
+        self.assertIs(planner.step(planner_evidence(endpoint=True, endpoint_y=300), 0.1).state, TurnaroundState.BAR_MARKED)
         self.assertIs(planner.step(planner_evidence(lost=True), 0.2).state, TurnaroundState.BAR_MARKED)
+
+    def test_near_endpoint_authorizes_fast_lost_frame_when_junction_is_far(self):
+        """A near confirmed bar must not lose fast authorization to its higher junction."""
+        planner = IShapeTurnaroundPlanner(
+            TurnaroundConfig(junction_confirm_frames=1, endpoint_confirm_frames=2, line_lost_confirm_frames=3, early_junction_trigger_y_ratio=0.75, early_line_lost_confirm_frames=1)
+        )
+        self.assertIs(planner.step(planner_evidence(junction_y=324), 0.0).state, TurnaroundState.EARLY_BAR_PREDICTED)
+        self.assertIs(planner.step(planner_evidence(endpoint=True, endpoint_y=363), 0.1).state, TurnaroundState.BAR_MARKED)
+        self.assertIs(planner.step(planner_evidence(lost=True), 0.2).state, TurnaroundState.BRAKE_BEFORE_PIVOT)
 
     def test_legacy_analyzer_produces_compatible_evidence(self):
         """Legacy evidence should work with the extended planner (no hybrid fields)."""

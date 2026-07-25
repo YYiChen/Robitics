@@ -75,7 +75,7 @@ class TurnaroundConfig:
     line_lost_confirm_frames: int = 3
     reacquire_confirm_frames: int = 3
     minimum_confidence: float = 0.55
-    bar_mark_timeout_seconds: float = 2.0
+    bar_mark_timeout_seconds: float = 4.0
     brake_seconds: float = 0.15
     pivot_min_seconds: float = 2.5
     pivot_max_seconds: float = 5.0
@@ -753,6 +753,7 @@ class IShapeTurnaroundPlanner:
         # can disappear while the vehicle is passing under the transverse bar;
         # the fast stem-loss decision must not lose that prior authorization.
         self._latched_junction_y: int | None = None
+        self._latched_endpoint_y: int | None = None
         self._latched_frame_height = 0
 
     def _latch_junction(self, evidence: ScanlineEvidence) -> None:
@@ -760,16 +761,23 @@ class IShapeTurnaroundPlanner:
             self._latched_junction_y = evidence.junction_y
             self._latched_frame_height = evidence.frame_height
 
+    def _latch_endpoint(self, evidence: ScanlineEvidence) -> None:
+        if evidence.endpoint_detected and evidence.endpoint_y is not None and evidence.frame_height > 0:
+            self._latched_endpoint_y = evidence.endpoint_y
+            self._latched_frame_height = evidence.frame_height
+
     def _fast_stem_loss_authorized(self) -> bool:
         return (
-            self._latched_junction_y is not None
+            (self._latched_junction_y is not None or self._latched_endpoint_y is not None)
             and self._latched_frame_height > 0
-            and self._latched_junction_y >= self._latched_frame_height * self.config.early_junction_trigger_y_ratio
+            and max(value for value in (self._latched_junction_y, self._latched_endpoint_y) if value is not None)
+            >= self._latched_frame_height * self.config.early_junction_trigger_y_ratio
         )
 
     def _clear_early_prediction(self) -> None:
         self._junction_frames = 0
         self._latched_junction_y = None
+        self._latched_endpoint_y = None
         self._latched_frame_height = 0
 
     def step(self, evidence: ScanlineEvidence, now: float) -> TurnaroundDecision:
@@ -826,6 +834,7 @@ class IShapeTurnaroundPlanner:
         # ================================================================
         if self.state is TurnaroundState.EARLY_BAR_PREDICTED:
             self._latch_junction(evidence)
+            self._latch_endpoint(evidence)
             # Confirm: if the bar arrives at bar_rows while we're waiting.
             self._endpoint_frames = (
                 self._endpoint_frames + 1
