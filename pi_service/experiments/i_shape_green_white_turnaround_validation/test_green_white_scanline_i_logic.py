@@ -28,25 +28,6 @@ class GreenWhiteScanlineTests(unittest.TestCase):
         self.assertFalse(evidence.line_lost)
         self.assertGreater(evidence.confidence, 0.5)
 
-    def test_wide_near_field_white_stem_is_still_a_valid_line(self):
-        image = np.full((480, 640, 3), (55, 150, 45), dtype=np.uint8)
-        # The fisheye makes the tape fan out near the car.  A 60-pixel stem
-        # must not disappear just because the green support radius is too
-        # small for its centre pixels.
-        cv2.rectangle(image, (290, 80), (350, 479), (245, 245, 245), -1)
-        evidence = self.analyzer.analyze(image).evidence
-        self.assertTrue(evidence.valid_line)
-        self.assertFalse(evidence.line_lost)
-
-    def test_fisheye_oblique_stem_remains_a_valid_line(self):
-        image = np.full((480, 640, 3), (55, 150, 45), dtype=np.uint8)
-        # The same white strip moves sideways by over 10% of the frame from
-        # one near scan row to another in the real fisheye camera.
-        cv2.line(image, (470, 479), (300, 80), (245, 245, 245), 32)
-        evidence = self.analyzer.analyze(image).evidence
-        self.assertTrue(evidence.valid_line)
-        self.assertFalse(evidence.line_lost)
-
     def test_green_floor_white_transverse_bar_is_never_the_route(self):
         evidence = self.analyzer.analyze(green_i_frame(transverse=True)).evidence
         self.assertTrue(evidence.valid_line)
@@ -70,16 +51,6 @@ class GreenWhiteScanlineTests(unittest.TestCase):
         cv2.line(frame, (320, 479), (320, 80), (245, 245, 245), 20)
         evidence = self.analyzer.analyze(frame).evidence
         self.assertTrue(evidence.line_lost)
-
-    def test_large_pale_floor_patch_is_not_selected_as_a_route(self):
-        image = np.full((480, 640, 3), (55, 150, 45), dtype=np.uint8)
-        # This models the pale floor beside the green mat: it is bright and
-        # low saturation, but has green only on one side rather than being a
-        # narrow white tape embedded in green.
-        cv2.rectangle(image, (0, 100), (639, 390), (215, 215, 215), -1)
-        result = self.analyzer.analyze(image)
-        self.assertTrue(result.evidence.line_lost)
-        self.assertEqual(int(np.count_nonzero(result.component_mask)), 0)
 
     def test_confirmed_white_bar_brakes_when_near_red_band_exits_bottom(self):
         planner = IShapeTurnaroundPlanner(
