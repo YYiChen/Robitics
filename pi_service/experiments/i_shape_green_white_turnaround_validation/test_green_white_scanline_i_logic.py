@@ -62,6 +62,17 @@ class GreenWhiteScanlineTests(unittest.TestCase):
         self.assertTrue(result.evidence.line_lost)
         self.assertEqual(int(np.count_nonzero(result.component_mask)), 0)
 
+    def test_tape_can_continue_out_of_green_roi_in_far_field(self):
+        image = np.full((480, 640, 3), (55, 150, 45), dtype=np.uint8)
+        # Real camera view: the far tip of the same tape points past the mat
+        # into the room.  Only the near course section must have green on both
+        # sides; this remains a valid route.
+        image[:170, :] = (215, 215, 215)
+        cv2.line(image, (320, 479), (320, 60), (245, 245, 245), 24)
+        evidence = self.analyzer.analyze(image).evidence
+        self.assertTrue(evidence.valid_line)
+        self.assertFalse(evidence.line_lost)
+
     def test_confirmed_white_bar_brakes_when_near_red_band_exits_bottom(self):
         planner = IShapeTurnaroundPlanner(
             TurnaroundConfig(

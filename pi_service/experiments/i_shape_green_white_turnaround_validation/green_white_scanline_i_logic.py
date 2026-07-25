@@ -126,6 +126,7 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         checked = 0
         wide_samples = 0
         span = max(1, min(6, len(path) // 8))
+        support_roi_start = int(round(component.shape[0] * self.config.roi_top_ratio))
         for index in indices:
             before_x, before_y = path[max(0, index - span)]
             after_x, after_y = path[min(len(path) - 1, index + span)]
@@ -135,6 +136,11 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
                 continue
             normal_x, normal_y = -tangent_y / norm, tangent_x / norm
             x, y = path[index]
+            # Only the course region below the configured ROI must be green
+            # on both sides.  The far end of a real line can legitimately
+            # leave the mat and point into the room, as in the live camera.
+            if y < support_roi_start:
+                continue
             probe = max(
                 self.config.green_backbone_side_margin_pixels,
                 int(round(float(distance[y, x]))) + self.config.green_backbone_side_margin_pixels,
