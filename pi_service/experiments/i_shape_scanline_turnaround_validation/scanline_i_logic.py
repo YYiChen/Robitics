@@ -50,6 +50,8 @@ class ScanlineResult:
 
 class TurnaroundState(str, Enum):
     FOLLOW_STRAIGHT = "FOLLOW_STRAIGHT"
+    BAR_MARKED = "BAR_MARKED"
+    BRAKE_BEFORE_PIVOT = "BRAKE_BEFORE_PIVOT"
     PIVOT_180 = "PIVOT_180"
     STOP = "STOP"
 
@@ -57,8 +59,11 @@ class TurnaroundState(str, Enum):
 @dataclass(frozen=True)
 class TurnaroundConfig:
     endpoint_confirm_frames: int = 2
+    line_lost_confirm_frames: int = 3
     reacquire_confirm_frames: int = 3
     minimum_confidence: float = 0.55
+    bar_mark_timeout_seconds: float = 2.0
+    brake_seconds: float = 0.15
     pivot_min_seconds: float = 2.5
     pivot_max_seconds: float = 5.0
 
@@ -68,6 +73,7 @@ class TurnaroundDecision:
     state: TurnaroundState
     reason: str
     endpoint_frames: int
+    line_lost_frames: int
     reacquire_frames: int
     pivot_elapsed_seconds: float | None
 
@@ -148,7 +154,10 @@ class IShapeTurnaroundPlanner:
         self.config = config
         self.state = TurnaroundState.FOLLOW_STRAIGHT
         self._endpoint_frames = 0
+        self._line_lost_frames = 0
         self._reacquire_frames = 0
+        self._bar_marked_at: float | None = None
+        self._brake_started_at: float | None = None
         self._pivot_started_at: float | None = None
 
     def step(self, evidence: ScanlineEvidence, now: float) -> TurnaroundDecision:
@@ -156,20 +165,39 @@ class IShapeTurnaroundPlanner:
         if self.state is TurnaroundState.FOLLOW_STRAIGHT:
             self._endpoint_frames = self._endpoint_frames + 1 if usable and evidence.endpoint_detected else 0
             if self._endpoint_frames >= self.config.endpoint_confirm_frames:
-                self.state, self._pivot_started_at, self._reacquire_frames = TurnaroundState.PIVOT_180, now, 0
-                return TurnaroundDecision(self.state, "lower_transverse_bar_confirmed", self._endpoint_frames, 0, 0.0)
-            return TurnaroundDecision(self.state, "following_near_anchored_longitudinal_line", self._endpoint_frames, 0, None)
+                self.state, self._bar_marked_at, self._line_lost_frames = TurnaroundState.BAR_MARKED, now, 0
+                return TurnaroundDecision(self.state, "lower_transverse_bar_marked_follow_until_stem_lost", self._endpoint_frames, 0, 0, None)
+            return TurnaroundDecision(self.state, "following_near_anchored_longitudinal_line", self._endpoint_frames, 0, 0, None)
+        if self.state is TurnaroundState.BAR_MARKED:
+            marked_at = self._bar_marked_at if self._bar_marked_at is not None else now
+            if now - marked_at >= self.config.bar_mark_timeout_seconds:
+                self.state, self._endpoint_frames, self._line_lost_frames = TurnaroundState.FOLLOW_STRAIGHT, 0, 0
+                return TurnaroundDecision(self.state, "bar_mark_timeout_returning_to_follow", 0, 0, 0, None)
+            # A missing near longitudinal stem means the car has passed the
+            # bar.  Do not require the bar itself to remain visible: after it
+            # passes the bottom anchor, it is intentionally absent too.
+            self._line_lost_frames = self._line_lost_frames + 1 if evidence.line_lost else 0
+            if self._line_lost_frames >= self.config.line_lost_confirm_frames:
+                self.state, self._brake_started_at = TurnaroundState.BRAKE_BEFORE_PIVOT, now
+                return TurnaroundDecision(self.state, "longitudinal_stem_lost_after_bar_braking", self._endpoint_frames, self._line_lost_frames, 0, 0.0)
+            return TurnaroundDecision(self.state, "bar_marked_following_until_stem_lost", self._endpoint_frames, self._line_lost_frames, 0, None)
+        if self.state is TurnaroundState.BRAKE_BEFORE_PIVOT:
+            started = self._brake_started_at if self._brake_started_at is not None else now
+            if now - started < self.config.brake_seconds:
+                return TurnaroundDecision(self.state, "braking_before_right_pivot", self._endpoint_frames, self._line_lost_frames, 0, None)
+            self.state, self._pivot_started_at, self._reacquire_frames = TurnaroundState.PIVOT_180, now, 0
+            return TurnaroundDecision(self.state, "brake_complete_starting_right_pivot", self._endpoint_frames, self._line_lost_frames, 0, 0.0)
         if self.state is TurnaroundState.PIVOT_180:
             started = self._pivot_started_at if self._pivot_started_at is not None else now
             elapsed = max(0.0, now - started)
             if elapsed >= self.config.pivot_max_seconds:
                 self.state = TurnaroundState.STOP
-                return TurnaroundDecision(self.state, "pivot_timeout_without_longitudinal_reacquire", self._endpoint_frames, self._reacquire_frames, elapsed)
+                return TurnaroundDecision(self.state, "pivot_timeout_without_longitudinal_reacquire", self._endpoint_frames, self._line_lost_frames, self._reacquire_frames, elapsed)
             if elapsed < self.config.pivot_min_seconds:
-                return TurnaroundDecision(self.state, "pivoting_minimum_time", self._endpoint_frames, 0, elapsed)
+                return TurnaroundDecision(self.state, "pivoting_minimum_time", self._endpoint_frames, self._line_lost_frames, 0, elapsed)
             self._reacquire_frames = self._reacquire_frames + 1 if usable and not evidence.endpoint_detected else 0
             if self._reacquire_frames >= self.config.reacquire_confirm_frames:
                 self.state, self._endpoint_frames = TurnaroundState.FOLLOW_STRAIGHT, 0
-                return TurnaroundDecision(self.state, "longitudinal_line_reacquired", 0, self._reacquire_frames, elapsed)
-            return TurnaroundDecision(self.state, "pivoting_until_longitudinal_reacquire", self._endpoint_frames, self._reacquire_frames, elapsed)
-        return TurnaroundDecision(self.state, "stopped_after_pivot_timeout", self._endpoint_frames, self._reacquire_frames, None)
+                return TurnaroundDecision(self.state, "longitudinal_line_reacquired", 0, self._line_lost_frames, self._reacquire_frames, elapsed)
+            return TurnaroundDecision(self.state, "pivoting_until_longitudinal_reacquire", self._endpoint_frames, self._line_lost_frames, self._reacquire_frames, elapsed)
+        return TurnaroundDecision(self.state, "stopped_after_pivot_timeout", self._endpoint_frames, self._line_lost_frames, self._reacquire_frames, None)

@@ -104,7 +104,7 @@ def main() -> int:
                 requested = acknowledged = None
                 motor = "DISPLAY_ONLY"
                 if client:
-                    if decision.state is TurnaroundState.FOLLOW_STRAIGHT and evidence.valid_line and not evidence.endpoint_detected:
+                    if decision.state in (TurnaroundState.FOLLOW_STRAIGHT, TurnaroundState.BAR_MARKED):
                         requested = (args.straight_pwm, args.straight_pwm)
                         acknowledged = client.send_drive_pwm(*requested)
                         motor = f"STRAIGHT R={acknowledged[0]} L={acknowledged[1]}"

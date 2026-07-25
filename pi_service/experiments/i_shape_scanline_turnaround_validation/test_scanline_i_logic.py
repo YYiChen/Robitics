@@ -35,15 +35,19 @@ class ScanlineIShapeTests(unittest.TestCase):
         self.assertTrue(evidence.endpoint_detected)
         self.assertAlmostEqual(evidence.line_center_x, 320, delta=3)
 
-    def test_confirmed_bar_forces_pivot_before_reacquiring_vertical_line(self):
+    def test_marked_bar_waits_for_stem_loss_then_brakes_before_pivot(self):
         analyzer = IShapeScanlineAnalyzer()
-        planner = IShapeTurnaroundPlanner(TurnaroundConfig(endpoint_confirm_frames=2, reacquire_confirm_frames=2, pivot_min_seconds=1, pivot_max_seconds=5))
+        planner = IShapeTurnaroundPlanner(TurnaroundConfig(endpoint_confirm_frames=2, line_lost_confirm_frames=2, reacquire_confirm_frames=2, brake_seconds=.1, pivot_min_seconds=1, pivot_max_seconds=5))
         # Matches the live camera scene: only the lower stem remains visible
         # beneath the transverse endpoint bar.
         bar = analyzer.analyze(frame(endpoint=True, lower_stem_only=True)).evidence
+        lost = analyzer.analyze(np.full((480, 640, 3), 255, dtype=np.uint8)).evidence
         straight = analyzer.analyze(frame()).evidence
         self.assertIs(planner.step(bar, 0).state, TurnaroundState.FOLLOW_STRAIGHT)
-        self.assertIs(planner.step(bar, .1).state, TurnaroundState.PIVOT_180)
-        self.assertIs(planner.step(straight, .5).state, TurnaroundState.PIVOT_180)
-        self.assertIs(planner.step(straight, 1.1).state, TurnaroundState.PIVOT_180)
-        self.assertIs(planner.step(straight, 1.2).state, TurnaroundState.FOLLOW_STRAIGHT)
+        self.assertIs(planner.step(bar, .1).state, TurnaroundState.BAR_MARKED)
+        self.assertIs(planner.step(lost, .2).state, TurnaroundState.BAR_MARKED)
+        self.assertIs(planner.step(lost, .3).state, TurnaroundState.BRAKE_BEFORE_PIVOT)
+        self.assertIs(planner.step(lost, .35).state, TurnaroundState.BRAKE_BEFORE_PIVOT)
+        self.assertIs(planner.step(lost, .41).state, TurnaroundState.PIVOT_180)
+        self.assertIs(planner.step(straight, 1.41).state, TurnaroundState.PIVOT_180)
+        self.assertIs(planner.step(straight, 1.51).state, TurnaroundState.FOLLOW_STRAIGHT)

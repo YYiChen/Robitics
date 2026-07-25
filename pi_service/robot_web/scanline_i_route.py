@@ -122,7 +122,9 @@ class ScanlineIShapeRouteTracker:
                     # Only an explicitly M-enabled drive session may advance
                     # endpoint confirmation or pivot timing.
                     decision = planner.step(evidence, now)
-                    if decision.state is TurnaroundState.FOLLOW_STRAIGHT and evidence.valid_line and not evidence.endpoint_detected:
+                    if decision.state in (TurnaroundState.FOLLOW_STRAIGHT, TurnaroundState.BAR_MARKED):
+                        # A marked bar is deliberately driven through until
+                        # the near longitudinal stem disappears.
                         self.controller.set_direct_drive(self.config.straight_pwm, self.config.straight_pwm)
                         self._motor_active, motor_text = True, f"STRAIGHT R={self.config.straight_pwm} L={self.config.straight_pwm}"
                     elif decision.state is TurnaroundState.PIVOT_180:
