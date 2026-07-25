@@ -18,6 +18,7 @@ sys.path[:0] = [str(TRACK_SRC), str(ROOT), str(CONTINUOUS), str(HERE)]
 from debug_web import DebugMjpegPublisher  # noqa: E402
 from i_turnaround_logic import IShapeTurnaroundPlanner, RouteEvidence, TurnaroundConfig, TurnaroundState  # noqa: E402
 from pi_service.robot_client import RobotClientConfig, RobotWebClient  # noqa: E402
+from runtime_guard import require_no_competing_autonomous_route  # noqa: E402
 from track_line.config import LineDetectorConfig  # noqa: E402
 from track_line.detector import OpenCVLineDetector  # noqa: E402
 from track_line.visualization import render_debug  # noqa: E402
@@ -40,6 +41,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--turn-direction", choices=("right", "left"), default="right")
     parser.add_argument("--pivot-min-seconds", type=float, default=1.60)
     parser.add_argument("--pivot-max-seconds", type=float, default=5.00)
+    parser.add_argument("--status-hz", type=float, default=4.0, help="Maximum /api/status sampling rate for Arduino OUT evidence.")
+    parser.add_argument("--scene-change-threshold", type=float, default=8.0, help="Mean grayscale pixel change used only as a camera-motion hint.")
     parser.add_argument("--headless", action="store_true")
     return parser.parse_args()
 
@@ -60,6 +63,23 @@ def draw(frame, result, decision, enabled: bool, motor: str) -> object:
     return output
 
 
+def robot_snapshot(status: dict | None) -> dict:
+    robot = status.get("robot", {}) if status else {}
+    return {
+        "status_motor_output": robot.get("motor_output"),
+        "arduino_reply": robot.get("reply"),
+        "arduino_online": robot.get("arduino_online"),
+        "status_last_rx_age": robot.get("last_rx_age"),
+    }
+
+
+def frame_change_score(previous_gray, frame) -> tuple[object, float | None]:
+    gray = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (96, 72))
+    if previous_gray is None:
+        return gray, None
+    return gray, float(cv2.absdiff(previous_gray, gray).mean())
+
+
 def main() -> int:
     args = parse_args()
     if not TRACK_SRC.is_dir() or not args.config.is_file():
@@ -67,8 +87,10 @@ def main() -> int:
     detector = OpenCVLineDetector(LineDetectorConfig.from_json(args.config))
     planner = IShapeTurnaroundPlanner(TurnaroundConfig(pivot_min_seconds=args.pivot_min_seconds, pivot_max_seconds=args.pivot_max_seconds))
     client = RobotWebClient(RobotClientConfig(args.controller_url)) if args.enable_motors else None
+    latest_status = None
     if client:
-        client.require_arduino_online(); client.stop()
+        latest_status = require_no_competing_autonomous_route(client.status())
+        client.stop()
     capture = cv2.VideoCapture(int(args.source) if args.source.isdigit() else args.source)
     capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     if not capture.isOpened():
@@ -76,6 +98,8 @@ def main() -> int:
     publisher = DebugMjpegPublisher(args.debug_web_port) if args.debug_web_port else None
     args.log.parent.mkdir(parents=True, exist_ok=True)
     interval, last, frame_index = 1.0 / max(1.0, args.process_fps), 0.0, 0
+    status_interval, next_status, previous_gray = 1.0 / max(1.0, args.status_hz), 0.0, None
+    previous_centerline = None
     try:
         with args.log.open("a", encoding="utf-8") as log:
             while True:
@@ -87,16 +111,27 @@ def main() -> int:
                 result = detector.detect(frame, frame_index=frame_index, timestamp_ns=time.monotonic_ns())
                 evidence = evidence_from(result, frame.shape[0])
                 decision = planner.step(evidence, now)
+                previous_gray, scene_change_score = frame_change_score(previous_gray, frame)
+                centerline = result.centerline_px
+                route_position_changed = bool(previous_centerline is not None and centerline != previous_centerline)
+                previous_centerline = centerline
                 motor = "DISPLAY_ONLY"
+                requested = None
+                acknowledged = None
                 if client:
                     if decision.state is TurnaroundState.FOLLOW_STRAIGHT and evidence.valid_line and evidence.confidence >= .45:
-                        right, left = client.send_drive_pwm(args.straight_pwm, args.straight_pwm); motor = f"STRAIGHT R={right} L={left}"
+                        requested = (args.straight_pwm, args.straight_pwm)
+                        right, left = client.send_drive_pwm(*requested); acknowledged = (right, left); motor = f"STRAIGHT R={right} L={left}"
                     elif decision.state is TurnaroundState.PIVOT_180:
                         pair = (args.pivot_pwm, -args.pivot_pwm) if args.turn_direction == "right" else (-args.pivot_pwm, args.pivot_pwm)
-                        right, left = client.send_drive_pwm(*pair); motor = f"PIVOT_{args.turn_direction.upper()} R={right} L={left}"
+                        requested = pair
+                        right, left = client.send_drive_pwm(*pair); acknowledged = (right, left); motor = f"PIVOT_{args.turn_direction.upper()} R={right} L={left}"
                     else:
                         client.stop(); motor = "STOP"
-                payload = {"wall_time": time.strftime("%Y-%m-%dT%H:%M:%S"), "frame": frame_index, "state": decision.state.value, "reason": decision.reason, "end_frames": decision.end_frames, "reacquire_frames": decision.reacquire_frames, "pivot_elapsed_seconds": decision.pivot_elapsed_seconds, "confidence": result.observation.confidence, "marker_detected": result.observation.marker_detected, "marker_point_px": result.observation.marker_point_px, "marker_branch_count": result.observation.marker_branch_count, "motor": motor}
+                    if now >= next_status:
+                        latest_status = client.status()
+                        next_status = now + status_interval
+                payload = {"wall_time": time.strftime("%Y-%m-%dT%H:%M:%S"), "frame": frame_index, "state": decision.state.value, "reason": decision.reason, "end_frames": decision.end_frames, "reacquire_frames": decision.reacquire_frames, "pivot_elapsed_seconds": decision.pivot_elapsed_seconds, "vision_confidence": result.observation.confidence, "marker_detected": result.observation.marker_detected, "transverse_bar_position_px": result.observation.marker_point_px, "marker_branch_count": result.observation.marker_branch_count, "requested_right_pwm": requested[0] if requested else 0, "requested_left_pwm": requested[1] if requested else 0, "acknowledged_right_pwm": acknowledged[0] if acknowledged else 0, "acknowledged_left_pwm": acknowledged[1] if acknowledged else 0, "scene_change_score": scene_change_score, "scene_motion_detected": scene_change_score is not None and scene_change_score >= args.scene_change_threshold, "route_position_changed": route_position_changed, "motor": motor, **robot_snapshot(latest_status)}
                 log.write(json.dumps(payload, ensure_ascii=False) + "\n"); log.flush()
                 annotated = draw(frame, result, decision, bool(client), motor)
                 if publisher: publisher.publish(annotated, payload)

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Explicit motor-enabled isolated I-shape turnaround validation.
+# It refuses a port-5000 process started with --enable-autonomous-route.
 set -Eeuo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="$(cd "${HERE}/../../.." && pwd)"
