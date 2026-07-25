@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 
 from green_white_scanline_i_logic import GreenWhiteHybridScanlineAnalyzer, GreenWhiteScanlineConfig
+from scanline_i_logic import IShapeTurnaroundPlanner, ScanlineEvidence, TurnaroundConfig, TurnaroundState
 
 
 def green_i_frame(*, transverse=False, red_band=False):
@@ -50,6 +51,46 @@ class GreenWhiteScanlineTests(unittest.TestCase):
         cv2.line(frame, (320, 479), (320, 80), (245, 245, 245), 20)
         evidence = self.analyzer.analyze(frame).evidence
         self.assertTrue(evidence.line_lost)
+
+    def test_confirmed_white_bar_brakes_when_near_red_band_exits_bottom(self):
+        planner = IShapeTurnaroundPlanner(
+            TurnaroundConfig(
+                endpoint_confirm_frames=1,
+                junction_confirm_frames=1,
+                red_exit_enabled=True,
+                red_exit_arm_y_ratio=.84,
+            )
+        )
+        def evidence(*, endpoint=False, red_y=None):
+            return ScanlineEvidence(
+                confidence=.9, valid_line=True, line_lost=False,
+                line_center_x=320.0, line_centers=((440, 320.0, 20),),
+                endpoint_detected=endpoint, endpoint_y=340 if endpoint else None,
+                endpoint_width=400 if endpoint else None, normal_tape_width=20.0,
+                junction_detected=True, junction_y=300, junction_arm_count=3,
+                red_marker_detected=red_y is not None, red_marker_y=red_y,
+                red_marker_span=260 if red_y is not None else None, frame_height=480,
+            )
+        self.assertIs(planner.step(evidence(endpoint=True, red_y=420), 0.0).state, TurnaroundState.EARLY_BAR_PREDICTED)
+        self.assertIs(planner.step(evidence(endpoint=True, red_y=430), .05).state, TurnaroundState.BAR_MARKED)
+        decision = planner.step(evidence(endpoint=False, red_y=None), .10)
+        self.assertIs(decision.state, TurnaroundState.BRAKE_BEFORE_PIVOT)
+        self.assertEqual(decision.reason, "confirmed_white_bar_red_marker_exited_bottom_braking")
+
+    def test_red_exit_does_not_brake_without_white_bar_confirmation(self):
+        planner = IShapeTurnaroundPlanner(TurnaroundConfig(junction_confirm_frames=1, red_exit_enabled=True))
+        def evidence(red_y):
+            return ScanlineEvidence(
+                confidence=.9, valid_line=True, line_lost=False,
+                line_center_x=320.0, line_centers=((440, 320.0, 20),),
+                endpoint_detected=False, endpoint_y=None, endpoint_width=None,
+                normal_tape_width=20.0, junction_detected=True, junction_y=300,
+                junction_arm_count=3, red_marker_detected=red_y is not None,
+                red_marker_y=red_y, red_marker_span=260 if red_y is not None else None,
+                frame_height=480,
+            )
+        self.assertIs(planner.step(evidence(430), 0.0).state, TurnaroundState.EARLY_BAR_PREDICTED)
+        self.assertIs(planner.step(evidence(None), .05).state, TurnaroundState.EARLY_BAR_PREDICTED)
 
 
 if __name__ == "__main__":

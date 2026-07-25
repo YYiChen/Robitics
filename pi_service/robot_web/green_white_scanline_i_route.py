@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+from dataclasses import replace
 
 from scanline_i_route import ScanlineIShapeRouteTracker
 
@@ -22,3 +23,11 @@ class GreenWhiteScanlineIShapeRouteTracker(ScanlineIShapeRouteTracker):
 
     def _create_analyzer(self, config):
         return GreenWhiteHybridScanlineAnalyzer()
+
+    @staticmethod
+    def _planner_config(config):
+        """Enable the red-bottom exit only for this calibrated green course."""
+        return replace(
+            ScanlineIShapeRouteTracker._planner_config(config),
+            red_exit_enabled=True,
+        )

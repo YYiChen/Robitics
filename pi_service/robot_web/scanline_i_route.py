@@ -53,6 +53,7 @@ class ScanlineIRouteConfig:
     bar_mark_timeout_seconds: float = 4.0
     early_junction_trigger_y_ratio: float = 0.75
     early_line_lost_confirm_frames: int = 1
+    red_exit_arm_y_ratio: float = 0.84
     tuning_path: Path | None = None
     use_hybrid: bool = True
 
@@ -69,6 +70,7 @@ SCANLINE_TUNING_FIELDS = {
     "bar_mark_timeout_seconds": (float, 0.2, 15.0),
     "early_junction_trigger_y_ratio": (float, 0.35, 0.98),
     "early_line_lost_confirm_frames": (int, 1, 10),
+    "red_exit_arm_y_ratio": (float, 0.60, 0.98),
 }
 
 
@@ -201,6 +203,7 @@ class ScanlineIShapeRouteTracker:
             bar_mark_timeout_seconds=config.bar_mark_timeout_seconds,
             early_junction_trigger_y_ratio=config.early_junction_trigger_y_ratio,
             early_line_lost_confirm_frames=config.early_line_lost_confirm_frames,
+            red_exit_arm_y_ratio=config.red_exit_arm_y_ratio,
         )
 
     def _open_run_log(self, config: ScanlineIRouteConfig) -> None:
