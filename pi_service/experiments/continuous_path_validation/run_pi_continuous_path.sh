@@ -4,7 +4,9 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="$(cd "${HERE}/../../.." && pwd)"
-TRACK_CONFIG="${WORKSPACE}/third_party/DeskMate-Advance/src/track_line/config.dark_line.json"
+# Dedicated route geometry: look farther through a visible bend without
+# changing the detector settings used by the older straight/rectangle tests.
+TRACK_CONFIG="${WORKSPACE}/third_party/DeskMate-Advance/src/track_line/config.continuous_path.json"
 ROBOT_WEB_DIR="${WORKSPACE}/pi_service/robot_web"
 WEB_PORT=5000
 CONTROLLER_URL="http://127.0.0.1:5000"
