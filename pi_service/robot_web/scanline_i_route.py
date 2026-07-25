@@ -166,9 +166,11 @@ class ScanlineIShapeRouteTracker:
             self._motor_active = False
 
     def _draw(self, cv2, frame, result, decision, motor_text: str):
-        output = frame.copy()
-        mask = cv2.cvtColor(result.component_mask, cv2.COLOR_GRAY2BGR)
-        output = cv2.addWeighted(output, .72, mask, .28, 0)
+        # Yellow, not grayscale: this is the selected near-anchored route
+        # component used by control, so it remains legible on a grey floor.
+        yellow_route = frame.copy()
+        yellow_route[result.component_mask > 0] = (0, 220, 255)
+        output = cv2.addWeighted(frame, .62, yellow_route, .38, 0)
         evidence = result.evidence
         for y, x, _width in evidence.line_centers:
             cv2.circle(output, (int(x), y), 5, (0, 255, 0), -1)

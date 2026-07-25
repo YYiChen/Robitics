@@ -6,12 +6,12 @@ import numpy as np
 from scanline_i_logic import IShapeScanlineAnalyzer, IShapeTurnaroundPlanner, TurnaroundConfig, TurnaroundState
 
 
-def frame(*, endpoint=False, lower_stem_only=False):
+def frame(*, endpoint=False, lower_stem_only=False, endpoint_y=336):
     image = np.full((480, 640, 3), 255, dtype=np.uint8)
-    stem_top = 336 if lower_stem_only else 80
+    stem_top = endpoint_y if lower_stem_only else 80
     cv2.line(image, (320, 479), (320, stem_top), (0, 0, 0), 20)
     if endpoint:
-        cv2.line(image, (100, 336), (540, 336), (0, 0, 0), 20)
+        cv2.line(image, (100, endpoint_y), (540, endpoint_y), (0, 0, 0), 20)
     return image
 
 
@@ -27,6 +27,12 @@ class ScanlineIShapeTests(unittest.TestCase):
         self.assertTrue(evidence.valid_line)
         self.assertTrue(evidence.endpoint_detected)
         self.assertGreater(evidence.endpoint_width or 0, 300)
+
+    def test_far_wide_bar_is_detected_before_it_reaches_the_lower_image(self):
+        evidence = IShapeScanlineAnalyzer().analyze(frame(endpoint=True, endpoint_y=200)).evidence
+        self.assertTrue(evidence.valid_line)
+        self.assertTrue(evidence.endpoint_detected)
+        self.assertLess(evidence.endpoint_y or 480, 230)
 
     def test_near_stem_still_confirms_bar_when_it_ends_at_the_bar(self):
         evidence = IShapeScanlineAnalyzer().analyze(frame(endpoint=True, lower_stem_only=True)).evidence

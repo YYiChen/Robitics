@@ -16,15 +16,17 @@ class ScanlineConfig:
     # samples in that near field so the wide bar cannot erase the evidence for
     # the stem that leads into it.
     track_rows: tuple[float, ...] = (0.92, 0.86, 0.80)
-    # Scan the complete lower terminal region independently for a wide run.
+    # Scan from the middle distance down to the terminal region independently
+    # for a wide run.  The bar must be seen early enough for mark -> stem-loss
+    # confirmation before the vehicle reaches it.
     # These rows are deliberately separate from ``track_rows``: the bar is
     # endpoint evidence, never a candidate left/right route.
-    bar_rows: tuple[float, ...] = (0.58, 0.61, 0.64, 0.67, 0.70, 0.73, 0.76, 0.79, 0.82)
+    bar_rows: tuple[float, ...] = (0.38, 0.41, 0.44, 0.47, 0.50, 0.53, 0.56, 0.59, 0.62, 0.65, 0.68, 0.71, 0.74, 0.77, 0.80, 0.83)
     near_anchor_ratio: float = 0.90
     narrow_width_ratio: float = 0.18
     endpoint_width_ratio: float = 0.32
     endpoint_width_multiplier: float = 3.0
-    endpoint_min_y_ratio: float = 0.55
+    endpoint_min_y_ratio: float = 0.35
     minimum_track_rows: int = 2
     maximum_center_spread_ratio: float = 0.10
 
