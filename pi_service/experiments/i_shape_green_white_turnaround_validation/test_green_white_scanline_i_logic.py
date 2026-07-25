@@ -52,6 +52,15 @@ class GreenWhiteScanlineTests(unittest.TestCase):
         evidence = self.analyzer.analyze(frame).evidence
         self.assertTrue(evidence.line_lost)
 
+    def test_pale_green_cast_floor_is_not_the_green_course(self):
+        # This BGR colour occurs on the pale room floor under the camera's
+        # colour cast: HSV alone can be marginally green, but RGB green
+        # dominance correctly rejects it as not being the mat.
+        frame = np.full((480, 640, 3), (157, 193, 169), dtype=np.uint8)
+        cv2.line(frame, (320, 479), (320, 80), (245, 245, 245), 20)
+        evidence = self.analyzer.analyze(frame).evidence
+        self.assertTrue(evidence.line_lost)
+
     def test_pale_floor_patch_touching_green_on_one_side_is_rejected(self):
         image = np.full((480, 640, 3), (55, 150, 45), dtype=np.uint8)
         # Broad bright floor touches the green course only along its lower

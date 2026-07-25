@@ -25,6 +25,9 @@ class GreenWhiteScanlineConfig(HybridScanlineConfig):
     green_hue_max: int = 96
     green_saturation_min: int = 45
     green_value_min: int = 28
+    green_rgb_min_g: int = 50
+    green_rgb_g_over_r_ratio: float = 1.25
+    green_rgb_g_over_b_ratio: float = 1.15
     minimum_green_roi_ratio: float = 0.18
     roi_top_ratio: float = 0.38
     green_neighbour_kernel: int = 31
@@ -104,6 +107,11 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
             return np.zeros_like(green)
         return np.where(labels == best_label, 255, 0).astype(np.uint8)
 
+    @property
+    def course_field_mask(self) -> np.ndarray | None:
+        """Current-frame green course area, shared with the preview overlay."""
+        return self._latest_green_field
+
     def _make_mask(self, frame: np.ndarray, blur_kernel: int, morphology_kernel: int) -> np.ndarray:
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         config = self.config
@@ -112,11 +120,22 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
             np.array((0, 0, config.white_value_min), dtype=np.uint8),
             np.array((180, config.white_saturation_max, 255), dtype=np.uint8),
         )
-        green = cv2.inRange(
+        green_hsv = cv2.inRange(
             hsv,
             np.array((config.green_hue_min, config.green_saturation_min, config.green_value_min), dtype=np.uint8),
             np.array((config.green_hue_max, 255, 255), dtype=np.uint8),
         )
+        blue, green_channel, red = cv2.split(frame)
+        green_rgb = np.where(
+            (green_channel >= config.green_rgb_min_g)
+            & (green_channel.astype(np.float32) >= red.astype(np.float32) * config.green_rgb_g_over_r_ratio)
+            & (green_channel.astype(np.float32) >= blue.astype(np.float32) * config.green_rgb_g_over_b_ratio),
+            255,
+            0,
+        ).astype(np.uint8)
+        # HSV keeps the broad green colour range; RGB dominance rejects pale
+        # grey floor with a slight green cast.  Both must agree.
+        green = cv2.bitwise_and(green_hsv, green_rgb)
         # `_select_route_component` runs immediately after `_make_mask` in
         # the inherited analyzer.  Retain raw green for side probes, and its
         # connected course field for the spatial candidate gate.

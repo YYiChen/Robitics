@@ -253,6 +253,12 @@ class ScanlineIShapeRouteTracker:
         yellow_route = frame.copy()
         yellow_route[result.component_mask > 0] = (0, 220, 255)
         output = cv2.addWeighted(frame, .62, yellow_route, .38, 0)
+        course_field = getattr(self, "_visual_course_field", None)
+        if course_field is not None and course_field.shape == output.shape[:2] and course_field.any():
+            contours, _ = cv2.findContours(course_field, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            # Red outline = the actual green-course area where white tape is
+            # permitted to become a recognition candidate.
+            cv2.drawContours(output, contours, -1, (0, 0, 255), 2, cv2.LINE_AA)
         evidence = result.evidence
         for y, x, _width in evidence.line_centers:
             cv2.circle(output, (int(x), y), 5, (0, 255, 0), -1)
@@ -300,6 +306,7 @@ class ScanlineIShapeRouteTracker:
                 if frame is None:
                     continue
                 result = analyzer.analyze(frame)
+                self._visual_course_field = getattr(analyzer, "course_field_mask", None)
                 evidence = result.evidence
                 with self._tuning_lock:
                     config = self.config

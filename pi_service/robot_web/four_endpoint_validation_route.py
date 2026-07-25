@@ -155,6 +155,7 @@ class FourEndpointValidationRouteTracker(GreenWhiteScanlineIShapeRouteTracker):
                 if frame is None:
                     continue
                 result = analyzer.analyze(frame)
+                self._visual_course_field = analyzer.course_field_mask
                 evidence = result.evidence
                 observation = self._vision_observation(evidence, frame.shape[1])
                 with self._tuning_lock:
