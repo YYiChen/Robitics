@@ -13,6 +13,7 @@ from webrtc_stream import WebRTCStreamer
 from autonomous_route import AutonomousRouteTracker, AutonomousRunGate, RoutePreviewPublisher, load_tuning_config
 from scanline_i_route import ScanlineIShapeRouteTracker, load_scanline_tuning_config
 from green_white_scanline_i_route import GreenWhiteScanlineIShapeRouteTracker
+from four_endpoint_validation_route import FourEndpointValidationRouteTracker
 
 def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStreamer | DualStreamCamera, system_metrics: SystemMetrics | None = None, oled: OledStatusService | None = None, route_preview: RoutePreviewPublisher | None = None, route_tracker: AutonomousRouteTracker | None = None) -> Flask:
     app = Flask(__name__)
@@ -204,12 +205,13 @@ def main() -> None:
     parser.add_argument("--webrtc-udp-output", default="udp://127.0.0.1:1234?pkt_size=1316")
     parser.add_argument("--disable-oled", action="store_true")
     parser.add_argument("--enable-autonomous-route", action="store_true", help="run route preview inside the port-5000 service")
-    parser.add_argument("--route-mode", choices=("generic", "scanline_i", "scanline_i_green_white"), default="generic", help="generic route, black-line I-shape, or green-floor white-line I-shape turnaround")
+    parser.add_argument("--route-mode", choices=("generic", "scanline_i", "scanline_i_green_white", "scanline_i_four_endpoint_green_white"), default="generic", help="generic route, I-shape turnaround, or green-floor four-endpoint pivot validation")
     parser.add_argument("--route-config", type=Path, default=Path(__file__).resolve().parents[2] / "third_party" / "DeskMate-Advance" / "src" / "track_line" / "config.fixed_green_white_course.json")
     parser.add_argument("--route-process-fps", type=float, default=20.0)
     parser.add_argument("--route-tuning", type=Path, default=Path(__file__).resolve().parents[1] / "experiments" / "continuous_path_validation" / "tuning.py")
     parser.add_argument("--scanline-tuning", type=Path, default=Path(__file__).resolve().parents[1] / "experiments" / "i_shape_scanline_turnaround_validation" / "scanline_web_tuning.json")
     parser.add_argument("--green-white-scanline-tuning", type=Path, default=Path(__file__).resolve().parents[1] / "experiments" / "i_shape_green_white_turnaround_validation" / "scanline_web_tuning.json")
+    parser.add_argument("--four-endpoint-scanline-tuning", type=Path, default=Path(__file__).resolve().parents[1] / "experiments" / "i_shape_four_endpoint_navigation_validation" / "scanline_web_tuning.json")
     parser.add_argument("--oled-address", type=lambda value: int(value, 0), default=0x3C)
     parser.add_argument("--oled-i2c-port", type=int, default=1)
     args = parser.parse_args()
@@ -237,6 +239,8 @@ def main() -> None:
             route_tracker = ScanlineIShapeRouteTracker(controller, camera, route_preview, route_gate, load_scanline_tuning_config(args.scanline_tuning))
         elif args.route_mode == "scanline_i_green_white":
             route_tracker = GreenWhiteScanlineIShapeRouteTracker(controller, camera, route_preview, route_gate, load_scanline_tuning_config(args.green_white_scanline_tuning))
+        elif args.route_mode == "scanline_i_four_endpoint_green_white":
+            route_tracker = FourEndpointValidationRouteTracker(controller, camera, route_preview, route_gate, load_scanline_tuning_config(args.four_endpoint_scanline_tuning))
         else:
             route_config = load_tuning_config(args.route_config, args.route_tuning)
             if args.route_process_fps != 20.0:

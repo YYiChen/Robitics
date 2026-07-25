@@ -22,4 +22,17 @@ cd /home/g11/Desktop/pi_service/experiments/i_shape_four_endpoint_navigation_val
 python3 -m unittest -v test_four_endpoint_planner
 ```
 
-该目录尚未接入 5000、HTTP 或 Arduino；因此不会抢占 M1/M2 控制权，也不会影响现有 I 型 180° 掉头实验。
+## 5000 接入验证
+
+新的可选路线模式只验证第一个目标 `[1]`：沿竖线到上交叉点，原地左转 90°，重捕横杆方向白线后停车。它只在按 `M` 后控制 M1/M2，**不会调用 M3/M4 发牌**，也不会沿横杆行驶。
+
+```bash
+cd /home/g11/Desktop/pi_service
+bash ./run_four_endpoint_pivot_validation_console.sh
+```
+
+打开 `http://127.0.0.1:5000`，画面状态应依次显示：
+
+`FOLLOW_STEM → STOP_AT_JUNCTION → PIVOT_TO_HEADING → DEAL_CARD`
+
+现有 I 型 180° 掉头入口不变；该模式是单独的 `route-mode`，同一时刻只能运行其中一个。
