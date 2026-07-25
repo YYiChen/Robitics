@@ -18,7 +18,7 @@ chmod +x /home/g11/Desktop/pi_service/experiments/marker_count_preview_validatio
 /home/g11/Desktop/pi_service/experiments/marker_count_preview_validation/run_pi_green_white_route_preview.sh
 ```
 
-它使用 HSV 白线/绿底分割，而不是黑线版本使用的灰度阈值。
+它保留当前已验证的 HSV 白线/绿底阈值；固定场地版只调整路线连接、路线区域和胶带拼接处的小缝处理，不改白色与绿色的判定范围。
 
 原始逐帧日志在：
 

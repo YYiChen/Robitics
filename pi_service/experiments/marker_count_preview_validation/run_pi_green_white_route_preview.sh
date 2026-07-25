@@ -6,8 +6,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PI_SERVICE_DIR="$(cd "${HERE}/../.." && pwd)"
 WORKSPACE="$(cd "${PI_SERVICE_DIR}/.." && pwd)"
 
-# The HSV config selects low-saturation bright tape only when a green floor is
-# also visible. It does not use the old black-line Otsu threshold.
-export TRACK_CONFIG="${WORKSPACE}/third_party/DeskMate-Advance/src/track_line/config.green_white_path.json"
+# Fixed-course HSV tuning: it only accepts white tape inside the large green
+# cloth and joins the small gaps caused by overlapped tape pieces.
+export TRACK_CONFIG="${WORKSPACE}/third_party/DeskMate-Advance/src/track_line/config.fixed_green_white_course.json"
 
 exec "${HERE}/run_pi_marker_count_preview.sh"
