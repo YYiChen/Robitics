@@ -229,7 +229,14 @@ class PcVisionAdaptorRouteTracker:
                     self._write_run_log(frame=frame, result=result, event=event, state=state, motor=motor, commanded=commanded)
                 self._set_status(state=state, detail=motor, frame=frame, confidence=result.confidence, line_center_x=result.center_x, motor=motor)
                 frame += 1
-        except Exception as exc: self._set_status(running=False, state="error", detail=str(exc))
+        except Exception as exc:
+            # This worker owns the control-frame sequence.  Without the full
+            # traceback an unexpected vision error only looks like a frozen
+            # PC connection, while the real failing source line is lost.
+            import traceback
+
+            traceback.print_exc()
+            self._set_status(running=False, state="error", detail=str(exc))
         finally:
             self._stop_motor()
             if self._run_log is not None:
