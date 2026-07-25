@@ -55,6 +55,17 @@ class FourEndpointValidationRouteTests(unittest.TestCase):
         self.assertFalse(gate.observe(lost))
         self.assertTrue(gate.observe(lost))
 
+    def test_midfield_red_band_does_not_disable_lost_stem_fallback(self):
+        gate = JunctionPassGate(line_lost_confirm_frames=2)
+        def evidence(*, bar=False, red_y=None, lost=False):
+            return SimpleNamespace(
+                endpoint_detected=bar, red_marker_detected=red_y is not None,
+                red_marker_y=red_y, frame_height=480, line_lost=lost,
+            )
+        self.assertFalse(gate.observe(evidence(bar=True, red_y=340)))  # below 0.84 near-field threshold
+        self.assertFalse(gate.observe(evidence(lost=True)))
+        self.assertTrue(gate.observe(evidence(lost=True)))
+
 
 if __name__ == "__main__":
     unittest.main()

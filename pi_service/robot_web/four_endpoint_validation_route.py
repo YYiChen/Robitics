@@ -63,9 +63,10 @@ class JunctionPassGate:
         if self._white_bar_seen and self._red_bottom_armed:
             self._passed = True
             return True
-        # A real red band takes priority once observed.  Only an unmarked
-        # white course may use line loss as its crossing fallback.
-        if self._white_bar_seen and not self._red_seen:
+        # Red exit is preferred when it reached the calibrated near field.
+        # But a red blob that was seen only in the middle/far field must never
+        # suppress the proven white-bar + lost-stem stop fallback.
+        if self._white_bar_seen:
             self._line_lost_frames = self._line_lost_frames + 1 if evidence.line_lost else 0
             if self._line_lost_frames >= self.line_lost_confirm_frames:
                 self._passed = True
