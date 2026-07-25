@@ -59,6 +59,7 @@ function updateAutonomousUi(autonomous) {
   $("#scanlineRouteTuning").classList.toggle("hidden", !scanlineI);
   $("#endLineRouteTuning").classList.toggle("hidden", !endLine);
   $("#endLineTurnOnly").classList.toggle("hidden", !endLine);
+  $("#endLineGreenGate").classList.toggle("hidden", !endLine);
   const endLineLegacyHeading = document.querySelectorAll("#endLineRouteTuning h3")[1];
   if (endLineLegacyHeading) endLineLegacyHeading.classList.toggle("hidden", endLine);
   $("#endLineRouteTuning small:last-child")?.classList.toggle("hidden", endLine);

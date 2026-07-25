@@ -20,7 +20,7 @@ for path in (EXPERIMENT, FAST_EXPERIMENT):
         sys.path.insert(0, str(path))
 
 from end_line_logic import EndLineConfig, EndLineStopPlanner, RedEndBandDetector  # noqa: E402
-from fast_line import FastLineConfig, find_fast_line, pwm_for_line  # noqa: E402
+from gated_fast_line import FastLineConfig, analyse_fast_line, pwm_for_line  # noqa: E402
 
 
 TUNING_PATH = EXPERIMENT / "end_line_web_tuning.json"
@@ -31,6 +31,13 @@ TUNING_RULES = {
     "correction_gain": (float, 0.0, 1000.0),
     "minimum_correction_pwm": (int, 0, 255),
     "maximum_correction_pwm": (int, 0, 255),
+    "green_hue_min": (int, 0, 179),
+    "green_hue_max": (int, 0, 179),
+    "green_saturation_min": (int, 0, 255),
+    "green_dilate_radius_px": (int, 1, 100),
+    "green_support_inner_px": (int, 0, 100),
+    "green_support_outer_px": (int, 1, 150),
+    "green_support_min_ratio": (float, 0.0, 1.0),
     "red_channel_min": (int, 0, 255),
     "red_excess_min": (int, 0, 255),
     "red_roi_top_ratio": (float, 0.0, .8),
@@ -106,6 +113,10 @@ class EndLineTurnAdaptorRouteTracker:
                 "process_fps": self._process_fps, "straight_pwm": self._straight_pwm,
                 "correction_deadband": self._fast_config.deadband, "correction_gain": self._fast_config.correction_gain,
                 "minimum_correction_pwm": self._fast_config.min_correction_pwm, "maximum_correction_pwm": self._fast_config.max_correction_pwm,
+                "green_hue_min": self._fast_config.green_hue_min, "green_hue_max": self._fast_config.green_hue_max,
+                "green_saturation_min": self._fast_config.green_saturation_min, "green_dilate_radius_px": self._fast_config.green_dilate_radius_px,
+                "green_support_inner_px": self._fast_config.green_support_inner_px, "green_support_outer_px": self._fast_config.green_support_outer_px,
+                "green_support_min_ratio": self._fast_config.green_support_min_ratio,
                 **asdict(self._line_config),
             }
 
@@ -114,6 +125,10 @@ class EndLineTurnAdaptorRouteTracker:
             "process_fps": 20.0, "straight_pwm": 85,
             "correction_deadband": FastLineConfig().deadband, "correction_gain": FastLineConfig().correction_gain,
             "minimum_correction_pwm": FastLineConfig().min_correction_pwm, "maximum_correction_pwm": FastLineConfig().max_correction_pwm,
+            "green_hue_min": FastLineConfig().green_hue_min, "green_hue_max": FastLineConfig().green_hue_max,
+            "green_saturation_min": FastLineConfig().green_saturation_min, "green_dilate_radius_px": FastLineConfig().green_dilate_radius_px,
+            "green_support_inner_px": FastLineConfig().green_support_inner_px, "green_support_outer_px": FastLineConfig().green_support_outer_px,
+            "green_support_min_ratio": FastLineConfig().green_support_min_ratio,
             **asdict(EndLineConfig()),
         }
         try:
@@ -131,7 +146,7 @@ class EndLineTurnAdaptorRouteTracker:
 
     @staticmethod
     def _configs_from_values(values: dict) -> tuple[float, int, FastLineConfig, EndLineConfig]:
-        fast = replace(FastLineConfig(), deadband=values["correction_deadband"], correction_gain=values["correction_gain"], min_correction_pwm=values["minimum_correction_pwm"], max_correction_pwm=values["maximum_correction_pwm"])
+        fast = replace(FastLineConfig(), deadband=values["correction_deadband"], correction_gain=values["correction_gain"], min_correction_pwm=values["minimum_correction_pwm"], max_correction_pwm=values["maximum_correction_pwm"], green_hue_min=values["green_hue_min"], green_hue_max=values["green_hue_max"], green_saturation_min=values["green_saturation_min"], green_dilate_radius_px=values["green_dilate_radius_px"], green_support_inner_px=values["green_support_inner_px"], green_support_outer_px=values["green_support_outer_px"], green_support_min_ratio=values["green_support_min_ratio"])
         line = EndLineConfig(**{key: values[key] for key in asdict(EndLineConfig())})
         return values["process_fps"], values["straight_pwm"], fast, line
 
@@ -152,6 +167,10 @@ class EndLineTurnAdaptorRouteTracker:
             current[key] = value
         if current["minimum_correction_pwm"] > current["maximum_correction_pwm"]:
             raise ValueError("最小修正 PWM 不能大于最大修正 PWM")
+        if current["green_hue_min"] > current["green_hue_max"]:
+            raise ValueError("绿布色相最小值不能大于最大值")
+        if current["green_support_inner_px"] >= current["green_support_outer_px"]:
+            raise ValueError("绿布双侧内侧距离必须小于外侧距离")
         process_fps, straight_pwm, fast_config, line_config = self._configs_from_values(current)
         self._tuning_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self._tuning_path.with_suffix(".tmp")
@@ -169,13 +188,14 @@ class EndLineTurnAdaptorRouteTracker:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self._run_log = (directory / f"end_line_turn_{stamp}.jsonl").open("a", encoding="utf-8")
 
-    def _write_log(self, frame: int, result, red, decision, state: str, motor: str, commanded) -> None:
+    def _write_log(self, frame: int, result, red, decision, state: str, motor: str, commanded, course_coverage: float) -> None:
         if self._run_log is None:
             return
         controller_status = self.controller.status()
         self._run_log.write(json.dumps({
             "time_utc": datetime.now(timezone.utc).isoformat(), "kind": "end_line_cycle", "frame": frame,
             "white_line": {"valid": result.valid, "center_x": result.center_x, "confidence": result.confidence, "rows": result.centers},
+            "green_course_coverage": course_coverage,
             "red_direction_marker": asdict(red), "last_red_side": self._last_red_side, "last_red_seen_frame": self._last_red_seen_frame,
             "planner": {"state": decision.state.value, "reason": decision.reason},
             "gate_enabled": self.gate.enabled(), "state": state, "motor": motor,
@@ -205,7 +225,8 @@ class EndLineTurnAdaptorRouteTracker:
                     continue
                 with self._tuning_lock:
                     fast_config, detector, planner, straight_pwm = self._fast_config, self._red_detector, self._planner, self._straight_pwm
-                    result = find_fast_line(image, self._last_center_x, fast_config)
+                    line_analysis = analyse_fast_line(image, self._last_center_x, fast_config)
+                    result = line_analysis.result
                     red = detector.detect(image)
                     decision = planner.step(line_valid=result.valid, red_detected=red.detected)
                 if result.center_x is not None:
@@ -261,6 +282,8 @@ class EndLineTurnAdaptorRouteTracker:
                         decision = self._planner.step(line_valid=result.valid, red_detected=red.detected)
                     state = "PAUSED"
                 overlay = image.copy()
+                contours, _hierarchy = cv2.findContours(line_analysis.course_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(overlay, contours, -1, (0, 0, 255), 2)
                 for y, x, _width in result.centers:
                     cv2.circle(overlay, (int(x), y), 5, (0, 255, 0), -1)
                 if red.detected and red.y is not None and red.bottom_y is not None:
@@ -274,8 +297,8 @@ class EndLineTurnAdaptorRouteTracker:
                 if ok:
                     self.publisher.publish(encoded.tobytes())
                 if self.gate.enabled() or frame_index % 20 == 0:
-                    self._write_log(frame_index, result, red, decision, state, motor, commanded)
-                self._set_status(state=state, detail=decision.reason, frame=frame_index, confidence=result.confidence, line_center_x=result.center_x, red_direction_marker=asdict(red), last_red_side=self._last_red_side, last_red_seen_frame=self._last_red_seen_frame, motion_phase=self._motion_phase, motor=motor)
+                    self._write_log(frame_index, result, red, decision, state, motor, commanded, float(np.mean(line_analysis.course_mask)))
+                self._set_status(state=state, detail=decision.reason, frame=frame_index, confidence=result.confidence, line_center_x=result.center_x, green_course_coverage=float(np.mean(line_analysis.course_mask)), green_gate_enabled=fast_config.green_gate_enabled, red_direction_marker=asdict(red), last_red_side=self._last_red_side, last_red_seen_frame=self._last_red_seen_frame, motion_phase=self._motion_phase, motor=motor)
                 frame_index += 1
         except Exception as exc:
             import traceback
