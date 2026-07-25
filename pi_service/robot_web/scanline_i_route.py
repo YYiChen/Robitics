@@ -223,6 +223,7 @@ class ScanlineIShapeRouteTracker:
             "confidence": evidence.confidence, "state": decision.state.value, "reason": decision.reason,
             "endpoint": {"detected": evidence.endpoint_detected, "y": evidence.endpoint_y, "width": evidence.endpoint_width},
             "junction": {"detected": evidence.junction_detected, "y": evidence.junction_y, "arms": evidence.junction_arm_count},
+            "red_band": {"detected": evidence.red_marker_detected, "y": evidence.red_marker_y, "span": evidence.red_marker_span},
             "commanded_pwm": None if commanded is None else {"right": commanded[0], "left": commanded[1]},
             "motor_text": motor_text, "motor_output": controller_status.get("motor_output"),
             "route_position_changed": changed, "lookahead": {"x": evidence.lookahead_x, "y": evidence.lookahead_y},
@@ -259,15 +260,18 @@ class ScanlineIShapeRouteTracker:
             cv2.circle(output, (int(evidence.lookahead_x), evidence.lookahead_y), 7, (0, 255, 255), -1)
         if evidence.junction_detected and evidence.junction_y is not None:
             cv2.line(output, (0, evidence.junction_y), (output.shape[1] - 1, evidence.junction_y), (255, 0, 255), 1)
+        if evidence.red_marker_detected and evidence.red_marker_y is not None:
+            cv2.line(output, (0, evidence.red_marker_y), (output.shape[1] - 1, evidence.red_marker_y), (0, 0, 255), 2)
         color = (0, 220, 0) if self.gate.enabled() else (0, 180, 255)
         bar_y = max(76 + 24 * 6, 220)
         cv2.rectangle(output, (10, 76), (940, 250), (20, 20, 20), cv2.FILLED)
         cv2.putText(output, f"SCANLINE I-TURN: {'RUNNING' if self.gate.enabled() else 'PAUSED (press M)'}", (18, 104), cv2.FONT_HERSHEY_SIMPLEX, .65, color, 2)
         cv2.putText(output, f"STATE: {decision.state.value}  {decision.reason}", (18, 132), cv2.FONT_HERSHEY_SIMPLEX, .48, (255, 255, 255), 1)
         cv2.putText(output, f"BAR: {evidence.endpoint_detected} y={evidence.endpoint_y} w={evidence.endpoint_width}  JUNCTION: {evidence.junction_detected} y={evidence.junction_y} arms={evidence.junction_arm_count}", (18, 160), cv2.FONT_HERSHEY_SIMPLEX, .46, (100, 220, 255), 1)
-        cv2.putText(output, f"LOOKAHEAD: ({evidence.lookahead_x}, {evidence.lookahead_y}) path={evidence.path_length_px}px  MOTOR: {motor_text}", (18, 188), cv2.FONT_HERSHEY_SIMPLEX, .46, (0, 255, 255), 1)
-        cv2.putText(output, f"CONF: {evidence.confidence:.2f}  narrow-centre={evidence.line_center_x}  M: start/pause", (18, 216), cv2.FONT_HERSHEY_SIMPLEX, .44, (190, 190, 190), 1)
-        cv2.putText(output, "Endpoint bar is never followed as a left/right path.", (18, 240), cv2.FONT_HERSHEY_SIMPLEX, .42, (0, 220, 255), 1)
+        cv2.putText(output, f"RED BAND: {evidence.red_marker_detected} y={evidence.red_marker_y} span={evidence.red_marker_span}", (18, 182), cv2.FONT_HERSHEY_SIMPLEX, .46, (0, 80, 255), 1)
+        cv2.putText(output, f"LOOKAHEAD: ({evidence.lookahead_x}, {evidence.lookahead_y}) path={evidence.path_length_px}px  MOTOR: {motor_text}", (18, 204), cv2.FONT_HERSHEY_SIMPLEX, .46, (0, 255, 255), 1)
+        cv2.putText(output, f"CONF: {evidence.confidence:.2f}  narrow-centre={evidence.line_center_x}  M: start/pause", (18, 226), cv2.FONT_HERSHEY_SIMPLEX, .44, (190, 190, 190), 1)
+        cv2.putText(output, "Red pre-authorizes; white endpoint and stem loss remain mandatory.", (18, 248), cv2.FONT_HERSHEY_SIMPLEX, .42, (0, 220, 255), 1)
         return output
 
     def _run(self) -> None:
@@ -330,7 +334,7 @@ class ScanlineIShapeRouteTracker:
                     self.publisher.publish(encoded.tobytes())
                 if self.gate.enabled() or frame_index % max(1, int(config.process_fps)) == 0:
                     self._write_run_log(evidence, decision, frame_index, now, motor_text, commanded)
-                self._set_status(state=decision.state.value, detail=decision.reason, frame=frame_index, confidence=evidence.confidence, endpoint_detected=evidence.endpoint_detected, endpoint_y=evidence.endpoint_y, endpoint_width=evidence.endpoint_width, junction_detected=evidence.junction_detected, junction_y=evidence.junction_y, junction_arm_count=evidence.junction_arm_count, lookahead_x=evidence.lookahead_x, lookahead_y=evidence.lookahead_y, path_length_px=evidence.path_length_px, motor=motor_text)
+                self._set_status(state=decision.state.value, detail=decision.reason, frame=frame_index, confidence=evidence.confidence, endpoint_detected=evidence.endpoint_detected, endpoint_y=evidence.endpoint_y, endpoint_width=evidence.endpoint_width, junction_detected=evidence.junction_detected, junction_y=evidence.junction_y, junction_arm_count=evidence.junction_arm_count, red_marker_detected=evidence.red_marker_detected, red_marker_y=evidence.red_marker_y, red_marker_span=evidence.red_marker_span, lookahead_x=evidence.lookahead_x, lookahead_y=evidence.lookahead_y, path_length_px=evidence.path_length_px, motor=motor_text)
                 frame_index += 1
         except Exception as exc:
             self._set_status(running=False, state="error", detail=str(exc))

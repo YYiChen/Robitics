@@ -51,6 +51,9 @@ class ScanlineEvidence:
     junction_detected: bool = False
     junction_y: int | None = None
     junction_arm_count: int = 0
+    red_marker_detected: bool = False
+    red_marker_y: int | None = None
+    red_marker_span: int | None = None
     frame_height: int = 0
 
 
