@@ -76,6 +76,14 @@ def pwm_for_line(result: FastLineResult, frame_width: int, straight_pwm: int, co
     offset = (result.center_x - frame_width / 2.0) / max(1.0, frame_width / 2.0)
     if abs(offset) <= config.deadband:
         return straight_pwm, straight_pwm
-    correction = int(round(min(config.max_correction_pwm, max(config.min_correction_pwm, abs(offset) * config.correction_gain))))
+    # The correction is differential: one wheel receives base + correction.
+    # A configuration such as base=85 and max_correction=180 used to yield
+    # 265, which the controller correctly rejects and which must not kill the
+    # vision worker.  Limit correction to the remaining PWM headroom first.
+    headroom = max(0, 255 - abs(int(straight_pwm)))
+    correction_cap = min(config.max_correction_pwm, headroom)
+    correction = int(round(min(correction_cap, max(config.min_correction_pwm, abs(offset) * config.correction_gain))))
     # Centre to the right means steer right: right wheel slows, left wheel speeds up.
-    return (straight_pwm - correction, straight_pwm + correction) if offset > 0 else (straight_pwm + correction, straight_pwm - correction)
+    right, left = ((straight_pwm - correction, straight_pwm + correction) if offset > 0 else (straight_pwm + correction, straight_pwm - correction))
+    # Retain a final hard guard for invalid future configuration values.
+    return max(-255, min(255, int(right))), max(-255, min(255, int(left)))

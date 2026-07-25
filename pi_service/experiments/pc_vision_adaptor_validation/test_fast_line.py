@@ -1,7 +1,7 @@
 from __future__ import annotations
 import unittest
 import numpy as np
-from fast_line import find_fast_line, pwm_for_line
+from fast_line import FastLineConfig, FastLineResult, find_fast_line, pwm_for_line
 
 
 class FastLineTests(unittest.TestCase):
@@ -17,3 +17,12 @@ class FastLineTests(unittest.TestCase):
         frame = np.zeros((120, 160, 3), dtype=np.uint8); frame[:] = (45, 110, 30)
         frame[96:, :] = (245, 245, 245)
         self.assertFalse(find_fast_line(frame).valid)
+
+    def test_caps_differential_pwm_at_controller_limit(self):
+        result = FastLineResult(True, 160.0, (), 1.0)
+        right, left = pwm_for_line(
+            result, 160, 85,
+            FastLineConfig(correction_gain=260.0, max_correction_pwm=180),
+        )
+        self.assertEqual((right, left), (-85, 255))
+        self.assertTrue(all(-255 <= value <= 255 for value in (right, left)))
