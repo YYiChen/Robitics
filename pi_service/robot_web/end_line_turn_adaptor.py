@@ -51,13 +51,8 @@ TUNING_RULES = {
     "turn_180_pwm": (int, 0, 255),
     "turn_180_step_seconds": (float, .05, 20.0),
     "turn_interstep_pause_seconds": (float, 0.0, 10.0),
-    "red_alignment_tolerance_degrees": (float, 2.0, 30.0),
-    "red_alignment_overshoot_degrees": (float, 1.0, 30.0),
+    "red_alignment_min_angle": (float, 45.0, 90.0),
     "red_alignment_confirm_frames": (int, 1, 10),
-    "red_alignment_roi_left_ratio": (float, 0.0, .45),
-    "red_alignment_roi_right_ratio": (float, .55, 1.0),
-    "red_alignment_roi_top_ratio": (float, 0.0, .75),
-    "red_alignment_roi_bottom_ratio": (float, .25, 1.0),
     "turn_90_max_steps": (int, 1, 12),
     "turn_180_max_steps": (int, 1, 24),
 }
@@ -72,10 +67,8 @@ class EndLineTurnAdaptorRouteTracker:
         self._last_center_x, self._motor_active = None, False
         self._tuning_path = tuning_path
         (self._process_fps, self._straight_pwm, self._fast_config, self._line_config,
-         self._turn_interstep_pause_seconds, self._red_alignment_tolerance_degrees,
-         self._red_alignment_overshoot_degrees, self._red_alignment_confirm_frames,
-         self._red_alignment_roi_left_ratio, self._red_alignment_roi_right_ratio,
-         self._red_alignment_roi_top_ratio, self._red_alignment_roi_bottom_ratio, self._turn_90_max_steps,
+         self._turn_interstep_pause_seconds, self._red_alignment_min_angle,
+         self._red_alignment_confirm_frames, self._turn_90_max_steps,
          self._turn_180_max_steps) = self._load_tuning()
         self._turn_90 = load_turn_profile(TURN_90_PATH, TurnProfile(200, 1.25), steps=2)
         self._turn_180 = load_turn_profile(TURN_180_PATH, TurnProfile(200, 1.25), steps=4)
@@ -85,8 +78,6 @@ class EndLineTurnAdaptorRouteTracker:
         self._motion_phase, self._action_until, self._pending_turn_side = "FOLLOW", 0.0, None
         self._manual_degrees, self._manual_profile = None, None
         self._manual_max_steps, self._manual_steps_started = 0, 0
-        self._manual_drive_side, self._manual_red_closed_loop = None, False
-        self._manual_best_abs_error = None
         self._red_alignment_streak = 0
         # This deployment is deliberately keyboard-only: M arms turn commands
         # but must never make the vehicle start following the white line.
@@ -131,7 +122,6 @@ class EndLineTurnAdaptorRouteTracker:
             self._last_red_side, self._last_red_seen_frame = None, -10_000
             self._motion_phase, self._action_until, self._pending_turn_side = "FOLLOW", 0.0, None
             self._manual_max_steps, self._manual_steps_started, self._red_alignment_streak = 0, 0, 0
-            self._manual_drive_side, self._manual_red_closed_loop, self._manual_best_abs_error = None, False, None
         self._set_status(enabled=enabled, detail="按键转向已解锁，等待 Q/E/U/I" if enabled else "已暂停，电机已停止")
         return self.status_dict()
 
@@ -143,9 +133,9 @@ class EndLineTurnAdaptorRouteTracker:
         with self._tuning_lock:
             self._turn_90 = load_turn_profile(TURN_90_PATH, self._turn_90, steps=2)
             self._turn_180 = load_turn_profile(TURN_180_PATH, self._turn_180, steps=4)
-            commands = {"LEFT_90": ("LEFT", 90, self._turn_90, self._turn_90_max_steps, True), "RIGHT_90": ("RIGHT", 90, self._turn_90, self._turn_90_max_steps, True), "LEFT_180": ("LEFT", 180, self._turn_180, self._turn_180_max_steps, False), "RIGHT_180": ("RIGHT", 180, self._turn_180, self._turn_180_max_steps, False)}
+            commands = {"LEFT_90": ("LEFT", 90, self._turn_90, self._turn_90_max_steps), "RIGHT_90": ("RIGHT", 90, self._turn_90, self._turn_90_max_steps), "LEFT_180": ("LEFT", 180, self._turn_180, self._turn_180_max_steps), "RIGHT_180": ("RIGHT", 180, self._turn_180, self._turn_180_max_steps)}
         try:
-            side, degrees, profile, steps, red_closed_loop = commands[str(command).upper()]
+            side, degrees, profile, steps = commands[str(command).upper()]
         except KeyError as exc:
             raise ValueError("手动转向只支持 LEFT_90、RIGHT_90、LEFT_180、RIGHT_180") from exc
         if not self.gate.enabled():
@@ -155,7 +145,6 @@ class EndLineTurnAdaptorRouteTracker:
         self._stop_motor()
         self._pending_turn_side, self._manual_degrees, self._manual_profile = side, degrees, profile
         self._manual_max_steps, self._manual_steps_started, self._red_alignment_streak = steps, 1, 0
-        self._manual_drive_side, self._manual_red_closed_loop, self._manual_best_abs_error = side, red_closed_loop, None
         self._motion_phase, self._action_until = "MANUAL_STEP", time.monotonic() + profile.step_seconds
         self._set_status(state="MANUAL_STEP", detail=f"{side} {degrees}° red-calibrated pulse 1/{steps}", manual_turn=f"{side}_{degrees}")
         return self.status_dict()
@@ -173,16 +162,13 @@ class EndLineTurnAdaptorRouteTracker:
                 "turn_90_pwm": self._turn_90.pwm, "turn_90_step_seconds": self._turn_90.step_seconds,
                 "turn_180_pwm": self._turn_180.pwm, "turn_180_step_seconds": self._turn_180.step_seconds,
                 "turn_interstep_pause_seconds": self._turn_interstep_pause_seconds,
-                "red_alignment_tolerance_degrees": self._red_alignment_tolerance_degrees,
-                "red_alignment_overshoot_degrees": self._red_alignment_overshoot_degrees,
+                "red_alignment_min_angle": self._red_alignment_min_angle,
                 "red_alignment_confirm_frames": self._red_alignment_confirm_frames,
-                "red_alignment_roi_left_ratio": self._red_alignment_roi_left_ratio, "red_alignment_roi_right_ratio": self._red_alignment_roi_right_ratio,
-                "red_alignment_roi_top_ratio": self._red_alignment_roi_top_ratio, "red_alignment_roi_bottom_ratio": self._red_alignment_roi_bottom_ratio,
                 "turn_90_max_steps": self._turn_90_max_steps, "turn_180_max_steps": self._turn_180_max_steps,
                 **asdict(self._line_config),
             }
 
-    def _load_tuning(self) -> tuple[float, int, FastLineConfig, EndLineConfig, float, float, float, int, float, float, float, float, int, int]:
+    def _load_tuning(self) -> tuple[float, int, FastLineConfig, EndLineConfig, float, float, int, int, int]:
         values = {
             "process_fps": 20.0, "straight_pwm": 85,
             "correction_deadband": FastLineConfig().deadband, "correction_gain": FastLineConfig().correction_gain,
@@ -192,9 +178,7 @@ class EndLineTurnAdaptorRouteTracker:
             "green_support_inner_px": FastLineConfig().green_support_inner_px, "green_support_outer_px": FastLineConfig().green_support_outer_px,
             "green_support_min_ratio": FastLineConfig().green_support_min_ratio,
             "turn_interstep_pause_seconds": 2.0,
-            "red_alignment_tolerance_degrees": 8.0, "red_alignment_overshoot_degrees": 5.0, "red_alignment_confirm_frames": 2,
-            "red_alignment_roi_left_ratio": .25, "red_alignment_roi_right_ratio": .75,
-            "red_alignment_roi_top_ratio": .20, "red_alignment_roi_bottom_ratio": .85,
+            "red_alignment_min_angle": 75.0, "red_alignment_confirm_frames": 2,
             "turn_90_max_steps": 4, "turn_180_max_steps": 8,
             **asdict(EndLineConfig()),
         }
@@ -211,10 +195,8 @@ class EndLineTurnAdaptorRouteTracker:
             pass
         process_fps, straight_pwm, fast_config, line_config = self._configs_from_values(values)
         return (process_fps, straight_pwm, fast_config, line_config,
-                values["turn_interstep_pause_seconds"], values["red_alignment_tolerance_degrees"],
-                values["red_alignment_overshoot_degrees"], values["red_alignment_confirm_frames"],
-                values["red_alignment_roi_left_ratio"], values["red_alignment_roi_right_ratio"],
-                values["red_alignment_roi_top_ratio"], values["red_alignment_roi_bottom_ratio"], values["turn_90_max_steps"],
+                values["turn_interstep_pause_seconds"], values["red_alignment_min_angle"],
+                values["red_alignment_confirm_frames"], values["turn_90_max_steps"],
                 values["turn_180_max_steps"])
 
     @staticmethod
@@ -244,8 +226,6 @@ class EndLineTurnAdaptorRouteTracker:
             raise ValueError("绿布色相最小值不能大于最大值")
         if current["green_support_inner_px"] >= current["green_support_outer_px"]:
             raise ValueError("绿布双侧内侧距离必须小于外侧距离")
-        if current["red_alignment_roi_left_ratio"] >= current["red_alignment_roi_right_ratio"] or current["red_alignment_roi_top_ratio"] >= current["red_alignment_roi_bottom_ratio"]:
-            raise ValueError("红线中央 ROI 的起点必须小于终点")
         process_fps, straight_pwm, fast_config, line_config = self._configs_from_values(current)
         self._tuning_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self._tuning_path.with_suffix(".tmp")
@@ -261,11 +241,8 @@ class EndLineTurnAdaptorRouteTracker:
             self._red_detector, self._planner = RedEndBandDetector(line_config), EndLineStopPlanner(line_config)
             self._turn_90, self._turn_180 = turn_90, turn_180
             self._turn_interstep_pause_seconds = current["turn_interstep_pause_seconds"]
-            self._red_alignment_tolerance_degrees = current["red_alignment_tolerance_degrees"]
-            self._red_alignment_overshoot_degrees = current["red_alignment_overshoot_degrees"]
+            self._red_alignment_min_angle = current["red_alignment_min_angle"]
             self._red_alignment_confirm_frames = current["red_alignment_confirm_frames"]
-            self._red_alignment_roi_left_ratio, self._red_alignment_roi_right_ratio = current["red_alignment_roi_left_ratio"], current["red_alignment_roi_right_ratio"]
-            self._red_alignment_roi_top_ratio, self._red_alignment_roi_bottom_ratio = current["red_alignment_roi_top_ratio"], current["red_alignment_roi_bottom_ratio"]
             self._turn_90_max_steps, self._turn_180_max_steps = current["turn_90_max_steps"], current["turn_180_max_steps"]
         return self.status_dict()
 
@@ -315,12 +292,6 @@ class EndLineTurnAdaptorRouteTracker:
                     line_analysis = analyse_fast_line(image, self._last_center_x, fast_config)
                     result = line_analysis.result
                     red = detector.detect(image)
-                    alignment = detector.detect_central_alignment(
-                        image,
-                        left_ratio=self._red_alignment_roi_left_ratio, right_ratio=self._red_alignment_roi_right_ratio,
-                        top_ratio=self._red_alignment_roi_top_ratio, bottom_ratio=self._red_alignment_roi_bottom_ratio,
-                        min_area=max(40, self._line_config.red_min_component_area // 2),
-                    )
                     decision = planner.step(line_valid=result.valid, red_detected=red.detected)
                 if result.center_x is not None:
                     self._last_center_x = result.center_x
@@ -334,28 +305,21 @@ class EndLineTurnAdaptorRouteTracker:
                 if self.gate.enabled():
                     recent_red = self._last_red_side is not None and frame_index - self._last_red_seen_frame <= self._line_config.red_direction_memory_frames
                     manual_active = self._motion_phase.startswith("MANUAL")
-                    if manual_active and self._manual_red_closed_loop:
-                        if alignment.detected and alignment.signed_angle_degrees is not None and abs(alignment.signed_angle_degrees) <= self._red_alignment_tolerance_degrees:
+                    if manual_active:
+                        if red.detected and red.angle_degrees is not None and red.angle_degrees >= self._red_alignment_min_angle:
                             self._red_alignment_streak += 1
                         else:
                             self._red_alignment_streak = 0
-                        if alignment.detected and alignment.signed_angle_degrees is not None:
-                            absolute_error = abs(alignment.signed_angle_degrees)
-                            if self._manual_best_abs_error is None or absolute_error <= self._manual_best_abs_error:
-                                self._manual_best_abs_error = absolute_error
-                            elif absolute_error >= self._manual_best_abs_error + self._red_alignment_overshoot_degrees:
-                                self._manual_drive_side = "RIGHT" if self._manual_drive_side == "LEFT" else "LEFT"
-                                self._manual_best_abs_error = absolute_error
                     alignment_confirmed = self._red_alignment_streak >= self._red_alignment_confirm_frames
                     if self._motion_phase == "MANUAL_STEP" and alignment_confirmed:
                         self._stop_motor()
                         self._motion_phase = "MANUAL_COMPLETE"
-                        state, motor, detail = "MANUAL_RED_ALIGNED", "STOP_CENTRAL_RED_ALIGNED", f"central red error {alignment.signed_angle_degrees:.1f}° confirmed"
+                        state, motor, detail = "MANUAL_RED_ALIGNED", "STOP_RED_VERTICAL", f"red angle {red.angle_degrees:.1f}° confirmed"
                     elif self._motion_phase == "MANUAL_STEP" and now < self._action_until:
                         profile = self._manual_profile
-                        commanded = (profile.pwm, -profile.pwm) if self._manual_drive_side == "LEFT" else (-profile.pwm, profile.pwm)
+                        commanded = (profile.pwm, -profile.pwm) if self._pending_turn_side == "LEFT" else (-profile.pwm, profile.pwm)
                         self.controller.set_direct_drive(*commanded); self._motor_active = True
-                        state, motor = f"MANUAL_STEP_{self._manual_steps_started}/{self._manual_max_steps}", f"MANUAL_{self._manual_drive_side}_{self._manual_degrees} R={commanded[0]} L={commanded[1]}"
+                        state, motor = f"MANUAL_STEP_{self._manual_steps_started}/{self._manual_max_steps}", f"MANUAL_{self._pending_turn_side}_{self._manual_degrees} R={commanded[0]} L={commanded[1]}"
                     elif self._motion_phase == "MANUAL_STEP":
                         self._stop_motor()
                         if self._manual_steps_started < self._manual_max_steps:
@@ -368,7 +332,7 @@ class EndLineTurnAdaptorRouteTracker:
                     elif self._motion_phase == "MANUAL_INTERSTEP_PAUSE" and alignment_confirmed:
                         self._stop_motor()
                         self._motion_phase = "MANUAL_COMPLETE"
-                        state, motor, detail = "MANUAL_RED_ALIGNED", "STOP_CENTRAL_RED_ALIGNED", f"central red error {alignment.signed_angle_degrees:.1f}° confirmed"
+                        state, motor, detail = "MANUAL_RED_ALIGNED", "STOP_RED_VERTICAL", f"red angle {red.angle_degrees:.1f}° confirmed"
                     elif self._motion_phase == "MANUAL_INTERSTEP_PAUSE" and now < self._action_until:
                         self._stop_motor()
                         state, motor = "MANUAL_INTERSTEP_PAUSE", f"STOP_COOLDOWN_{self._action_until - now:.2f}s"
@@ -434,19 +398,16 @@ class EndLineTurnAdaptorRouteTracker:
                 if red.detected and red.y is not None and red.bottom_y is not None:
                     cv2.line(overlay, (0, red.y), (overlay.shape[1] - 1, red.y), (0, 0, 255), 2)
                     cv2.line(overlay, (0, red.bottom_y), (overlay.shape[1] - 1, red.bottom_y), (0, 80, 255), 1)
-                roi_left, roi_right = int(overlay.shape[1] * self._red_alignment_roi_left_ratio), int(overlay.shape[1] * self._red_alignment_roi_right_ratio)
-                roi_top, roi_bottom = int(overlay.shape[0] * self._red_alignment_roi_top_ratio), int(overlay.shape[0] * self._red_alignment_roi_bottom_ratio)
-                cv2.rectangle(overlay, (roi_left, roi_top), (roi_right, roi_bottom), (255, 180, 0), 2)
                 cv2.rectangle(overlay, (10, 10), (1110, 112), (20, 20, 20), cv2.FILLED)
                 cv2.putText(overlay, f"END-LINE ADAPTOR: {'RUNNING' if self.gate.enabled() else 'PAUSED (press M)'}", (18, 38), cv2.FONT_HERSHEY_SIMPLEX, .65, (0, 220, 0) if self.gate.enabled() else (0, 180, 255), 2)
-                cv2.putText(overlay, f"WHITE: valid={result.valid} centre={result.center_x} conf={result.confidence:.2f}  RED-CENTRE: {alignment.detected} error={alignment.signed_angle_degrees}", (18, 66), cv2.FONT_HERSHEY_SIMPLEX, .43, (255, 255, 255), 1)
+                cv2.putText(overlay, f"WHITE: valid={result.valid} centre={result.center_x} conf={result.confidence:.2f}  RED: {red.detected} x={red.center_x} angle={red.angle_degrees} side={self._last_red_side}", (18, 66), cv2.FONT_HERSHEY_SIMPLEX, .43, (255, 255, 255), 1)
                 cv2.putText(overlay, f"STATE: {state}  {decision.reason}  MOTOR: {motor}", (18, 94), cv2.FONT_HERSHEY_SIMPLEX, .43, (0, 255, 255), 1)
                 ok, encoded = cv2.imencode(".jpg", overlay, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 if ok:
                     self.publisher.publish(encoded.tobytes())
                 if self.gate.enabled() or frame_index % 20 == 0:
                     self._write_log(frame_index, result, red, decision, state, motor, commanded, float(np.mean(line_analysis.course_mask)))
-                self._set_status(state=state, detail=detail, frame=frame_index, confidence=result.confidence, line_center_x=result.center_x, green_course_coverage=float(np.mean(line_analysis.course_mask)), green_gate_enabled=fast_config.green_gate_enabled, red_direction_marker=asdict(red), red_alignment=asdict(alignment), last_red_side=self._last_red_side, last_red_seen_frame=self._last_red_seen_frame, motion_phase=self._motion_phase, motor=motor)
+                self._set_status(state=state, detail=detail, frame=frame_index, confidence=result.confidence, line_center_x=result.center_x, green_course_coverage=float(np.mean(line_analysis.course_mask)), green_gate_enabled=fast_config.green_gate_enabled, red_direction_marker=asdict(red), last_red_side=self._last_red_side, last_red_seen_frame=self._last_red_seen_frame, motion_phase=self._motion_phase, motor=motor)
                 frame_index += 1
         except Exception as exc:
             import traceback
