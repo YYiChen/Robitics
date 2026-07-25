@@ -9,13 +9,16 @@ from pathlib import Path
 @dataclass(frozen=True)
 class TurnProfile:
     pwm: int
-    preset_seconds: float
+    step_seconds: float
 
 
-def load_turn_profile(path: Path, fallback: TurnProfile) -> TurnProfile:
+def load_turn_profile(path: Path, fallback: TurnProfile, *, steps: int = 1) -> TurnProfile:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        pwm, seconds = int(payload["pwm"]), float(payload["preset_seconds"])
+        pwm = int(payload["pwm"])
+        # Migrate the previous total-duration format without making an old
+        # 90/180 profile run two/four times longer after this update.
+        seconds = float(payload["step_seconds"]) if "step_seconds" in payload else float(payload["preset_seconds"]) / steps
         if not 0 <= pwm <= 255 or not .05 <= seconds <= 20.0:
             raise ValueError("profile value outside safe range")
         return TurnProfile(pwm, seconds)
@@ -24,7 +27,7 @@ def load_turn_profile(path: Path, fallback: TurnProfile) -> TurnProfile:
 
 
 def save_turn_profile(path: Path, profile: TurnProfile) -> None:
-    if not 0 <= profile.pwm <= 255 or not .05 <= profile.preset_seconds <= 20.0:
+    if not 0 <= profile.pwm <= 255 or not .05 <= profile.step_seconds <= 20.0:
         raise ValueError("转向 PWM 或时间超出安全范围")
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")

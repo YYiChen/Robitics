@@ -51,9 +51,10 @@ TUNING_RULES = {
     "red_direction_memory_frames": (int, 1, 300),
     "brake_hold_seconds": (float, 0.0, 3.0),
     "turn_90_pwm": (int, 0, 255),
-    "turn_90_seconds": (float, .05, 20.0),
+    "turn_90_step_seconds": (float, .05, 20.0),
     "turn_180_pwm": (int, 0, 255),
-    "turn_180_seconds": (float, .05, 20.0),
+    "turn_180_step_seconds": (float, .05, 20.0),
+    "turn_interstep_pause_seconds": (float, 0.0, 10.0),
 }
 
 
@@ -65,14 +66,15 @@ class EndLineTurnAdaptorRouteTracker:
         self._stop, self._thread, self._lock, self._tuning_lock = threading.Event(), None, threading.RLock(), threading.RLock()
         self._last_center_x, self._motor_active = None, False
         self._tuning_path = tuning_path
-        self._process_fps, self._straight_pwm, self._fast_config, self._line_config = self._load_tuning()
-        self._turn_90 = load_turn_profile(TURN_90_PATH, TurnProfile(200, 2.5))
-        self._turn_180 = load_turn_profile(TURN_180_PATH, TurnProfile(200, 5.0))
+        self._process_fps, self._straight_pwm, self._fast_config, self._line_config, self._turn_interstep_pause_seconds = self._load_tuning()
+        self._turn_90 = load_turn_profile(TURN_90_PATH, TurnProfile(200, 1.25), steps=2)
+        self._turn_180 = load_turn_profile(TURN_180_PATH, TurnProfile(200, 1.25), steps=4)
         self._planner = EndLineStopPlanner(self._line_config)
         self._red_detector = RedEndBandDetector(self._line_config)
         self._last_red_side, self._last_red_seen_frame = None, -10_000
         self._motion_phase, self._action_until, self._pending_turn_side = "FOLLOW", 0.0, None
         self._manual_degrees, self._manual_profile, self._manual_search_until = None, None, 0.0
+        self._manual_total_steps, self._manual_remaining_steps = 0, 0
         # This deployment is deliberately keyboard-only: M arms turn commands
         # but must never make the vehicle start following the white line.
         self._manual_only = True
@@ -124,11 +126,11 @@ class EndLineTurnAdaptorRouteTracker:
         # web save so a profile copied/edited on the Pi is effective on the
         # very next Q/E/U/I press without restarting the web process.
         with self._tuning_lock:
-            self._turn_90 = load_turn_profile(TURN_90_PATH, self._turn_90)
-            self._turn_180 = load_turn_profile(TURN_180_PATH, self._turn_180)
-            commands = {"LEFT_90": ("LEFT", 90, self._turn_90), "RIGHT_90": ("RIGHT", 90, self._turn_90), "LEFT_180": ("LEFT", 180, self._turn_180), "RIGHT_180": ("RIGHT", 180, self._turn_180)}
+            self._turn_90 = load_turn_profile(TURN_90_PATH, self._turn_90, steps=2)
+            self._turn_180 = load_turn_profile(TURN_180_PATH, self._turn_180, steps=4)
+            commands = {"LEFT_90": ("LEFT", 90, self._turn_90, 2), "RIGHT_90": ("RIGHT", 90, self._turn_90, 2), "LEFT_180": ("LEFT", 180, self._turn_180, 4), "RIGHT_180": ("RIGHT", 180, self._turn_180, 4)}
         try:
-            side, degrees, profile = commands[str(command).upper()]
+            side, degrees, profile, steps = commands[str(command).upper()]
         except KeyError as exc:
             raise ValueError("手动转向只支持 LEFT_90、RIGHT_90、LEFT_180、RIGHT_180") from exc
         if not self.gate.enabled():
@@ -137,9 +139,10 @@ class EndLineTurnAdaptorRouteTracker:
             raise ValueError("当前已有转向动作，请等待其完成或按 M 停止")
         self._stop_motor()
         self._pending_turn_side, self._manual_degrees, self._manual_profile = side, degrees, profile
-        self._motion_phase, self._action_until = "MANUAL_PRESET", time.monotonic() + profile.preset_seconds
+        self._manual_total_steps = self._manual_remaining_steps = steps
+        self._motion_phase, self._action_until = "MANUAL_STEP", time.monotonic() + profile.step_seconds
         self._manual_search_until = 0.0
-        self._set_status(state="MANUAL_PRESET", detail=f"{side} {degrees}° preset", manual_turn=f"{side}_{degrees}")
+        self._set_status(state="MANUAL_STEP", detail=f"{side} {degrees}° step 1/{steps}", manual_turn=f"{side}_{degrees}")
         return self.status_dict()
 
     def _tuning_values(self) -> dict:
@@ -152,12 +155,13 @@ class EndLineTurnAdaptorRouteTracker:
                 "green_saturation_min": self._fast_config.green_saturation_min, "green_dilate_radius_px": self._fast_config.green_dilate_radius_px,
                 "green_support_inner_px": self._fast_config.green_support_inner_px, "green_support_outer_px": self._fast_config.green_support_outer_px,
                 "green_support_min_ratio": self._fast_config.green_support_min_ratio,
-                "turn_90_pwm": self._turn_90.pwm, "turn_90_seconds": self._turn_90.preset_seconds,
-                "turn_180_pwm": self._turn_180.pwm, "turn_180_seconds": self._turn_180.preset_seconds,
+                "turn_90_pwm": self._turn_90.pwm, "turn_90_step_seconds": self._turn_90.step_seconds,
+                "turn_180_pwm": self._turn_180.pwm, "turn_180_step_seconds": self._turn_180.step_seconds,
+                "turn_interstep_pause_seconds": self._turn_interstep_pause_seconds,
                 **asdict(self._line_config),
             }
 
-    def _load_tuning(self) -> tuple[float, int, FastLineConfig, EndLineConfig]:
+    def _load_tuning(self) -> tuple[float, int, FastLineConfig, EndLineConfig, float]:
         values = {
             "process_fps": 20.0, "straight_pwm": 85,
             "correction_deadband": FastLineConfig().deadband, "correction_gain": FastLineConfig().correction_gain,
@@ -166,6 +170,7 @@ class EndLineTurnAdaptorRouteTracker:
             "green_saturation_min": FastLineConfig().green_saturation_min, "green_dilate_radius_px": FastLineConfig().green_dilate_radius_px,
             "green_support_inner_px": FastLineConfig().green_support_inner_px, "green_support_outer_px": FastLineConfig().green_support_outer_px,
             "green_support_min_ratio": FastLineConfig().green_support_min_ratio,
+            "turn_interstep_pause_seconds": 1.5,
             **asdict(EndLineConfig()),
         }
         try:
@@ -179,7 +184,8 @@ class EndLineTurnAdaptorRouteTracker:
                             values[key] = converted
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             pass
-        return self._configs_from_values(values)
+        process_fps, straight_pwm, fast_config, line_config = self._configs_from_values(values)
+        return process_fps, straight_pwm, fast_config, line_config, values["turn_interstep_pause_seconds"]
 
     @staticmethod
     def _configs_from_values(values: dict) -> tuple[float, int, FastLineConfig, EndLineConfig]:
@@ -213,8 +219,8 @@ class EndLineTurnAdaptorRouteTracker:
         temporary = self._tuning_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         temporary.replace(self._tuning_path)
-        turn_90 = TurnProfile(current["turn_90_pwm"], current["turn_90_seconds"])
-        turn_180 = TurnProfile(current["turn_180_pwm"], current["turn_180_seconds"])
+        turn_90 = TurnProfile(current["turn_90_pwm"], current["turn_90_step_seconds"])
+        turn_180 = TurnProfile(current["turn_180_pwm"], current["turn_180_step_seconds"])
         save_turn_profile(TURN_90_PATH, turn_90)
         save_turn_profile(TURN_180_PATH, turn_180)
         with self._tuning_lock:
@@ -222,6 +228,7 @@ class EndLineTurnAdaptorRouteTracker:
             self._fast_config, self._line_config = fast_config, line_config
             self._red_detector, self._planner = RedEndBandDetector(line_config), EndLineStopPlanner(line_config)
             self._turn_90, self._turn_180 = turn_90, turn_180
+            self._turn_interstep_pause_seconds = current["turn_interstep_pause_seconds"]
         return self.status_dict()
 
     def _open_log(self) -> None:
@@ -282,15 +289,31 @@ class EndLineTurnAdaptorRouteTracker:
                 state, motor, commanded = decision.state.value, "PAUSED", None
                 if self.gate.enabled():
                     recent_red = self._last_red_side is not None and frame_index - self._last_red_seen_frame <= self._line_config.red_direction_memory_frames
-                    if self._motion_phase == "MANUAL_PRESET" and now < self._action_until:
+                    if self._motion_phase == "MANUAL_STEP" and now < self._action_until:
                         profile = self._manual_profile
                         commanded = (profile.pwm, -profile.pwm) if self._pending_turn_side == "LEFT" else (-profile.pwm, profile.pwm)
                         self.controller.set_direct_drive(*commanded); self._motor_active = True
-                        state, motor = "MANUAL_PRESET", f"MANUAL_{self._pending_turn_side}_{self._manual_degrees} R={commanded[0]} L={commanded[1]}"
-                    elif self._motion_phase == "MANUAL_PRESET":
-                        self._motion_phase = "MANUAL_SEARCH"
-                        self._manual_search_until = now + (1.5 if self._manual_degrees == 90 else 3.0)
-                    if self._motion_phase == "MANUAL_SEARCH":
+                        step_index = self._manual_total_steps - self._manual_remaining_steps + 1
+                        state, motor = f"MANUAL_STEP_{step_index}/{self._manual_total_steps}", f"MANUAL_{self._pending_turn_side}_{self._manual_degrees} R={commanded[0]} L={commanded[1]}"
+                    elif self._motion_phase == "MANUAL_STEP":
+                        self._stop_motor()
+                        self._manual_remaining_steps -= 1
+                        if self._manual_remaining_steps > 0:
+                            self._motion_phase = "MANUAL_INTERSTEP_PAUSE"
+                            self._action_until = now + self._turn_interstep_pause_seconds
+                            state, motor = "MANUAL_INTERSTEP_PAUSE", f"STOP_COOLDOWN_{self._turn_interstep_pause_seconds:.2f}s"
+                        else:
+                            self._motion_phase = "MANUAL_SEARCH"
+                            self._manual_search_until = now + (1.5 if self._manual_degrees == 90 else 3.0)
+                            state, motor = "MANUAL_STEPS_COMPLETE", "STOP_BEFORE_RED_ALIGN"
+                    elif self._motion_phase == "MANUAL_INTERSTEP_PAUSE" and now < self._action_until:
+                        self._stop_motor()
+                        state, motor = "MANUAL_INTERSTEP_PAUSE", f"STOP_COOLDOWN_{self._action_until - now:.2f}s"
+                    elif self._motion_phase == "MANUAL_INTERSTEP_PAUSE":
+                        self._motion_phase = "MANUAL_STEP"
+                        self._action_until = now + self._manual_profile.step_seconds
+                        state, motor = "MANUAL_NEXT_STEP", "STOP_STARTING_NEXT_STEP"
+                    elif self._motion_phase == "MANUAL_SEARCH":
                         # A ground strip parallel to the car's forward axis is
                         # near vertical in the local camera image.  The wide
                         # tolerance absorbs fish-eye curvature; require live
@@ -314,7 +337,7 @@ class EndLineTurnAdaptorRouteTracker:
                         self._stop_motor()
                         state, motor = "BRAKE_BEFORE_90", "STOP_BEFORE_PIVOT"
                     elif self._motion_phase == "BRAKE_HOLD":
-                        self._motion_phase, self._action_until = "PIVOT", now + self._turn_90.preset_seconds
+                        self._motion_phase, self._action_until = "PIVOT", now + self._turn_90.step_seconds
                     manual_active = self._motion_phase.startswith("MANUAL")
                     if manual_active:
                         pass

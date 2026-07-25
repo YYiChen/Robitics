@@ -1,4 +1,4 @@
 {
   "pwm": 200,
-  "preset_seconds": 2.8
+  "step_seconds": 1.4
 }

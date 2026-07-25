@@ -18,5 +18,11 @@ class TurnProfileTests(unittest.TestCase):
     def test_invalid_profile_falls_back(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "turn.json"
-            path.write_text('{"pwm": 300, "preset_seconds": -1}', encoding="utf-8")
+            path.write_text('{"pwm": 300, "step_seconds": -1}', encoding="utf-8")
             self.assertEqual(load_turn_profile(path, TurnProfile(200, 2.5)), TurnProfile(200, 2.5))
+
+    def test_legacy_total_duration_migrates_to_per_step_duration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "turn.json"
+            path.write_text('{"pwm": 200, "preset_seconds": 2.8}', encoding="utf-8")
+            self.assertEqual(load_turn_profile(path, TurnProfile(1, .1), steps=2), TurnProfile(200, 1.4))
