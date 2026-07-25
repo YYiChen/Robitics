@@ -23,7 +23,7 @@ from track_line.detector import OpenCVLineDetector  # noqa: E402
 from track_line.visualization import render_debug  # noqa: E402
 
 
-DEFAULT_CONFIG = TRACK_SRC / "track_line" / "config.fixed_green_white_course.json"
+DEFAULT_CONFIG = TRACK_SRC / "track_line" / "config.dark_line.json"
 
 
 def parse_args() -> argparse.Namespace:

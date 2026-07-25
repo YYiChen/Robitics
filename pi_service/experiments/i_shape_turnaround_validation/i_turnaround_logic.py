@@ -69,7 +69,10 @@ class IShapeTurnaroundPlanner:
     def _is_endpoint(self, evidence: RouteEvidence) -> bool:
         if not evidence.valid_line or evidence.confidence < self.config.minimum_confidence:
             return False
-        if not evidence.marker_detected or evidence.marker_point_px is None or evidence.marker_branch_count < 3:
+        # A terminal I-shape bar is normally a T in the skeleton, not a 4-way
+        # X. The detector still supplies its candidate point even when its
+        # stricter generic marker flag is false.
+        if evidence.marker_point_px is None or evidence.marker_branch_count < 2:
             return False
         span_x, span_y = evidence.span
         if span_y < evidence.frame_height * self.config.minimum_straight_span_ratio:
@@ -84,8 +87,8 @@ class IShapeTurnaroundPlanner:
     def _is_reacquired_straight(self, evidence: RouteEvidence) -> bool:
         if not evidence.valid_line or evidence.confidence < self.config.minimum_confidence:
             return False
-        # A transverse bar/X is explicitly rejected during pivot recovery.
-        if evidence.marker_detected:
+        # A transverse bar/T/X is explicitly rejected during pivot recovery.
+        if evidence.marker_detected or evidence.marker_point_px is not None:
             return False
         span_x, span_y = evidence.span
         return span_y >= evidence.frame_height * self.config.minimum_straight_span_ratio and span_y >= max(1.0, span_x) * self.config.minimum_straight_aspect
