@@ -11,8 +11,15 @@ import numpy as np
 
 @dataclass(frozen=True)
 class ScanlineConfig:
-    track_rows: tuple[float, ...] = (0.84, 0.62, 0.42)
-    bar_rows: tuple[float, ...] = (0.56, 0.63, 0.70, 0.77, 0.84)
+    # The terminal bar can fill the middle of the picture while the remaining
+    # longitudinal stem exists only close to the car.  Keep all line-proof
+    # samples in that near field so the wide bar cannot erase the evidence for
+    # the stem that leads into it.
+    track_rows: tuple[float, ...] = (0.92, 0.86, 0.80)
+    # Scan the complete lower terminal region independently for a wide run.
+    # These rows are deliberately separate from ``track_rows``: the bar is
+    # endpoint evidence, never a candidate left/right route.
+    bar_rows: tuple[float, ...] = (0.58, 0.61, 0.64, 0.67, 0.70, 0.73, 0.76, 0.79, 0.82)
     near_anchor_ratio: float = 0.90
     narrow_width_ratio: float = 0.18
     endpoint_width_ratio: float = 0.32
