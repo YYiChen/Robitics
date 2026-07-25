@@ -78,14 +78,18 @@ class PcVisionAdaptorRouteTracker:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self._run_log = (log_dir / f"pc_vision_adaptor_{stamp}.jsonl").open("a", encoding="utf-8")
 
-    def _write_run_log(self, *, frame: int, result, event, state: str, motor: str, commanded: tuple[int, int] | None) -> None:
+    def _write_run_log(self, *, frame: int, frame_at_ms: int, result, event, state: str, motor: str, commanded: tuple[int, int] | None) -> None:
         if self._run_log is None:
             return
         controller_status = self.controller.status() if hasattr(self.controller, "status") else {}
         self._run_log.write(json.dumps({
-            "time_utc": datetime.now(timezone.utc).isoformat(), "frame": frame,
+            "time_utc": datetime.now(timezone.utc).isoformat(), "kind": "pi_control_cycle", "frame": frame, "frame_at_ms": frame_at_ms,
             "confidence": result.confidence, "line_center_x": result.center_x,
             "line_centers": result.centers, "pc_event": event.event if event else None,
+            "pc_event_frame_seq": event.frame_seq if event else None,
+            "pc_event_captured_at_ms": event.captured_at_ms if event else None,
+            "pc_event_age_ms": max(0, frame_at_ms - self._event_received_ms) if self._event_received_ms else None,
+            "gate_enabled": self.gate.enabled(), "motion_phase": self._motion_phase,
             "state": state, "motor": motor,
             "commanded_pwm": None if commanded is None else {"right": commanded[0], "left": commanded[1]},
             "motor_output": controller_status.get("motor_output"),
@@ -229,7 +233,7 @@ class PcVisionAdaptorRouteTracker:
                 # while merely previewing a paused camera, write one health
                 # record per second instead of creating an unnecessary log.
                 if self.gate.enabled() or frame % max(1, int(self.config.process_fps)) == 0:
-                    self._write_run_log(frame=frame, result=result, event=event, state=state, motor=motor, commanded=commanded)
+                    self._write_run_log(frame=frame, frame_at_ms=now_ms, result=result, event=event, state=state, motor=motor, commanded=commanded)
                 self._set_status(state=state, detail=motor, frame=frame, confidence=result.confidence, line_center_x=result.center_x, motor=motor)
                 frame += 1
         except Exception as exc:

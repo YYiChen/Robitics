@@ -37,7 +37,31 @@ def _pi_centers(header: str) -> list[tuple[int, float, int]]:
     return centers
 
 
-def render_complete_overlay(frame, analyzer, component_mask, evidence, red, event: str, pi_centers, pi_confidence: float):
+def _append_jsonl(path: Path, record: dict) -> None:
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def _pi_runtime_snapshot(pi_url: str) -> dict:
+    """Return only the Pi fields needed to correlate a PC decision to PWM."""
+    with urlopen(pi_url.rstrip("/") + "/api/status", timeout=2) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    autonomous = payload.get("autonomous", {})
+    robot = payload.get("robot", {})
+    return {
+        "frame": autonomous.get("frame"),
+        "running": autonomous.get("running"),
+        "enabled": autonomous.get("enabled"),
+        "state": autonomous.get("state"),
+        "motor": autonomous.get("motor"),
+        "pc_event": autonomous.get("pc_event"),
+        "pc_event_age_ms": autonomous.get("pc_event_age_ms"),
+        "motor_output": robot.get("motor_output"),
+        "arduino_reply": robot.get("reply"),
+    }
+
+
+def render_complete_overlay(frame, analyzer, component_mask, evidence, red, event: str, pi_centers, pi_confidence: float, debug: dict | None = None):
     """Render PC masks/geometry and Pi quick-scan data on one JPEG."""
     output = frame.copy()
     candidate_mask = analyzer.tape_candidate_mask
@@ -65,12 +89,16 @@ def render_complete_overlay(frame, analyzer, component_mask, evidence, red, even
         cv2.line(output, (0, evidence.endpoint_y), (output.shape[1]-1, evidence.endpoint_y), (0, 165, 255), 2)
     if evidence.junction_detected and evidence.junction_y is not None:
         cv2.line(output, (0, evidence.junction_y), (output.shape[1]-1, evidence.junction_y), (255, 0, 255), 1)
-    cv2.rectangle(output, (8, 8), (990, 154), (20, 20, 20), cv2.FILLED)
+    debug = debug or {}
+    cv2.rectangle(output, (8, 8), (1080, 202), (20, 20, 20), cv2.FILLED)
     cv2.putText(output, "PC FULL ANALYSIS -> PI SAFE MOTOR ADAPTOR", (16, 34), cv2.FONT_HERSHEY_SIMPLEX, .63, (0, 220, 0), 2)
     cv2.putText(output, f"PC EVENT: {event}  RED: {red.phase} layers={red.layer_count} turn=({red.turn_y},{red.turn_bottom_y})", (16, 60), cv2.FONT_HERSHEY_SIMPLEX, .43, (0, 165, 255), 1)
     cv2.putText(output, f"PC: conf={evidence.confidence:.2f} line={evidence.line_center_x} bar={evidence.endpoint_detected}@{evidence.endpoint_y} junction={evidence.junction_detected}@{evidence.junction_y}", (16, 84), cv2.FONT_HERSHEY_SIMPLEX, .40, (255,255,255), 1)
     cv2.putText(output, f"PI FAST cyan-x: conf={pi_confidence:.2f} rows={len(pi_centers)} | PC green-dot: scanline", (16, 108), cv2.FONT_HERSHEY_SIMPLEX, .40, (255,255,0), 1)
-    cv2.putText(output, "yellow=tape / selected route; black=fit; red=green-field + red tape; orange=bar; purple=junction", (16, 132), cv2.FONT_HERSHEY_SIMPLEX, .38, (0,255,255), 1)
+    cv2.putText(output, f"LINK: pi_frame={debug.get('frame_seq')} capture_age={debug.get('capture_age_ms')}ms analysis={debug.get('analysis_ms')}ms event_rtt={debug.get('event_rtt_ms')}ms", (16, 132), cv2.FONT_HERSHEY_SIMPLEX, .38, (0,255,255), 1)
+    pi_state = debug.get("pi_status", {})
+    cv2.putText(output, f"PI ACK: {debug.get('event_response')} | state={pi_state.get('state')} motor={pi_state.get('motor')} output={pi_state.get('motor_output')}", (16, 156), cv2.FONT_HERSHEY_SIMPLEX, .38, (255,255,255), 1)
+    cv2.putText(output, "yellow=tape / selected route; black=fit; red=green-field + red tape; orange=bar; purple=junction", (16, 180), cv2.FONT_HERSHEY_SIMPLEX, .38, (0,255,255), 1)
     return output
 
 
@@ -79,12 +107,14 @@ def main() -> None:
     parser.add_argument("--pi-url", default="http://100.80.46.54:5000")
     parser.add_argument("--token", default="")
     parser.add_argument("--log", type=Path, default=Path("runtime_logs/pc_slow_analyzer.jsonl"))
+    parser.add_argument("--status-every", type=int, default=1, help="fetch a compact Pi status after every N accepted PC frames")
     parser.add_argument("--max-frames", type=int, default=0, help="process this many frames then exit; 0 means run continuously")
     args = parser.parse_args()
     args.log.parent.mkdir(parents=True, exist_ok=True)
     analyzer, planner, last_seq, processed = GreenWhiteHybridScanlineAnalyzer(), TwoRedBandPlanner(), -1, 0
     while True:
         try:
+            loop_started = time.monotonic()
             with urlopen(args.pi_url.rstrip("/") + "/api/vision-adaptor/frame", timeout=2) as response:
                 jpeg = response.read(); headers = response.headers
             frame_seq = int(headers.get("X-Vision-Frame-Seq", "-1"))
@@ -97,6 +127,7 @@ def main() -> None:
             frame = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
             if frame is None:
                 continue
+            analysis_started = time.monotonic()
             analysis = analyzer.analyze(frame)
             result = analysis.evidence
             red = planner.update(analyzer.red_band_layers, frame.shape[1], frame.shape[0])
@@ -105,11 +136,22 @@ def main() -> None:
             event = red.event
             if event == "CLEAR_ARM" and (result.junction_detected or result.endpoint_detected):
                 event = "TURN_WINDOW_ARMED"
-            annotated = render_complete_overlay(frame, analyzer, analysis.component_mask, result, red, event, pi_centers, pi_confidence)
+            analysis_ms = round((time.monotonic() - analysis_started) * 1000, 1)
             body = json.dumps({"token": args.token, "event": event, "frame_seq": frame_seq, "captured_at_ms": captured_at_ms, "event_at_ms": int(time.time() * 1000)}).encode()
             request = Request(args.pi_url.rstrip("/") + "/api/vision-adaptor/event", data=body, headers={"Content-Type": "application/json"}, method="POST")
-            with urlopen(request, timeout=2) as response:
-                accepted = response.read().decode()
+            event_started = time.monotonic()
+            try:
+                with urlopen(request, timeout=2) as response:
+                    accepted = response.read().decode("utf-8")
+            except HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace").strip()
+                _append_jsonl(args.log, {"time_ms": int(time.time() * 1000), "kind": "pc_to_pi_event_rejected", "frame_seq": frame_seq, "captured_at_ms": captured_at_ms, "capture_age_ms": int(time.time() * 1000) - captured_at_ms, "event": event, "analysis_ms": analysis_ms, "http_status": exc.code, "pi_response": detail})
+                print(f"[PC→PI] frame={frame_seq} event={event} analysis={analysis_ms}ms HTTP {exc.code}: {detail or exc.reason}", file=sys.stderr)
+                continue
+            event_rtt_ms = round((time.monotonic() - event_started) * 1000, 1)
+            pi_status = _pi_runtime_snapshot(args.pi_url) if processed % max(1, args.status_every) == 0 else {}
+            debug = {"frame_seq": frame_seq, "capture_age_ms": int(time.time() * 1000) - captured_at_ms, "analysis_ms": analysis_ms, "event_rtt_ms": event_rtt_ms, "event_response": accepted, "pi_status": pi_status}
+            annotated = render_complete_overlay(frame, analyzer, analysis.component_mask, result, red, event, pi_centers, pi_confidence, debug)
             ok, preview = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 78])
             if ok:
                 preview_request = Request(args.pi_url.rstrip("/") + "/api/vision-adaptor/preview", data=preview.tobytes(), headers={"Content-Type": "image/jpeg", "X-Vision-Adaptor-Token": args.token, "X-Vision-Frame-Seq": str(frame_seq), "X-Vision-Captured-At-Ms": str(captured_at_ms)}, method="POST")
@@ -117,8 +159,9 @@ def main() -> None:
                     preview_accepted = response.read().decode()
             else:
                 preview_accepted = "jpeg_encode_failed"
-            with args.log.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps({"time_ms": int(time.time() * 1000), "frame_seq": frame_seq, "event": event, "red_phase": red.phase, "red_layers": red.layer_count, "turn_y": red.turn_y, "turn_bottom_y": red.turn_bottom_y, "confidence": result.confidence, "pi_fast_confidence": pi_confidence, "accepted": accepted, "preview": preview_accepted}, ensure_ascii=False) + "\n")
+            record = {"time_ms": int(time.time() * 1000), "kind": "pc_to_pi_cycle", "frame_seq": frame_seq, "captured_at_ms": captured_at_ms, "capture_age_ms": debug["capture_age_ms"], "total_cycle_ms": round((time.monotonic() - loop_started) * 1000, 1), "analysis_ms": analysis_ms, "event_rtt_ms": event_rtt_ms, "event": event, "red_phase": red.phase, "red_layers": red.layer_count, "turn_y": red.turn_y, "turn_bottom_y": red.turn_bottom_y, "pc_confidence": result.confidence, "pc_line_center_x": result.line_center_x, "pc_endpoint_y": result.endpoint_y, "pc_junction_y": result.junction_y, "pi_fast_confidence": pi_confidence, "pi_fast_centers": pi_centers, "pi_event_response": accepted, "pi_status": pi_status, "preview_response": preview_accepted}
+            _append_jsonl(args.log, record)
+            print(f"[PC→PI] frame={frame_seq} event={event} age={debug['capture_age_ms']}ms analysis={analysis_ms}ms ack={accepted} | PI state={pi_status.get('state')} motor={pi_status.get('motor')} output={pi_status.get('motor_output')}")
             processed += 1
             if args.max_frames and processed >= args.max_frames:
                 return
