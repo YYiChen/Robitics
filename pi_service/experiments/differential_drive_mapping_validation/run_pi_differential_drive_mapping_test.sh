@@ -46,5 +46,5 @@ fi
 
 arduino_online >/dev/null 2>&1 || { echo "Arduino is not online; no drive command was sent." >&2; exit 1; }
 mkdir -p "${LOG_DIR}"
-echo "Safety: raise the drive wheels or keep clear space. The test lasts about 2.6 seconds. Ctrl+C stops M1/M2."
+echo "Safety: raise the drive wheels or keep clear space. The default test lasts about 11 seconds. Ctrl+C stops M1/M2."
 python3 -u "${HERE}/differential_drive_mapping_test.py" --controller-url "${CONTROLLER_URL}" "$@" 2>&1 | tee "${LOG_FILE}"

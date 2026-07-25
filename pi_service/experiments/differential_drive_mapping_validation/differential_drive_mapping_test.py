@@ -21,7 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--controller-url", default="http://127.0.0.1:5000")
     parser.add_argument("--slow-pwm", type=int, default=55, help="PWM of the deliberately slower side.")
     parser.add_argument("--fast-pwm", type=int, default=180, help="PWM of the deliberately faster side.")
-    parser.add_argument("--duration", type=float, default=.8, help="Seconds for each test phase; capped at 2.0.")
+    parser.add_argument("--duration", type=float, default=5.0, help="Seconds for each test phase; capped at 10.0.")
     parser.add_argument("--command-hz", type=float, default=12.0, help="Drive command heartbeat frequency.")
     parser.add_argument("--pause-seconds", type=float, default=1.0, help="Stopped gap between the two phases.")
     parser.add_argument("--dry-run", action="store_true", help="Print the sequence without contacting Arduino.")
@@ -33,8 +33,8 @@ def validate(args: argparse.Namespace) -> None:
         raise ValueError("PWM must be in [1, 255]")
     if args.fast_pwm <= args.slow_pwm:
         raise ValueError("fast-pwm must be greater than slow-pwm")
-    if not .1 <= args.duration <= 2.0:
-        raise ValueError("duration must be in [0.1, 2.0] seconds")
+    if not .1 <= args.duration <= 10.0:
+        raise ValueError("duration must be in [0.1, 10.0] seconds")
     if not 1 <= args.command_hz <= 30:
         raise ValueError("command-hz must be in [1, 30]")
     if not 0 <= args.pause_seconds <= 5:
