@@ -34,8 +34,11 @@ class PcVisionAdaptorConfig:
     precision_deadband: float = .015
     reverse_pwm: int = 55
     reverse_seconds: float = .45
-    remote_event_max_age_ms: int = 750
-    remote_armed_timeout_ms: int = 900
+    # The PC runs the complete green-field / red-band analysis, which normally
+    # takes longer than one Pi video frame.  These are visual-event freshness
+    # limits, not PWM authority: Pi still owns PWM and stops when updates end.
+    remote_event_max_age_ms: int = 2500
+    remote_armed_timeout_ms: int = 3000
     token: str = ""
 
 

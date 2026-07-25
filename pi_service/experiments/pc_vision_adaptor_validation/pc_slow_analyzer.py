@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import sys
 import time
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import cv2
@@ -123,6 +124,13 @@ def main() -> None:
                 return
         except KeyboardInterrupt:
             return
+        except HTTPError as exc:
+            # Flask returns a useful JSON validation message on 400.  Preserve
+            # it here; otherwise an expired frame and a malformed payload both
+            # look like an unexplained "BAD REQUEST" on the PC.
+            detail = exc.read().decode("utf-8", errors="replace").strip()
+            print(f"pc adaptor retry: HTTP {exc.code}: {detail or exc.reason}", file=sys.stderr)
+            time.sleep(.3)
         except Exception as exc:
             print(f"pc adaptor retry: {exc}", file=sys.stderr)
             time.sleep(.3)
