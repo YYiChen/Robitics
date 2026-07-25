@@ -107,16 +107,19 @@ def main() -> None:
     parser.add_argument("--pi-url", default="http://100.80.46.54:5000")
     parser.add_argument("--token", default="")
     parser.add_argument("--log", type=Path, default=HERE.parent / "runtime_logs" / "pc_slow_analyzer.jsonl")
-    parser.add_argument("--status-every", type=int, default=1, help="fetch a compact Pi status after every N accepted PC frames")
+    parser.add_argument("--status-every", type=int, default=10, help="fetch a compact Pi status after every N accepted PC frames; 0 disables polling")
     parser.add_argument("--max-frames", type=int, default=0, help="process this many frames then exit; 0 means run continuously")
     args = parser.parse_args()
     args.log.parent.mkdir(parents=True, exist_ok=True)
     analyzer, planner, last_seq, processed = GreenWhiteHybridScanlineAnalyzer(), TwoRedBandPlanner(), -1, 0
+    last_pi_status: dict = {}
     while True:
         try:
             loop_started = time.monotonic()
+            fetch_started = time.monotonic()
             with urlopen(args.pi_url.rstrip("/") + "/api/vision-adaptor/frame", timeout=2) as response:
                 jpeg = response.read(); headers = response.headers
+            fetch_ms = round((time.monotonic() - fetch_started) * 1000, 1)
             frame_seq = int(headers.get("X-Vision-Frame-Seq", "-1"))
             captured_at_ms = int(headers.get("X-Vision-Captured-At-Ms", "0"))
             pi_centers = _pi_centers(headers.get("X-Vision-Pi-Fast-Centers", ""))
@@ -149,19 +152,26 @@ def main() -> None:
                 print(f"[PC→PI] frame={frame_seq} event={event} analysis={analysis_ms}ms HTTP {exc.code}: {detail or exc.reason}", file=sys.stderr)
                 continue
             event_rtt_ms = round((time.monotonic() - event_started) * 1000, 1)
-            pi_status = _pi_runtime_snapshot(args.pi_url) if processed % max(1, args.status_every) == 0 else {}
+            status_rtt_ms = None
+            if args.status_every > 0 and processed % args.status_every == 0:
+                status_started = time.monotonic()
+                last_pi_status = _pi_runtime_snapshot(args.pi_url)
+                status_rtt_ms = round((time.monotonic() - status_started) * 1000, 1)
+            pi_status = last_pi_status
             debug = {"frame_seq": frame_seq, "capture_age_ms": int(time.time() * 1000) - captured_at_ms, "analysis_ms": analysis_ms, "event_rtt_ms": event_rtt_ms, "event_response": accepted, "pi_status": pi_status}
             annotated = render_complete_overlay(frame, analyzer, analysis.component_mask, result, red, event, pi_centers, pi_confidence, debug)
             ok, preview = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 78])
             if ok:
                 preview_request = Request(args.pi_url.rstrip("/") + "/api/vision-adaptor/preview", data=preview.tobytes(), headers={"Content-Type": "image/jpeg", "X-Vision-Adaptor-Token": args.token, "X-Vision-Frame-Seq": str(frame_seq), "X-Vision-Captured-At-Ms": str(captured_at_ms)}, method="POST")
+                preview_started = time.monotonic()
                 with urlopen(preview_request, timeout=2) as response:
                     preview_accepted = response.read().decode()
+                preview_rtt_ms = round((time.monotonic() - preview_started) * 1000, 1)
             else:
-                preview_accepted = "jpeg_encode_failed"
-            record = {"time_ms": int(time.time() * 1000), "kind": "pc_to_pi_cycle", "frame_seq": frame_seq, "captured_at_ms": captured_at_ms, "capture_age_ms": debug["capture_age_ms"], "total_cycle_ms": round((time.monotonic() - loop_started) * 1000, 1), "analysis_ms": analysis_ms, "event_rtt_ms": event_rtt_ms, "event": event, "red_phase": red.phase, "red_layers": red.layer_count, "turn_y": red.turn_y, "turn_bottom_y": red.turn_bottom_y, "pc_confidence": result.confidence, "pc_line_center_x": result.line_center_x, "pc_endpoint_y": result.endpoint_y, "pc_junction_y": result.junction_y, "pi_fast_confidence": pi_confidence, "pi_fast_centers": pi_centers, "pi_event_response": accepted, "pi_status": pi_status, "preview_response": preview_accepted}
+                preview_accepted, preview_rtt_ms = "jpeg_encode_failed", None
+            record = {"time_ms": int(time.time() * 1000), "kind": "pc_to_pi_cycle", "frame_seq": frame_seq, "captured_at_ms": captured_at_ms, "capture_age_ms": debug["capture_age_ms"], "total_cycle_ms": round((time.monotonic() - loop_started) * 1000, 1), "frame_fetch_ms": fetch_ms, "analysis_ms": analysis_ms, "event_rtt_ms": event_rtt_ms, "status_rtt_ms": status_rtt_ms, "preview_rtt_ms": preview_rtt_ms, "event": event, "red_phase": red.phase, "red_layers": red.layer_count, "turn_y": red.turn_y, "turn_bottom_y": red.turn_bottom_y, "pc_confidence": result.confidence, "pc_line_center_x": result.line_center_x, "pc_endpoint_y": result.endpoint_y, "pc_junction_y": result.junction_y, "pi_fast_confidence": pi_confidence, "pi_fast_centers": pi_centers, "pi_event_response": accepted, "pi_status": pi_status, "preview_response": preview_accepted}
             _append_jsonl(args.log, record)
-            print(f"[PC→PI] frame={frame_seq} event={event} age={debug['capture_age_ms']}ms analysis={analysis_ms}ms ack={accepted} | PI state={pi_status.get('state')} motor={pi_status.get('motor')} output={pi_status.get('motor_output')}")
+            print(f"[PC→PI] frame={frame_seq} fetch={fetch_ms}ms analysis={analysis_ms}ms event={event_rtt_ms}ms status={status_rtt_ms}ms preview={preview_rtt_ms}ms total={record['total_cycle_ms']}ms | event={event} PI={pi_status.get('state')} output={pi_status.get('motor_output')}")
             processed += 1
             if args.max_frames and processed >= args.max_frames:
                 return

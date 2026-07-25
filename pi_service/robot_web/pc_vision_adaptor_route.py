@@ -20,7 +20,9 @@ if str(EXPERIMENT) not in sys.path:
 from fast_line import FastLineConfig, find_fast_line, pwm_for_line  # noqa: E402
 from protocol import VisionEvent, parse_event  # noqa: E402
 
-PC_DEBUG_PREVIEW_MAX_AGE_MS = 8_000
+# A PC overlay is only a diagnostic view.  Keep its freshness honest: if the
+# PC cannot update it for three seconds, show the live Pi fallback instead.
+PC_DEBUG_PREVIEW_MAX_AGE_MS = 3_000
 
 
 @dataclass(frozen=True)
@@ -143,9 +145,6 @@ class PcVisionAdaptorRouteTracker:
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("PC 标注必须带帧号和采集时间") from exc
         now_ms = int(time.time() * 1000)
-        # The PC's full visual analysis is deliberately slower than Pi's
-        # near-field loop.  This image is diagnostics only, so retain it long
-        # enough to avoid alternating between two unrelated overlays.
         if now_ms - captured_at_ms > PC_DEBUG_PREVIEW_MAX_AGE_MS:
             raise ValueError("PC 标注帧已过期")
         with self._lock:
