@@ -21,6 +21,8 @@ if str(STRAIGHT_LINE_EXPERIMENT) not in sys.path:
     sys.path.insert(0, str(STRAIGHT_LINE_EXPERIMENT))
 
 from scanline_i_logic import (  # noqa: E402
+    HybridScanlineAnalyzer,
+    HybridScanlineConfig,
     IShapeScanlineAnalyzer,
     IShapeTurnaroundPlanner,
     TurnaroundConfig,
@@ -41,6 +43,7 @@ class ScanlineIRouteConfig:
     pivot_min_seconds: float = 2.5
     pivot_max_seconds: float = 5.0
     tuning_path: Path | None = None
+    use_hybrid: bool = True
 
 
 SCANLINE_TUNING_FIELDS = {
@@ -176,13 +179,20 @@ class ScanlineIShapeRouteTracker:
             cv2.circle(output, (int(x), y), 5, (0, 255, 0), -1)
         if evidence.endpoint_y is not None:
             cv2.line(output, (0, evidence.endpoint_y), (output.shape[1] - 1, evidence.endpoint_y), (0, 165, 255), 2)
+        # Hybrid: draw lookahead point (yellow) and junction line (magenta)
+        if evidence.lookahead_x is not None and evidence.lookahead_y is not None:
+            cv2.circle(output, (int(evidence.lookahead_x), evidence.lookahead_y), 7, (0, 255, 255), -1)
+        if evidence.junction_detected and evidence.junction_y is not None:
+            cv2.line(output, (0, evidence.junction_y), (output.shape[1] - 1, evidence.junction_y), (255, 0, 255), 1)
         color = (0, 220, 0) if self.gate.enabled() else (0, 180, 255)
-        cv2.rectangle(output, (10, 76), (940, 220), (20, 20, 20), cv2.FILLED)
+        bar_y = max(76 + 24 * 6, 220)
+        cv2.rectangle(output, (10, 76), (940, 250), (20, 20, 20), cv2.FILLED)
         cv2.putText(output, f"SCANLINE I-TURN: {'RUNNING' if self.gate.enabled() else 'PAUSED (press M)'}", (18, 104), cv2.FONT_HERSHEY_SIMPLEX, .65, color, 2)
         cv2.putText(output, f"STATE: {decision.state.value}  {decision.reason}", (18, 132), cv2.FONT_HERSHEY_SIMPLEX, .48, (255, 255, 255), 1)
-        cv2.putText(output, f"BAR: {evidence.endpoint_detected} y={evidence.endpoint_y} width={evidence.endpoint_width}  MOTOR: {motor_text}", (18, 160), cv2.FONT_HERSHEY_SIMPLEX, .46, (100, 220, 255), 1)
-        cv2.putText(output, f"CONF: {evidence.confidence:.2f}  narrow-centre={evidence.line_center_x}  M: start/pause", (18, 188), cv2.FONT_HERSHEY_SIMPLEX, .44, (190, 190, 190), 1)
-        cv2.putText(output, "Endpoint bar is never followed as a left/right path.", (18, 212), cv2.FONT_HERSHEY_SIMPLEX, .42, (0, 220, 255), 1)
+        cv2.putText(output, f"BAR: {evidence.endpoint_detected} y={evidence.endpoint_y} w={evidence.endpoint_width}  JUNCTION: {evidence.junction_detected} y={evidence.junction_y} arms={evidence.junction_arm_count}", (18, 160), cv2.FONT_HERSHEY_SIMPLEX, .46, (100, 220, 255), 1)
+        cv2.putText(output, f"LOOKAHEAD: ({evidence.lookahead_x}, {evidence.lookahead_y}) path={evidence.path_length_px}px  MOTOR: {motor_text}", (18, 188), cv2.FONT_HERSHEY_SIMPLEX, .46, (0, 255, 255), 1)
+        cv2.putText(output, f"CONF: {evidence.confidence:.2f}  narrow-centre={evidence.line_center_x}  M: start/pause", (18, 216), cv2.FONT_HERSHEY_SIMPLEX, .44, (190, 190, 190), 1)
+        cv2.putText(output, "Endpoint bar is never followed as a left/right path.", (18, 240), cv2.FONT_HERSHEY_SIMPLEX, .42, (0, 220, 255), 1)
         return output
 
     def _run(self) -> None:
@@ -190,11 +200,15 @@ class ScanlineIShapeRouteTracker:
             import cv2
             import numpy as np
 
-            analyzer = IShapeScanlineAnalyzer()
             with self._tuning_lock:
                 initial_config = self.config
+            if initial_config.use_hybrid:
+                analyzer = HybridScanlineAnalyzer()
+                self._set_status(running=True, state="ready", detail="Hybrid 扫描线 I 型识别运行中（骨架+交叉点预判）；按 M 开启自动行驶", mode="hybrid")
+            else:
+                analyzer = IShapeScanlineAnalyzer()
+                self._set_status(running=True, state="ready", detail="扫描线 I 型识别运行中；按 M 开启自动行驶", mode="legacy")
             planner = IShapeTurnaroundPlanner(TurnaroundConfig(pivot_min_seconds=initial_config.pivot_min_seconds, pivot_max_seconds=initial_config.pivot_max_seconds))
-            self._set_status(running=True, state="ready", detail="扫描线 I 型识别运行中；按 M 开启自动行驶")
             interval, last, frame_index = 1.0 / max(1.0, self.config.process_fps), 0.0, 0
             while not self._stop.is_set():
                 jpeg, now = self.camera.latest_jpeg(), time.monotonic()
@@ -243,7 +257,7 @@ class ScanlineIShapeRouteTracker:
                 ok, encoded = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 if ok:
                     self.publisher.publish(encoded.tobytes())
-                self._set_status(state=decision.state.value, detail=decision.reason, frame=frame_index, confidence=evidence.confidence, endpoint_detected=evidence.endpoint_detected, endpoint_y=evidence.endpoint_y, endpoint_width=evidence.endpoint_width, motor=motor_text)
+                self._set_status(state=decision.state.value, detail=decision.reason, frame=frame_index, confidence=evidence.confidence, endpoint_detected=evidence.endpoint_detected, endpoint_y=evidence.endpoint_y, endpoint_width=evidence.endpoint_width, junction_detected=evidence.junction_detected, junction_y=evidence.junction_y, junction_arm_count=evidence.junction_arm_count, lookahead_x=evidence.lookahead_x, lookahead_y=evidence.lookahead_y, path_length_px=evidence.path_length_px, motor=motor_text)
                 frame_index += 1
         except Exception as exc:
             self._set_status(running=False, state="error", detail=str(exc))

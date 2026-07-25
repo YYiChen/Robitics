@@ -210,6 +210,19 @@ class HybridScanlineAnalyzer:
         self._cached_path: tuple[tuple[int, int], ...] = ()
         self._previous_route_path: tuple[tuple[int, int], ...] = ()
 
+    @staticmethod
+    def _row_run(mask: np.ndarray, y: int) -> tuple[float, int] | None:
+        """Find the widest contiguous white segment on row y. (same as legacy)"""
+        xs = np.flatnonzero(mask[y] > 0)
+        if xs.size == 0:
+            return None
+        breaks = np.flatnonzero(np.diff(xs) > 1)
+        starts = np.r_[0, breaks + 1]
+        ends = np.r_[breaks, xs.size - 1]
+        groups = [(int(xs[start]), int(xs[end])) for start, end in zip(starts, ends)]
+        left, right = max(groups, key=lambda group: group[1] - group[0])
+        return (left + right) / 2.0, right - left + 1
+
     # ------------------------------------------------------------------
     # Preprocessing (from old detector._make_mask)
     # ------------------------------------------------------------------
