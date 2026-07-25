@@ -37,6 +37,16 @@ class RedEndBandObservation:
     angle_degrees: float | None = None  # long axis: 0 horizontal, 90 vertical
 
 
+@dataclass(frozen=True)
+class RedAlignmentObservation:
+    """Central-ROI red-line pose used only for 90-degree closed-loop turns."""
+    detected: bool
+    center_x: int | None = None
+    center_y: int | None = None
+    signed_angle_degrees: float | None = None  # 0 = vertical, sign = lean side
+    length_px: float = 0.0
+
+
 class EndLineState(str, Enum):
     FOLLOW_LINE = "FOLLOW_LINE"
     RED_DIRECTION_LOCKED = "RED_DIRECTION_LOCKED"
@@ -57,7 +67,7 @@ class RedEndBandDetector:
     def __init__(self, config: EndLineConfig = EndLineConfig()) -> None:
         self.config = config
 
-    def detect(self, frame: np.ndarray) -> RedEndBandObservation:
+    def _red_mask(self, frame: np.ndarray) -> np.ndarray:
         height, width = frame.shape[:2]
         blue, green, red_channel = cv2.split(frame)
         red_excess = red_channel.astype(np.int16) - np.maximum(blue, green).astype(np.int16)
@@ -72,6 +82,11 @@ class RedEndBandDetector:
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        return mask
+
+    def detect(self, frame: np.ndarray) -> RedEndBandObservation:
+        height, width = frame.shape[:2]
+        mask = self._red_mask(frame)
         count, _labels, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
         candidates = []
         for label in range(1, count):
@@ -88,6 +103,35 @@ class RedEndBandDetector:
         if long_angle > 90.0:
             long_angle = 180.0 - long_angle
         return RedEndBandObservation(True, int(round(centroid[0])), int(round(centroid[1])), y + component_height - 1, component_width, area, long_angle)
+
+    def detect_central_alignment(self, frame: np.ndarray, *, left_ratio: float, right_ratio: float, top_ratio: float, bottom_ratio: float, min_area: int) -> RedAlignmentObservation:
+        """Fit the red line only in the optical centre, avoiding fish-eye edges."""
+        height, width = frame.shape[:2]
+        left, right = int(width * left_ratio), int(width * right_ratio)
+        top, bottom = int(height * top_ratio), int(height * bottom_ratio)
+        if not (0 <= left < right <= width and 0 <= top < bottom <= height):
+            return RedAlignmentObservation(False)
+        mask = self._red_mask(frame)
+        central = np.zeros_like(mask)
+        central[top:bottom, left:right] = mask[top:bottom, left:right]
+        count, labels, stats, centroids = cv2.connectedComponentsWithStats(central, connectivity=8)
+        candidates = []
+        for label in range(1, count):
+            x, y, component_width, component_height, area = map(int, stats[label])
+            length = max(component_width, component_height)
+            if area >= min_area and length >= 24:
+                candidates.append((area, length, centroids[label], label))
+        if not candidates:
+            return RedAlignmentObservation(False)
+        area, length, centroid, label = max(candidates, key=lambda item: (item[1], item[0]))
+        points = np.column_stack(np.where(labels == label))[:, ::-1].astype(np.float32)
+        vx, vy, _x0, _y0 = (float(value) for value in cv2.fitLine(points, cv2.DIST_L2, 0, .01, .01).reshape(-1))
+        # Orient the undirected line toward the top of the image, so its lean
+        # around vertical has a stable sign in the central, low-distortion ROI.
+        if vy > 0:
+            vx, vy = -vx, -vy
+        signed_angle = float(np.degrees(np.arctan2(vx, -vy)))
+        return RedAlignmentObservation(True, int(round(centroid[0])), int(round(centroid[1])), signed_angle, float(length))
 
 
 class EndLineStopPlanner:

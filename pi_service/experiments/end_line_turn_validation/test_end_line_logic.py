@@ -39,3 +39,13 @@ class EndLineLogicTests(unittest.TestCase):
         planner.step(line_valid=False, red_detected=detector.detect(frame()).detected)
         decision = planner.step(line_valid=False, red_detected=detector.detect(frame()).detected)
         self.assertEqual(decision.state, EndLineState.STOPPED_UNSAFE_LINE_LOST)
+
+    def test_central_alignment_uses_only_low_distortion_roi(self):
+        detector = RedEndBandDetector()
+        image = frame()
+        cv2.line(image, (320, 170), (320, 400), (0, 0, 255), 18)
+        cv2.line(image, (18, 150), (18, 420), (0, 0, 255), 18)
+        alignment = detector.detect_central_alignment(image, left_ratio=.25, right_ratio=.75, top_ratio=.20, bottom_ratio=.85, min_area=60)
+        self.assertTrue(alignment.detected)
+        self.assertIsNotNone(alignment.signed_angle_degrees)
+        self.assertLess(abs(float(alignment.signed_angle_degrees)), 3.0)
