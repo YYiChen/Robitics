@@ -28,6 +28,8 @@ tools/windows_recorder/    Windows 端 MJPEG 图片记录工具
 
 `start_robot.sh` 是日常正式入口：`camera.py` 同时配置 CSI 主画面与 640×480 lores 输出，低延迟 MJPEG 直接读取 lores。高清 JPEG 默认 `2 FPS / 质量 75`，可在网页调为 `1–15 FPS`；关闭高清预览时不持续编码该通道。
 
+当前默认路线模式为 `pc_vision_adaptor`：树莓派只做底部近场白胶带跟随、网页预览、M 键门控和唯一的 M1/M2 PWM 输出；电脑端通过 `/api/vision-adaptor/frame` 拉取最新 JPEG，在本机运行绿地、红标、骨架和路口等重型识别，并仅向 `/api/vision-adaptor/event` 回传带帧号、时间和 token 的高层视觉事件。电脑端不能调用 PWM，也不能绕过 M 键。协议、电脑端启动命令、失联安全策略和测试见 [pc_vision_adaptor_validation](pi_service/experiments/pc_vision_adaptor_validation/README.md)。
+
 ## 低延迟 H.264 / WebRTC 视频
 
 默认 `start_robot.sh` 仍是 MJPEG 兼容模式。需要低延迟连续视频时，使用 H.264/WebRTC：CSI 由 `rpicam-vid` 独占并以 H.264 编码，MediaMTX 分发 WebRTC 给网页、RTSP 给电脑 DL；Flask 只保留控制、串口和状态 API。
