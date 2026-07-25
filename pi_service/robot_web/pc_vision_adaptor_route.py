@@ -46,6 +46,8 @@ class PcVisionAdaptorRouteTracker:
         self.config = config or PcVisionAdaptorConfig(token=token)
         self._stop, self._thread, self._lock = threading.Event(), None, threading.RLock()
         self._frame_seq, self._frame_jpeg, self._frame_at_ms = 0, None, 0
+        self._frame_fast_center, self._frame_fast_confidence, self._frame_fast_centers = None, 0.0, ()
+        self._pc_preview_jpeg, self._pc_preview_seq, self._pc_preview_at_ms = None, -1, 0
         self._last_center_x, self._last_event_seq, self._event = None, -1, None
         self._event_received_ms, self._action_until = 0, 0.0
         self._last_event_type, self._motion_phase = None, "FOLLOW"
@@ -100,12 +102,12 @@ class PcVisionAdaptorRouteTracker:
     def status_dict(self) -> dict:
         with self._lock:
             status = dict(self._status); event = self._event.event if self._event else None
-            status.update({"enabled": self.gate.enabled(), "pc_event": event, "pc_event_age_ms": max(0, int(time.time()*1000)-self._event_received_ms) if self._event_received_ms else None, "fast_config": asdict(self.config) | {"token": "configured" if self.config.token else "empty"}})
+            status.update({"enabled": self.gate.enabled(), "pc_event": event, "pc_event_age_ms": max(0, int(time.time()*1000)-self._event_received_ms) if self._event_received_ms else None, "pc_preview_seq": self._pc_preview_seq if self._pc_preview_jpeg else None, "pc_preview_age_ms": max(0, int(time.time()*1000)-self._pc_preview_at_ms) if self._pc_preview_at_ms else None, "fast_config": asdict(self.config) | {"token": "configured" if self.config.token else "empty"}})
             return status
 
     def frame_snapshot(self):
         with self._lock:
-            return self._frame_jpeg, self._frame_seq, self._frame_at_ms
+            return self._frame_jpeg, self._frame_seq, self._frame_at_ms, self._frame_fast_center, self._frame_fast_confidence, self._frame_fast_centers
 
     def submit_remote_event(self, payload: dict) -> dict:
         now_ms = int(time.time() * 1000)
@@ -117,6 +119,27 @@ class PcVisionAdaptorRouteTracker:
                 raise ValueError("视觉事件引用了 Pi 尚未发布的帧")
             self._last_event_seq, self._event, self._event_received_ms = event.frame_seq, event, now_ms
         return {"accepted": True, "event": event.event, "frame_seq": event.frame_seq}
+
+    def submit_remote_preview(self, jpeg: bytes, headers) -> dict:
+        """Accept only a fresh annotated JPEG for the current Pi frame stream."""
+        if not jpeg or len(jpeg) > 3_000_000:
+            raise ValueError("PC 标注图片为空或过大")
+        if self.config.token and headers.get("X-Vision-Adaptor-Token", "") != self.config.token:
+            raise ValueError("PC adaptor token 不匹配")
+        try:
+            sequence = int(headers["X-Vision-Frame-Seq"])
+            captured_at_ms = int(headers["X-Vision-Captured-At-Ms"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("PC 标注必须带帧号和采集时间") from exc
+        now_ms = int(time.time() * 1000)
+        if now_ms - captured_at_ms > 5_000:
+            raise ValueError("PC 标注帧已过期")
+        with self._lock:
+            if sequence < self._pc_preview_seq or sequence > self._frame_seq:
+                raise ValueError("PC 标注帧号无效或乱序")
+            self._pc_preview_jpeg, self._pc_preview_seq, self._pc_preview_at_ms = jpeg, sequence, now_ms
+        self.publisher.publish(jpeg)
+        return {"accepted": True, "frame_seq": sequence}
 
     def _run(self) -> None:
         import cv2
@@ -132,11 +155,12 @@ class PcVisionAdaptorRouteTracker:
                 last = now; image = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
                 if image is None: continue
                 now_ms = int(time.time() * 1000)
-                with self._lock:
-                    self._frame_seq += 1; self._frame_jpeg = jpeg; self._frame_at_ms = now_ms
-                    event, event_age = self._event, now_ms - self._event_received_ms if self._event_received_ms else None
                 result = find_fast_line(image, self._last_center_x, FastLineConfig())
                 if result.center_x is not None: self._last_center_x = result.center_x
+                with self._lock:
+                    self._frame_seq += 1; self._frame_jpeg = jpeg; self._frame_at_ms = now_ms
+                    self._frame_fast_center, self._frame_fast_confidence, self._frame_fast_centers = result.center_x, result.confidence, result.centers
+                    event, event_age = self._event, now_ms - self._event_received_ms if self._event_received_ms else None
                 state, motor, commanded = "FAST_FOLLOW", "PAUSED", None
                 stale_armed = event is not None and event.event != "CLEAR_ARM" and event_age is not None and event_age > self.config.remote_armed_timeout_ms
                 if self.gate.enabled():
@@ -188,7 +212,12 @@ class PcVisionAdaptorRouteTracker:
                 cv2.putText(annotated, f"PI FAST: valid={result.valid} centre={result.center_x} conf={result.confidence:.2f}  PC EVENT: {event.event if event else 'none'}", (18,66), cv2.FONT_HERSHEY_SIMPLEX,.46,(255,255,255),1)
                 cv2.putText(annotated, f"STATE: {state}  MOTOR: {motor}  PC never sends PWM", (18,94), cv2.FONT_HERSHEY_SIMPLEX,.46,(0,255,255),1)
                 ok, encoded = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
-                if ok: self.publisher.publish(encoded.tobytes())
+                if ok:
+                    pi_preview = encoded.tobytes()
+                    with self._lock:
+                        pc_preview = self._pc_preview_jpeg if now_ms - self._pc_preview_at_ms <= 3_000 else None
+                    # Fresh PC overlay replaces the light Pi-only fallback.
+                    self.publisher.publish(pc_preview or pi_preview)
                 # Full evidence is retained for every M-enabled test frame;
                 # while merely previewing a paused camera, write one health
                 # record per second instead of creating an unnecessary log.

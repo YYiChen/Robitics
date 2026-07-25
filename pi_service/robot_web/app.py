@@ -48,16 +48,25 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
     def vision_adaptor_frame():
         if not isinstance(route_tracker, PcVisionAdaptorRouteTracker):
             return jsonify(ok=False, error="当前 route mode 不是 pc_vision_adaptor"), 409
-        jpeg, sequence, captured_at_ms = route_tracker.frame_snapshot()
+        jpeg, sequence, captured_at_ms, fast_center, fast_confidence, fast_centers = route_tracker.frame_snapshot()
         if jpeg is None:
             return jsonify(ok=False, error="Pi 尚未发布 adaptor 帧"), 503
-        return Response(jpeg, mimetype="image/jpeg", headers={"Cache-Control": "no-store, max-age=0", "X-Vision-Frame-Seq": str(sequence), "X-Vision-Captured-At-Ms": str(captured_at_ms)})
+        fast_rows = ";".join(f"{y},{x:.1f},{width}" for y, x, width in fast_centers)
+        return Response(jpeg, mimetype="image/jpeg", headers={"Cache-Control": "no-store, max-age=0", "X-Vision-Frame-Seq": str(sequence), "X-Vision-Captured-At-Ms": str(captured_at_ms), "X-Vision-Pi-Fast-Centre": "" if fast_center is None else f"{fast_center:.1f}", "X-Vision-Pi-Fast-Confidence": f"{fast_confidence:.2f}", "X-Vision-Pi-Fast-Centers": fast_rows})
     @app.post("/api/vision-adaptor/event")
     def vision_adaptor_event():
         if not isinstance(route_tracker, PcVisionAdaptorRouteTracker):
             return jsonify(ok=False, error="当前 route mode 不是 pc_vision_adaptor"), 409
         try:
             return jsonify(ok=True, **route_tracker.submit_remote_event(request.get_json(silent=True) or {}))
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+    @app.post("/api/vision-adaptor/preview")
+    def vision_adaptor_preview():
+        if not isinstance(route_tracker, PcVisionAdaptorRouteTracker):
+            return jsonify(ok=False, error="当前 route mode 不是 pc_vision_adaptor"), 409
+        try:
+            return jsonify(ok=True, **route_tracker.submit_remote_preview(request.get_data(cache=False), request.headers))
         except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
     @app.post("/api/autonomous/toggle")

@@ -37,9 +37,11 @@ python3 pc_slow_analyzer.py --pi-url http://100.80.46.54:5000 --token "$ROBOT_PC
 ```
 
 Set the same `ROBOT_PC_ADAPTOR_TOKEN` in the Pi service environment and on the
-PC.  Leave it empty only on an isolated lab network.  This script currently
-proves transport and high-level arming; it does **not** claim physical turning
-has been validated.
+PC.  Leave it empty only on an isolated lab network.  The PC now posts a
+complete annotated JPEG to port 5000: PC masks/geometry/red-layer state and
+cyan Pi fast-scan marks appear in the normal route-preview panel.  If PC
+output is older than three seconds the panel falls back to the Pi-only overlay.
+This does **not** claim physical turning has been validated.
 
 ## Tests
 
