@@ -51,6 +51,15 @@ class ScanlineIShapeTests(unittest.TestCase):
         self.assertTrue(evidence.endpoint_detected)
         self.assertLess(evidence.endpoint_y or 480, 230)
 
+    def test_hybrid_detects_thin_bar_between_legacy_fixed_rows(self):
+        image = np.full((480, 640, 3), 255, dtype=np.uint8)
+        cv2.line(image, (320, 479), (320, 80), (0, 0, 0), 20)
+        # y=218 lies between the former 0.44 and 0.47 fixed scan rows; a
+        # thin bar here used to be missed depending on perspective.
+        cv2.line(image, (100, 218), (540, 218), (0, 0, 0), 6)
+        evidence = HybridScanlineAnalyzer(HybridScanlineConfig(route_path_update_frames=1)).analyze(image).evidence
+        self.assertTrue(evidence.endpoint_detected or evidence.junction_detected)
+
     def test_near_stem_still_confirms_bar_when_it_ends_at_the_bar(self):
         evidence = IShapeScanlineAnalyzer().analyze(frame(endpoint=True, lower_stem_only=True)).evidence
         self.assertTrue(evidence.valid_line)

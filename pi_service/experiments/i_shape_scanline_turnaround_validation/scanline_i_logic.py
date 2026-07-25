@@ -178,8 +178,10 @@ class HybridScanlineConfig(ScanlineConfig):
     blur_kernel: int = 5
     morphology_kernel: int = 5
     # --- Route component selection (from old detector) ---
-    route_corridor_top_width_ratio: float = 0.52
-    route_corridor_bottom_width_ratio: float = 0.90
+    # Keep enough of a distant transverse bar for width evidence.  Near
+    # anchoring still decides which connected component is the route.
+    route_corridor_top_width_ratio: float = 0.80
+    route_corridor_bottom_width_ratio: float = 0.95
     route_anchor_near_ratio: float = 0.32
     route_minimum_vertical_coverage: float = 0.20
     route_connection_kernel: int = 11
@@ -188,10 +190,15 @@ class HybridScanlineConfig(ScanlineConfig):
     marker_scan_gap_pixels: int = 2
     marker_minimum_width_ratio: float = 2.5
     marker_max_local_turn_degrees: float = 30.0
+    # Unlike the legacy fixed rows, search every row in this band.  A thin bar
+    # must not disappear merely because it falls between two configured rows.
+    bar_search_min_y_ratio: float = 0.20
+    bar_search_max_y_ratio: float = 0.92
+    bar_min_thickness_px: int = 4
     # --- Skeleton update rate ---
     route_path_update_frames: int = 2
     # --- Junction early-prediction: only junctions above this y ratio count ---
-    early_junction_max_y_ratio: float = 0.60
+    early_junction_max_y_ratio: float = 0.88
 
 
 class HybridScanlineAnalyzer:
@@ -500,12 +507,12 @@ class HybridScanlineAnalyzer:
         self,
         mask: np.ndarray,
         path: tuple[tuple[int, int], ...],
-    ) -> tuple[bool, tuple[int, int] | None]:
+    ) -> tuple[bool, tuple[int, int] | None, int]:
         """Detect a transverse bar by measuring cross-track white runs along
         the path normal.  Rotation-invariant — works regardless of bar angle.
         """
         if len(path) < 9:
-            return False, None
+            return False, None, 0
         binary = (mask > 0).astype(np.uint8)
         # Estimate normal tape width from distance transform medians.
         distance = cv2.distanceTransform(binary, cv2.DIST_L2, 3)
@@ -559,7 +566,43 @@ class HybridScanlineAnalyzer:
             if score > best_score:
                 best_score = score
                 best_point = (int(x), int(y))
-        return best_point is not None, best_point
+        return best_point is not None, best_point, best_score
+
+    def _find_wide_bar(
+        self,
+        component: np.ndarray,
+        normal_width: float | None,
+    ) -> tuple[int | None, int | None]:
+        """Find the first real transverse run without relying on fixed rows.
+
+        Adjacent wide rows are grouped so a single noisy floor row cannot be
+        a bar.  The topmost group is chosen because it is the earliest visible
+        incoming transverse feature.
+        """
+        height, width = component.shape
+        required_width = max(
+            width * self.config.endpoint_width_ratio,
+            (normal_width or 1.0) * self.config.endpoint_width_multiplier,
+        )
+        start = max(0, int(round(height * self.config.bar_search_min_y_ratio)))
+        end = min(height - 1, int(round(height * self.config.bar_search_max_y_ratio)))
+        groups: list[list[tuple[int, int]]] = []
+        current: list[tuple[int, int]] = []
+        for y in range(start, end + 1):
+            run = self._row_run(component, y)
+            if run is not None and run[1] >= required_width:
+                current.append((y, run[1]))
+            elif current:
+                groups.append(current)
+                current = []
+        if current:
+            groups.append(current)
+        groups = [group for group in groups if len(group) >= self.config.bar_min_thickness_px]
+        if not groups:
+            return None, None
+        first = groups[0]
+        best_y, best_width = max(first, key=lambda item: item[1])
+        return best_y, best_width
 
     # ------------------------------------------------------------------
     # Hybrid analyze(): combine scanline path + skeleton prediction
@@ -594,19 +637,12 @@ class HybridScanlineAnalyzer:
         else:
             valid_line, confidence, center_x = False, 0.0, None
 
-        # --- Step 3: Legacy bar_rows width-based endpoint (fallback) ---
-        endpoint_y: int | None = None
-        endpoint_width: int | None = None
-        required_width = max(
-            width * self.config.endpoint_width_ratio,
-            (normal_width or 1.0) * self.config.endpoint_width_multiplier,
-        )
-        for ratio in self.config.bar_rows:
-            y = min(height - 1, max(0, int(round(height * ratio))))
-            run = self._row_run(component, y)
-            if run is not None and y >= height * self.config.endpoint_min_y_ratio and run[1] >= required_width:
-                endpoint_y, endpoint_width = y, run[1]
-                break
+        # --- Step 3: Dense width profile, replacing fixed bar_rows ---
+        # Keep a far bar as prediction only; it becomes an endpoint only once
+        # it reaches the near/middle safety band.
+        wide_bar_y, wide_bar_width = self._find_wide_bar(component, normal_width)
+        endpoint_y = wide_bar_y if wide_bar_y is not None and wide_bar_y >= height * self.config.endpoint_min_y_ratio else None
+        endpoint_width = wide_bar_width if endpoint_y is not None else None
 
         # --- Step 4: Skeleton analysis (every route_path_update_frames) ---
         lookahead_x: float | None = None
@@ -642,20 +678,30 @@ class HybridScanlineAnalyzer:
                     junction_y = j_y
                     junction_arm_count = j_arms
 
+            # A wide transverse run in the far field is an early prediction
+            # even if skeleton thinning did not leave a clean 3-arm pixel.
+            if wide_bar_y is not None and wide_bar_y < height * self.config.endpoint_min_y_ratio:
+                junction_detected = True
+                junction_y = wide_bar_y
+                junction_arm_count = max(junction_arm_count, 0)
+
             # --- Step 4b: Transverse marker via cross-track normals ---
             # If skeleton junction was found, confirm with normal-run evidence.
             # If junction was NOT found but the path has enough pixels, still
             # run the normal-run check as a direct bar detector (catches cases
             # where the junction is smoothed away by morphology).
             if path and len(path) >= 9:
-                marker_detected, _marker_point = self._transverse_marker_evidence(component, path)
-                if marker_detected and not junction_detected:
-                    # The normal-run found a wide cross-track feature but the
-                    # skeleton didn't show a junction.  This is weaker evidence;
-                    # we report it but don't set junction_detected.
-                    # It WILL set endpoint_detected below if the marker point
-                    # falls within bar_rows.
-                    pass
+                marker_detected, marker_point, marker_width = self._transverse_marker_evidence(component, path)
+                if marker_detected and marker_point is not None:
+                    marker_y = marker_point[1]
+                    if marker_y >= height * self.config.endpoint_min_y_ratio:
+                        # Rotation-invariant near/middle confirmation.
+                        endpoint_y = marker_y
+                        endpoint_width = max(endpoint_width or 0, marker_width)
+                    elif marker_y < height * self.config.early_junction_max_y_ratio:
+                        # Rotation-invariant far prediction; keep driving.
+                        junction_detected = True
+                        junction_y = marker_y
         elif self._cached_path:
             path_length_px = len(self._cached_path)
 
