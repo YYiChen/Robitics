@@ -286,7 +286,7 @@ class EndLineTurnAdaptorRouteTracker:
                 if red.detected and red.center_x is not None and reference_x is not None:
                     self._last_red_side = "LEFT" if red.center_x < reference_x else "RIGHT"
                     self._last_red_seen_frame = frame_index
-                state, motor, commanded = decision.state.value, "PAUSED", None
+                state, motor, commanded, detail = decision.state.value, "PAUSED", None, decision.reason
                 if self.gate.enabled():
                     recent_red = self._last_red_side is not None and frame_index - self._last_red_seen_frame <= self._line_config.red_direction_memory_frames
                     if self._motion_phase == "MANUAL_STEP" and now < self._action_until:
@@ -379,7 +379,7 @@ class EndLineTurnAdaptorRouteTracker:
                     with self._tuning_lock:
                         self._planner.reset()
                         decision = self._planner.step(line_valid=result.valid, red_detected=red.detected)
-                    state = "PAUSED"
+                    state, motor, detail = "PAUSED", "STOP_PRESS_M_TO_ARM", "按 M 解锁后，再按 Q/E/U/I 转向"
                 overlay = image.copy()
                 contours, _hierarchy = cv2.findContours(line_analysis.course_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 cv2.drawContours(overlay, contours, -1, (0, 0, 255), 2)
@@ -397,7 +397,7 @@ class EndLineTurnAdaptorRouteTracker:
                     self.publisher.publish(encoded.tobytes())
                 if self.gate.enabled() or frame_index % 20 == 0:
                     self._write_log(frame_index, result, red, decision, state, motor, commanded, float(np.mean(line_analysis.course_mask)))
-                self._set_status(state=state, detail=decision.reason, frame=frame_index, confidence=result.confidence, line_center_x=result.center_x, green_course_coverage=float(np.mean(line_analysis.course_mask)), green_gate_enabled=fast_config.green_gate_enabled, red_direction_marker=asdict(red), last_red_side=self._last_red_side, last_red_seen_frame=self._last_red_seen_frame, motion_phase=self._motion_phase, motor=motor)
+                self._set_status(state=state, detail=detail, frame=frame_index, confidence=result.confidence, line_center_x=result.center_x, green_course_coverage=float(np.mean(line_analysis.course_mask)), green_gate_enabled=fast_config.green_gate_enabled, red_direction_marker=asdict(red), last_red_side=self._last_red_side, last_red_seen_frame=self._last_red_seen_frame, motion_phase=self._motion_phase, motor=motor)
                 frame_index += 1
         except Exception as exc:
             import traceback

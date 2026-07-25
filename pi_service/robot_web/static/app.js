@@ -556,7 +556,8 @@ addEventListener("keydown", event => { if (event.repeat) return;
   if (event.code === "Space") { event.preventDefault(); releaseKeys(); return; }
   if (event.key?.toLowerCase() === "z") { event.preventDefault(); centerServo(); return; }
   const turnKey = event.key?.toLowerCase();
-  const manualTurn = {q:"LEFT_90", e:"RIGHT_90", u:"LEFT_180", i:"RIGHT_180"}[turnKey];
+  // KeyboardEvent.code keeps Q/E/U/I stable when a Chinese IME is active.
+  const manualTurn = {q:"LEFT_90", e:"RIGHT_90", u:"LEFT_180", i:"RIGHT_180"}[turnKey] || {KeyQ:"LEFT_90", KeyE:"RIGHT_90", KeyU:"LEFT_180", KeyI:"RIGHT_180"}[event.code];
   if (manualTurn) { event.preventDefault(); manualVisionTurn(manualTurn); return; }
   const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, true); }
 });
