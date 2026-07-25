@@ -38,6 +38,15 @@ class GreenWhiteScanlineTests(unittest.TestCase):
         self.assertTrue(evidence.valid_line)
         self.assertFalse(evidence.line_lost)
 
+    def test_fisheye_oblique_stem_remains_a_valid_line(self):
+        image = np.full((480, 640, 3), (55, 150, 45), dtype=np.uint8)
+        # The same white strip moves sideways by over 10% of the frame from
+        # one near scan row to another in the real fisheye camera.
+        cv2.line(image, (470, 479), (300, 80), (245, 245, 245), 32)
+        evidence = self.analyzer.analyze(image).evidence
+        self.assertTrue(evidence.valid_line)
+        self.assertFalse(evidence.line_lost)
+
     def test_green_floor_white_transverse_bar_is_never_the_route(self):
         evidence = self.analyzer.analyze(green_i_frame(transverse=True)).evidence
         self.assertTrue(evidence.valid_line)

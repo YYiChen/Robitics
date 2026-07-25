@@ -19,21 +19,23 @@ from scanline_i_logic import HybridScanlineAnalyzer, HybridScanlineConfig  # noq
 @dataclass(frozen=True)
 class GreenWhiteScanlineConfig(HybridScanlineConfig):
     """HSV thresholds verified by the fixed green-course detector config."""
-    white_saturation_max: int = 55
-    white_value_min: int = 185
+    # Keep the original permissive white threshold.  At oblique fisheye
+    # angles the tape picks up green/blue reflection and is no longer nearly
+    # neutral or bright enough for the stricter experimental values.
+    white_saturation_max: int = 82
+    white_value_min: int = 168
     green_hue_min: int = 32
     green_hue_max: int = 96
     green_saturation_min: int = 45
     green_value_min: int = 28
     minimum_green_roi_ratio: float = 0.18
     roi_top_ratio: float = 0.38
-    green_neighbour_kernel: int = 23
-    # The CSI fisheye makes the same tape roughly 20 px wide in the distance
-    # and much wider at the bottom of the image.  Test several support radii:
-    # a candidate still needs green on *both* sides, but it is no longer lost
-    # merely because the near-field tape is wider than 28 px.
-    green_support_distances: tuple[int, ...] = (14, 28, 42, 56, 72)
-    green_support_bridge_kernel: int = 21
+    green_neighbour_kernel: int = 31
+    # A fisheye view makes a straight physical tape sweep sideways between the
+    # three near scan rows.  Preserve the original permissive recognition
+    # behaviour for this green/white course instead of declaring that normal
+    # perspective change to be a lost route.
+    maximum_center_spread_ratio: float = 0.18
     near_track_max_width_ratio: float = 0.22
     near_track_centre_tolerance_ratio: float = 0.24
     minimum_near_track_rows: int = 2
@@ -57,18 +59,6 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
     def _odd(value: int) -> int:
         return value if value % 2 else value + 1
 
-    @staticmethod
-    def _shift(mask: np.ndarray, dx: int, dy: int) -> np.ndarray:
-        height, width = mask.shape
-        return cv2.warpAffine(
-            mask,
-            np.float32(((1, 0, dx), (0, 1, dy))),
-            (width, height),
-            flags=cv2.INTER_NEAREST,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=0,
-        )
-
     def _make_mask(self, frame: np.ndarray, blur_kernel: int, morphology_kernel: int) -> np.ndarray:
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         config = self.config
@@ -87,31 +77,14 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         green_roi_ratio = float(np.count_nonzero(green[roi_start:])) / max(1, green[roi_start:].size)
         if green_roi_ratio < config.minimum_green_roi_ratio:
             return np.zeros_like(white)
-        # White tape replaces the green beneath it.  It must have green on
-        # both sides along at least one axis: a vertical strip has green to
-        # its left/right, and a horizontal bar has green above/below.  Merely
-        # touching green on one side (the pale floor beside the mat) is not
-        # sufficient.
-        green_surrounded = np.zeros_like(green)
-        for distance in config.green_support_distances:
-            support = max(2, int(distance))
-            horizontal_support = cv2.bitwise_and(self._shift(green, support, 0), self._shift(green, -support, 0))
-            vertical_support = cv2.bitwise_and(self._shift(green, 0, support), self._shift(green, 0, -support))
-            green_surrounded = cv2.bitwise_or(
-                green_surrounded,
-                cv2.bitwise_or(horizontal_support, vertical_support),
-            )
-        # `green_surrounded` is itself a two-sided neighbourhood check.  Do
-        # not intersect it again with a tiny one-sided dilation: doing that
-        # deletes the middle of the real, fisheye-widened white tape.
-        strict_tape = cv2.bitwise_and(white, green_surrounded)
-        # At a T intersection the crossing's central square has tape on all
-        # four sides, so the two-sided-green test intentionally leaves a
-        # small hole there.  Reconnect only from already strict tape pixels;
-        # this bridges the T centre without admitting a whole floor region.
-        bridge_size = self._odd(max(3, config.green_support_bridge_kernel))
-        bridge = cv2.dilate(strict_tape, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (bridge_size, bridge_size)))
-        mask = cv2.bitwise_and(white, bridge)
+        # Restore the proven permissive mask: tape only needs to touch the
+        # green course.  Oblique views and the T intersection do not preserve
+        # a reliable green pixel on both sides of every tape pixel.  The
+        # stricter route-component selector below remains responsible for
+        # rejecting a broad pale floor patch.
+        neighbour_size = self._odd(max(3, config.green_neighbour_kernel))
+        neighbour = cv2.dilate(green, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (neighbour_size, neighbour_size)))
+        mask = cv2.bitwise_and(white, neighbour)
         cleanup_size = self._odd(max(3, morphology_kernel))
         cleanup = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (cleanup_size, cleanup_size))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, cleanup)
