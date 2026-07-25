@@ -61,6 +61,12 @@ class GreenWhiteScanlineTests(unittest.TestCase):
         evidence = self.analyzer.analyze(frame).evidence
         self.assertTrue(evidence.line_lost)
 
+    def test_saturated_red_is_not_mistaken_for_green_course(self):
+        frame = np.full((480, 640, 3), (0, 0, 255), dtype=np.uint8)
+        cv2.line(frame, (320, 479), (320, 80), (245, 245, 245), 20)
+        evidence = self.analyzer.analyze(frame).evidence
+        self.assertTrue(evidence.line_lost)
+
     def test_red_excess_does_not_turn_bright_white_tape_into_a_red_marker(self):
         self.analyzer.analyze(green_i_frame())
         self.assertEqual(int(np.count_nonzero(self.analyzer.red_marker_mask)), 0)

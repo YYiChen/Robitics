@@ -23,11 +23,10 @@ class GreenWhiteScanlineConfig(HybridScanlineConfig):
     white_value_min: int = 168
     green_hue_min: int = 32
     green_hue_max: int = 96
-    green_saturation_min: int = 45
-    green_value_min: int = 28
-    green_rgb_min_g: int = 50
-    green_rgb_g_over_r_ratio: float = 1.25
-    green_rgb_g_over_b_ratio: float = 1.15
+    # Measured from the live CSI stream: carpet S median ~=157, wall ~=53,
+    # pale floor ~=73.  Course membership is hue + saturation, not brightness.
+    green_saturation_min: int = 95
+    green_value_min: int = 0
     minimum_green_roi_ratio: float = 0.18
     roi_top_ratio: float = 0.38
     green_neighbour_kernel: int = 31
@@ -161,17 +160,10 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
             np.array((config.green_hue_min, config.green_saturation_min, config.green_value_min), dtype=np.uint8),
             np.array((config.green_hue_max, 255, 255), dtype=np.uint8),
         )
-        blue, green_channel, red = cv2.split(frame)
-        green_rgb = np.where(
-            (green_channel >= config.green_rgb_min_g)
-            & (green_channel.astype(np.float32) >= red.astype(np.float32) * config.green_rgb_g_over_r_ratio)
-            & (green_channel.astype(np.float32) >= blue.astype(np.float32) * config.green_rgb_g_over_b_ratio),
-            255,
-            0,
-        ).astype(np.uint8)
-        # HSV keeps the broad green colour range; RGB dominance rejects pale
-        # grey floor with a slight green cast.  Both must agree.
-        green = cv2.bitwise_and(green_hsv, green_rgb)
+        # The carpet boundary is determined by green hue and saturation only.
+        # Do not use V/brightness or RGB channel magnitude: exposure changes
+        # those strongly between the mat, wall, and fish-eye edge.
+        green = green_hsv
         # `_select_route_component` runs immediately after `_make_mask` in
         # the inherited analyzer.  Retain raw green for side probes, and its
         # connected course field for the spatial candidate gate.
