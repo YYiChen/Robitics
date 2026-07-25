@@ -106,7 +106,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="PC slow visual analyser; never sends PWM")
     parser.add_argument("--pi-url", default="http://100.80.46.54:5000")
     parser.add_argument("--token", default="")
-    parser.add_argument("--log", type=Path, default=Path("runtime_logs/pc_slow_analyzer.jsonl"))
+    parser.add_argument("--log", type=Path, default=HERE.parent / "runtime_logs" / "pc_slow_analyzer.jsonl")
     parser.add_argument("--status-every", type=int, default=1, help="fetch a compact Pi status after every N accepted PC frames")
     parser.add_argument("--max-frames", type=int, default=0, help="process this many frames then exit; 0 means run continuously")
     args = parser.parse_args()
