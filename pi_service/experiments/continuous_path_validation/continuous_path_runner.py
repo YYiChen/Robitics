@@ -26,6 +26,7 @@ from track_line.detector import OpenCVLineDetector  # noqa: E402
 from track_line.visualization import render_debug  # noqa: E402
 from tuning import (  # noqa: E402
     DEBUG_WEB_PORT,
+    CORRECTION_DEADBAND,
     HEADING_WEIGHT,
     LAUNCH_PWM,
     LINE_LOST_PREDICTION_SECONDS,
@@ -62,6 +63,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--launch-pwm", type=int, default=LAUNCH_PWM)
     parser.add_argument("--lookahead-gain", type=float, default=LOOKAHEAD_GAIN)
     parser.add_argument("--heading-weight", type=float, default=HEADING_WEIGHT)
+    parser.add_argument("--correction-deadband", type=float, default=CORRECTION_DEADBAND)
     parser.add_argument("--minimum-correction-pwm", type=int, default=MINIMUM_CORRECTION_PWM)
     parser.add_argument("--maximum-correction-pwm", type=int, default=MAXIMUM_CORRECTION_PWM)
     parser.add_argument("--minimum-wheel-pwm", type=int, default=MINIMUM_WHEEL_PWM)
@@ -125,6 +127,7 @@ def main() -> int:
             launch_pwm=args.launch_pwm,
             lookahead_gain=args.lookahead_gain,
             heading_weight=args.heading_weight,
+            correction_deadband=args.correction_deadband,
             minimum_correction_pwm=args.minimum_correction_pwm,
             maximum_correction_pwm=args.maximum_correction_pwm,
             minimum_wheel_pwm=args.minimum_wheel_pwm,
@@ -156,6 +159,7 @@ def main() -> int:
             )
             decision = planner.step(result.observation, now)
             motor_action = executor.apply(decision.intent, result.observation) if executor else "DISPLAY_ONLY"
+            steering_error, steering_correction_pwm = executor.steering_diagnostics if executor else (None, 0)
             annotated = overlay(render_debug(frame, result), decision, motor_action, result.observation, marker_update)
             payload = {
                 "frame": frame_index,
@@ -166,6 +170,8 @@ def main() -> int:
                 "offset": result.observation.offset,
                 "heading": result.observation.heading,
                 "lookahead_offset": result.observation.lookahead_offset,
+                "steering_error": steering_error,
+                "steering_correction_pwm": steering_correction_pwm,
                 "confidence": result.observation.confidence,
                 "marker_detected": marker_update.detected,
                 "marker_event": marker_update.event,

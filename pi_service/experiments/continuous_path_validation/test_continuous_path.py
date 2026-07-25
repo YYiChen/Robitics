@@ -34,6 +34,14 @@ class ContinuousPathTests(unittest.TestCase):
         )
         self.assertEqual((right, left), (55, 150))
 
+    def test_small_green_course_error_is_not_discarded_by_old_deadband(self):
+        right, left = path_drive_pwm(
+            Observation(lookahead_offset=.020, heading=.030),
+            ContinuousMotorConfig("http://example", straight_pwm=95, correction_deadband=.01),
+        )
+        self.assertLess(right, left)
+        self.assertEqual((right, left), (75, 115))
+
     def test_short_line_loss_keeps_last_turning_pair(self):
         pair, label = drive_pwm_with_last_path(
             Observation(True, 0, None),

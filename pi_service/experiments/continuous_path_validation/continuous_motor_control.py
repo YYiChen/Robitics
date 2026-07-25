@@ -34,15 +34,26 @@ class ContinuousMotorConfig:
     sharp_turn_correction_pwm: int = 55
 
 
-def path_drive_pwm(observation: PathObservation, config: ContinuousMotorConfig) -> tuple[int, int]:
+def steering_error(observation: PathObservation, config: ContinuousMotorConfig) -> float | None:
+    """Combine lateral target and route heading into one signed turn error."""
     target = observation.lookahead_offset
-    base_pwm = max(config.straight_pwm, config.minimum_wheel_pwm)
     if target is None:
-        return base_pwm, base_pwm
+        return None
     heading = observation.heading or 0.0
-    error = float(max(-1.0, min(1.0, target + config.heading_weight * heading)))
+    return float(max(-1.0, min(1.0, target + config.heading_weight * heading)))
+
+
+def path_drive_details(
+    observation: PathObservation,
+    config: ContinuousMotorConfig,
+) -> tuple[tuple[int, int], float | None, int]:
+    """Return wheel PWM plus the calculated error and applied correction."""
+    base_pwm = max(config.straight_pwm, config.minimum_wheel_pwm)
+    error = steering_error(observation, config)
+    if error is None:
+        return (base_pwm, base_pwm), None, 0
     if abs(error) <= config.correction_deadband:
-        return base_pwm, base_pwm
+        return (base_pwm, base_pwm), error, 0
     correction = max(
         config.minimum_correction_pwm,
         min(config.maximum_correction_pwm, math.ceil(abs(error) * config.lookahead_gain)),
@@ -58,7 +69,13 @@ def path_drive_pwm(observation: PathObservation, config: ContinuousMotorConfig) 
     # Positive error means the target is right of image centre: slow the right
     # wheel and speed up the left wheel to arc right. The same rule works for
     # any polygon, smooth curve, or line orientation visible ahead.
-    return (inner, outer) if error > 0 else (outer, inner)
+    return ((inner, outer) if error > 0 else (outer, inner)), error, correction
+
+
+def path_drive_pwm(observation: PathObservation, config: ContinuousMotorConfig) -> tuple[int, int]:
+    """Compatibility wrapper for callers that only need left/right PWM."""
+    pair, _error, _correction = path_drive_details(observation, config)
+    return pair
 
 
 def drive_pwm_with_last_path(
@@ -80,6 +97,13 @@ class ContinuousMotorExecutor:
         self._launch_until = 0.0
         self._stopped = False
         self._last_path_pair: tuple[int, int] | None = None
+        self._last_steering_error: float | None = None
+        self._last_correction_pwm = 0
+
+    @property
+    def steering_diagnostics(self) -> tuple[float | None, int]:
+        """Latest P-controller values for JSON logs and field diagnosis."""
+        return self._last_steering_error, self._last_correction_pwm
 
     def arm(self) -> None:
         self.client.require_arduino_online()
@@ -94,17 +118,21 @@ class ContinuousMotorExecutor:
             self._forward_active, self._launch_until = True, now + self.config.launch_duration_seconds
         if now < self._launch_until:
             pair, label = (self.config.launch_pwm, self.config.launch_pwm), "LAUNCH"
+            self._last_steering_error, self._last_correction_pwm = None, 0
         else:
-            pair, label = drive_pwm_with_last_path(
-                observation,
-                self.config,
-                self._last_path_pair,
-            )
-            if observation.lookahead_offset is not None:
+            if observation.lookahead_offset is None and self._last_path_pair is not None:
+                pair, label = self._last_path_pair, "HOLD_LAST_PATH"
+                self._last_steering_error, self._last_correction_pwm = None, 0
+            else:
+                pair, error, correction = path_drive_details(observation, self.config)
+                label = "LOOKAHEAD_P"
+                self._last_steering_error, self._last_correction_pwm = error, correction
                 self._last_path_pair = pair
         right, left = self.client.send_drive_pwm(*pair)
         self._stopped = False
-        return f"{label}(R={right},L={left})"
+        if self._last_steering_error is None:
+            return f"{label}(R={right},L={left})"
+        return f"{label}(e={self._last_steering_error:+.3f},c={self._last_correction_pwm},R={right},L={left})"
 
     def stop(self) -> None:
         if self._stopped:
@@ -113,4 +141,5 @@ class ContinuousMotorExecutor:
         self._forward_active = False
         self._launch_until = 0.0
         self._last_path_pair = None
+        self._last_steering_error, self._last_correction_pwm = None, 0
         self._stopped = True
