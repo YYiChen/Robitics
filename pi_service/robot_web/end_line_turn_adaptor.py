@@ -1,8 +1,4 @@
-"""Port-5000 adaptor for the current single-white-line / red-direction course.
-
-The Pi is the only motor owner: red only records LEFT/RIGHT, white-line loss
-stops, then the fresh recorded direction selects a fixed 90-degree pivot.
-"""
+"""Port-5000 adaptor with red-line-closed-loop keyboard turning."""
 from __future__ import annotations
 
 from dataclasses import asdict, replace
@@ -55,6 +51,10 @@ TUNING_RULES = {
     "turn_180_pwm": (int, 0, 255),
     "turn_180_step_seconds": (float, .05, 20.0),
     "turn_interstep_pause_seconds": (float, 0.0, 10.0),
+    "red_alignment_min_angle": (float, 45.0, 90.0),
+    "red_alignment_confirm_frames": (int, 1, 10),
+    "turn_90_max_steps": (int, 1, 12),
+    "turn_180_max_steps": (int, 1, 24),
 }
 
 
@@ -66,7 +66,10 @@ class EndLineTurnAdaptorRouteTracker:
         self._stop, self._thread, self._lock, self._tuning_lock = threading.Event(), None, threading.RLock(), threading.RLock()
         self._last_center_x, self._motor_active = None, False
         self._tuning_path = tuning_path
-        self._process_fps, self._straight_pwm, self._fast_config, self._line_config, self._turn_interstep_pause_seconds = self._load_tuning()
+        (self._process_fps, self._straight_pwm, self._fast_config, self._line_config,
+         self._turn_interstep_pause_seconds, self._red_alignment_min_angle,
+         self._red_alignment_confirm_frames, self._turn_90_max_steps,
+         self._turn_180_max_steps) = self._load_tuning()
         self._turn_90 = load_turn_profile(TURN_90_PATH, TurnProfile(200, 1.25), steps=2)
         self._turn_180 = load_turn_profile(TURN_180_PATH, TurnProfile(200, 1.25), steps=4)
         self._planner = EndLineStopPlanner(self._line_config)
@@ -74,7 +77,8 @@ class EndLineTurnAdaptorRouteTracker:
         self._last_red_side, self._last_red_seen_frame = None, -10_000
         self._motion_phase, self._action_until, self._pending_turn_side = "FOLLOW", 0.0, None
         self._manual_degrees, self._manual_profile = None, None
-        self._manual_total_steps, self._manual_remaining_steps = 0, 0
+        self._manual_max_steps, self._manual_steps_started = 0, 0
+        self._red_alignment_streak = 0
         # This deployment is deliberately keyboard-only: M arms turn commands
         # but must never make the vehicle start following the white line.
         self._manual_only = True
@@ -117,6 +121,7 @@ class EndLineTurnAdaptorRouteTracker:
                 self._planner.reset()
             self._last_red_side, self._last_red_seen_frame = None, -10_000
             self._motion_phase, self._action_until, self._pending_turn_side = "FOLLOW", 0.0, None
+            self._manual_max_steps, self._manual_steps_started, self._red_alignment_streak = 0, 0, 0
         self._set_status(enabled=enabled, detail="按键转向已解锁，等待 Q/E/U/I" if enabled else "已暂停，电机已停止")
         return self.status_dict()
 
@@ -128,7 +133,7 @@ class EndLineTurnAdaptorRouteTracker:
         with self._tuning_lock:
             self._turn_90 = load_turn_profile(TURN_90_PATH, self._turn_90, steps=2)
             self._turn_180 = load_turn_profile(TURN_180_PATH, self._turn_180, steps=4)
-            commands = {"LEFT_90": ("LEFT", 90, self._turn_90, 2), "RIGHT_90": ("RIGHT", 90, self._turn_90, 2), "LEFT_180": ("LEFT", 180, self._turn_180, 4), "RIGHT_180": ("RIGHT", 180, self._turn_180, 4)}
+            commands = {"LEFT_90": ("LEFT", 90, self._turn_90, self._turn_90_max_steps), "RIGHT_90": ("RIGHT", 90, self._turn_90, self._turn_90_max_steps), "LEFT_180": ("LEFT", 180, self._turn_180, self._turn_180_max_steps), "RIGHT_180": ("RIGHT", 180, self._turn_180, self._turn_180_max_steps)}
         try:
             side, degrees, profile, steps = commands[str(command).upper()]
         except KeyError as exc:
@@ -139,9 +144,9 @@ class EndLineTurnAdaptorRouteTracker:
             raise ValueError("当前已有转向动作，请等待其完成或按 M 停止")
         self._stop_motor()
         self._pending_turn_side, self._manual_degrees, self._manual_profile = side, degrees, profile
-        self._manual_total_steps = self._manual_remaining_steps = steps
+        self._manual_max_steps, self._manual_steps_started, self._red_alignment_streak = steps, 1, 0
         self._motion_phase, self._action_until = "MANUAL_STEP", time.monotonic() + profile.step_seconds
-        self._set_status(state="MANUAL_STEP", detail=f"{side} {degrees}° step 1/{steps}", manual_turn=f"{side}_{degrees}")
+        self._set_status(state="MANUAL_STEP", detail=f"{side} {degrees}° red-calibrated pulse 1/{steps}", manual_turn=f"{side}_{degrees}")
         return self.status_dict()
 
     def _tuning_values(self) -> dict:
@@ -157,10 +162,13 @@ class EndLineTurnAdaptorRouteTracker:
                 "turn_90_pwm": self._turn_90.pwm, "turn_90_step_seconds": self._turn_90.step_seconds,
                 "turn_180_pwm": self._turn_180.pwm, "turn_180_step_seconds": self._turn_180.step_seconds,
                 "turn_interstep_pause_seconds": self._turn_interstep_pause_seconds,
+                "red_alignment_min_angle": self._red_alignment_min_angle,
+                "red_alignment_confirm_frames": self._red_alignment_confirm_frames,
+                "turn_90_max_steps": self._turn_90_max_steps, "turn_180_max_steps": self._turn_180_max_steps,
                 **asdict(self._line_config),
             }
 
-    def _load_tuning(self) -> tuple[float, int, FastLineConfig, EndLineConfig, float]:
+    def _load_tuning(self) -> tuple[float, int, FastLineConfig, EndLineConfig, float, float, int, int, int]:
         values = {
             "process_fps": 20.0, "straight_pwm": 85,
             "correction_deadband": FastLineConfig().deadband, "correction_gain": FastLineConfig().correction_gain,
@@ -169,7 +177,9 @@ class EndLineTurnAdaptorRouteTracker:
             "green_saturation_min": FastLineConfig().green_saturation_min, "green_dilate_radius_px": FastLineConfig().green_dilate_radius_px,
             "green_support_inner_px": FastLineConfig().green_support_inner_px, "green_support_outer_px": FastLineConfig().green_support_outer_px,
             "green_support_min_ratio": FastLineConfig().green_support_min_ratio,
-            "turn_interstep_pause_seconds": 1.5,
+            "turn_interstep_pause_seconds": 2.0,
+            "red_alignment_min_angle": 75.0, "red_alignment_confirm_frames": 2,
+            "turn_90_max_steps": 4, "turn_180_max_steps": 8,
             **asdict(EndLineConfig()),
         }
         try:
@@ -184,7 +194,10 @@ class EndLineTurnAdaptorRouteTracker:
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             pass
         process_fps, straight_pwm, fast_config, line_config = self._configs_from_values(values)
-        return process_fps, straight_pwm, fast_config, line_config, values["turn_interstep_pause_seconds"]
+        return (process_fps, straight_pwm, fast_config, line_config,
+                values["turn_interstep_pause_seconds"], values["red_alignment_min_angle"],
+                values["red_alignment_confirm_frames"], values["turn_90_max_steps"],
+                values["turn_180_max_steps"])
 
     @staticmethod
     def _configs_from_values(values: dict) -> tuple[float, int, FastLineConfig, EndLineConfig]:
@@ -228,6 +241,9 @@ class EndLineTurnAdaptorRouteTracker:
             self._red_detector, self._planner = RedEndBandDetector(line_config), EndLineStopPlanner(line_config)
             self._turn_90, self._turn_180 = turn_90, turn_180
             self._turn_interstep_pause_seconds = current["turn_interstep_pause_seconds"]
+            self._red_alignment_min_angle = current["red_alignment_min_angle"]
+            self._red_alignment_confirm_frames = current["red_alignment_confirm_frames"]
+            self._turn_90_max_steps, self._turn_180_max_steps = current["turn_90_max_steps"], current["turn_180_max_steps"]
         return self.status_dict()
 
     def _open_log(self) -> None:
@@ -288,26 +304,40 @@ class EndLineTurnAdaptorRouteTracker:
                 state, motor, commanded, detail = decision.state.value, "PAUSED", None, decision.reason
                 if self.gate.enabled():
                     recent_red = self._last_red_side is not None and frame_index - self._last_red_seen_frame <= self._line_config.red_direction_memory_frames
-                    if self._motion_phase == "MANUAL_STEP" and now < self._action_until:
+                    manual_active = self._motion_phase.startswith("MANUAL")
+                    if manual_active:
+                        if red.detected and red.angle_degrees is not None and red.angle_degrees >= self._red_alignment_min_angle:
+                            self._red_alignment_streak += 1
+                        else:
+                            self._red_alignment_streak = 0
+                    alignment_confirmed = self._red_alignment_streak >= self._red_alignment_confirm_frames
+                    if self._motion_phase == "MANUAL_STEP" and alignment_confirmed:
+                        self._stop_motor()
+                        self._motion_phase = "MANUAL_COMPLETE"
+                        state, motor, detail = "MANUAL_RED_ALIGNED", "STOP_RED_VERTICAL", f"red angle {red.angle_degrees:.1f}° confirmed"
+                    elif self._motion_phase == "MANUAL_STEP" and now < self._action_until:
                         profile = self._manual_profile
                         commanded = (profile.pwm, -profile.pwm) if self._pending_turn_side == "LEFT" else (-profile.pwm, profile.pwm)
                         self.controller.set_direct_drive(*commanded); self._motor_active = True
-                        step_index = self._manual_total_steps - self._manual_remaining_steps + 1
-                        state, motor = f"MANUAL_STEP_{step_index}/{self._manual_total_steps}", f"MANUAL_{self._pending_turn_side}_{self._manual_degrees} R={commanded[0]} L={commanded[1]}"
+                        state, motor = f"MANUAL_STEP_{self._manual_steps_started}/{self._manual_max_steps}", f"MANUAL_{self._pending_turn_side}_{self._manual_degrees} R={commanded[0]} L={commanded[1]}"
                     elif self._motion_phase == "MANUAL_STEP":
                         self._stop_motor()
-                        self._manual_remaining_steps -= 1
-                        if self._manual_remaining_steps > 0:
+                        if self._manual_steps_started < self._manual_max_steps:
                             self._motion_phase = "MANUAL_INTERSTEP_PAUSE"
                             self._action_until = now + self._turn_interstep_pause_seconds
                             state, motor = "MANUAL_INTERSTEP_PAUSE", f"STOP_COOLDOWN_{self._turn_interstep_pause_seconds:.2f}s"
                         else:
                             self._motion_phase = "MANUAL_COMPLETE"
-                            state, motor = "MANUAL_STEPS_COMPLETE", "STOP_ALL_CONFIGURED_STEPS_COMPLETE"
+                            state, motor, detail = "MANUAL_ALIGNMENT_TIMEOUT", "STOP_MAX_PULSES", "red line was not vertical before maximum pulses"
+                    elif self._motion_phase == "MANUAL_INTERSTEP_PAUSE" and alignment_confirmed:
+                        self._stop_motor()
+                        self._motion_phase = "MANUAL_COMPLETE"
+                        state, motor, detail = "MANUAL_RED_ALIGNED", "STOP_RED_VERTICAL", f"red angle {red.angle_degrees:.1f}° confirmed"
                     elif self._motion_phase == "MANUAL_INTERSTEP_PAUSE" and now < self._action_until:
                         self._stop_motor()
                         state, motor = "MANUAL_INTERSTEP_PAUSE", f"STOP_COOLDOWN_{self._action_until - now:.2f}s"
                     elif self._motion_phase == "MANUAL_INTERSTEP_PAUSE":
+                        self._manual_steps_started += 1
                         self._motion_phase = "MANUAL_STEP"
                         self._action_until = now + self._manual_profile.step_seconds
                         state, motor = "MANUAL_NEXT_STEP", "STOP_STARTING_NEXT_STEP"
