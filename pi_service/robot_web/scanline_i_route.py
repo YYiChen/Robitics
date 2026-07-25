@@ -259,6 +259,15 @@ class ScanlineIShapeRouteTracker:
             # Red outline = the actual green-course area where white tape is
             # permitted to become a recognition candidate.
             cv2.drawContours(output, contours, -1, (0, 0, 255), 2, cv2.LINE_AA)
+        red_marker_mask = getattr(self, "_visual_red_marker_mask", None)
+        if red_marker_mask is not None and red_marker_mask.shape == output.shape[:2] and red_marker_mask.any():
+            red_contours, _ = cv2.findContours(red_marker_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(output, red_contours, -1, (0, 0, 255), 3, cv2.LINE_AA)
+        tape_fit_line = getattr(self, "_visual_tape_fit_line", None)
+        if tape_fit_line is not None:
+            # Black = permissive, diagnostic-only tape fit; it never commands
+            # the motors and is intentionally distinct from yellow control.
+            cv2.line(output, tape_fit_line[0], tape_fit_line[1], (0, 0, 0), 3, cv2.LINE_AA)
         evidence = result.evidence
         for y, x, _width in evidence.line_centers:
             cv2.circle(output, (int(x), y), 5, (0, 255, 0), -1)
@@ -307,6 +316,8 @@ class ScanlineIShapeRouteTracker:
                     continue
                 result = analyzer.analyze(frame)
                 self._visual_course_field = getattr(analyzer, "course_field_mask", None)
+                self._visual_red_marker_mask = getattr(analyzer, "red_marker_mask", None)
+                self._visual_tape_fit_line = getattr(analyzer, "tape_fit_line", None)
                 evidence = result.evidence
                 with self._tuning_lock:
                     config = self.config

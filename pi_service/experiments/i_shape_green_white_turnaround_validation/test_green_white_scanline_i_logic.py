@@ -61,6 +61,15 @@ class GreenWhiteScanlineTests(unittest.TestCase):
         evidence = self.analyzer.analyze(frame).evidence
         self.assertTrue(evidence.line_lost)
 
+    def test_red_excess_does_not_turn_bright_white_tape_into_a_red_marker(self):
+        self.analyzer.analyze(green_i_frame())
+        self.assertEqual(int(np.count_nonzero(self.analyzer.red_marker_mask)), 0)
+
+    def test_permissive_tape_fit_is_available_without_control_authority(self):
+        result = self.analyzer.analyze(green_i_frame())
+        self.assertTrue(result.evidence.valid_line)
+        self.assertIsNotNone(self.analyzer.tape_fit_line)
+
     def test_pale_floor_patch_touching_green_on_one_side_is_rejected(self):
         image = np.full((480, 640, 3), (55, 150, 45), dtype=np.uint8)
         # Broad bright floor touches the green course only along its lower

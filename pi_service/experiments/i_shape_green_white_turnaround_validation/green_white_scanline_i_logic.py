@@ -52,6 +52,8 @@ class GreenWhiteScanlineConfig(HybridScanlineConfig):
     # produces a much thicker distance-transform core.
     green_backbone_max_tape_half_width: float = 40.0
     green_backbone_max_wide_ratio: float = 0.30
+    red_excess_min: int = 44
+    red_channel_min: int = 120
     red_hue_low_max: int = 12
     red_hue_high_min: int = 165
     red_saturation_min: int = 85
@@ -69,6 +71,9 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         self.config = config
         self._latest_green_mask: np.ndarray | None = None
         self._latest_green_field: np.ndarray | None = None
+        self._latest_course_allowed: np.ndarray | None = None
+        self._latest_red_marker_mask: np.ndarray | None = None
+        self._latest_tape_fit_line: tuple[tuple[int, int], tuple[int, int]] | None = None
 
     @staticmethod
     def _odd(value: int) -> int:
@@ -112,9 +117,40 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         """Current-frame green course area, shared with the preview overlay."""
         return self._latest_green_field
 
+    @property
+    def red_marker_mask(self) -> np.ndarray | None:
+        return self._latest_red_marker_mask
+
+    @property
+    def tape_fit_line(self) -> tuple[tuple[int, int], tuple[int, int]] | None:
+        """Diagnostic-only best straight segment through permissive tape pixels."""
+        return self._latest_tape_fit_line
+
+    @staticmethod
+    def _fit_permissive_tape(mask: np.ndarray) -> tuple[tuple[int, int], tuple[int, int]] | None:
+        """Fit a display-only line before strict component validation.
+
+        This is deliberately not fed into the motor controller.  It lets the
+        preview show where permissive white evidence suggests tape may be when
+        the stricter route component is correctly withheld.
+        """
+        lines = cv2.HoughLinesP(mask, 1, np.pi / 180.0, 32, minLineLength=60, maxLineGap=32)
+        if lines is None:
+            return None
+        x1, y1, x2, y2 = max(
+            (tuple(map(int, line[0])) for line in lines),
+            key=lambda line: float((line[2] - line[0]) ** 2 + (line[3] - line[1]) ** 2),
+        )
+        return (x1, y1), (x2, y2)
+
     def _make_mask(self, frame: np.ndarray, blur_kernel: int, morphology_kernel: int) -> np.ndarray:
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         config = self.config
+        # Do not leave a previous frame's diagnostic overlay visible if the
+        # current frame has no valid green course field.
+        self._latest_course_allowed = None
+        self._latest_red_marker_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+        self._latest_tape_fit_line = None
         white = cv2.inRange(
             hsv,
             np.array((0, 0, config.white_value_min), dtype=np.uint8),
@@ -152,11 +188,14 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
             green_field,
             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (margin, margin)),
         )
+        self._latest_course_allowed = course_allowed
         mask = cv2.bitwise_and(white, course_allowed)
         cleanup_size = self._odd(max(3, morphology_kernel))
         cleanup = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (cleanup_size, cleanup_size))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, cleanup)
-        return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cleanup)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cleanup)
+        self._latest_tape_fit_line = self._fit_permissive_tape(mask)
+        return mask
 
     @staticmethod
     def _green_at(green: np.ndarray, x: float, y: float, radius: int) -> bool:
@@ -262,14 +301,21 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         """Find the two red fragments flanking the incoming white stem."""
         height, width = frame.shape[:2]
         config = self.config
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        red_low = cv2.inRange(hsv, np.array((0, config.red_saturation_min, config.red_value_min), dtype=np.uint8), np.array((config.red_hue_low_max, 255, 255), dtype=np.uint8))
-        red_high = cv2.inRange(hsv, np.array((config.red_hue_high_min, config.red_saturation_min, config.red_value_min), dtype=np.uint8), np.array((180, 255, 255), dtype=np.uint8))
-        green = cv2.inRange(hsv, np.array((config.green_hue_min, config.green_saturation_min, config.green_value_min), dtype=np.uint8), np.array((config.green_hue_max, 255, 255), dtype=np.uint8))
-        neighbour_size = self._odd(max(3, config.green_neighbour_kernel))
-        green_neighbour = cv2.dilate(green, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (neighbour_size, neighbour_size)))
+        blue, green, red_channel = cv2.split(frame)
+        red_excess = red_channel.astype(np.int16) - np.maximum(green, blue).astype(np.int16)
+        red = np.where(
+            (red_channel >= config.red_channel_min) & (red_excess >= config.red_excess_min),
+            255,
+            0,
+        ).astype(np.uint8)
+        course_allowed = self._latest_course_allowed
+        if course_allowed is None or course_allowed.shape != red.shape:
+            red = np.zeros_like(red)
+        else:
+            red = cv2.bitwise_and(red, course_allowed)
         cleanup = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        red = cv2.morphologyEx(cv2.bitwise_and(cv2.bitwise_or(red_low, red_high), green_neighbour), cv2.MORPH_OPEN, cleanup)
+        red = cv2.morphologyEx(red, cv2.MORPH_OPEN, cleanup)
+        self._latest_red_marker_mask = red
         count, _labels, stats, centroids = cv2.connectedComponentsWithStats(red, connectivity=8)
         minimum_area = max(12, int(round(width * height * config.red_min_component_area_ratio)))
         fragments: list[tuple[int, int, int, int, int, float, float]] = []
