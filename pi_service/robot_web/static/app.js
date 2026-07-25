@@ -38,6 +38,7 @@ function updateAutonomousUi(autonomous) {
   const available = autonomous.available === true;
   const enabled = autonomous.enabled === true;
   const scanlineI = autonomous.mode === "scanline_i" || autonomous.mode === "scanline_i_green_white" || autonomous.mode === "scanline_i_four_endpoint_green_white";
+  const endLine = autonomous.mode === "end_line_turn_adaptor";
   const scanlineLabel = autonomous.mode === "scanline_i_four_endpoint_green_white" ? "工字形四端点验证" : (autonomous.mode === "scanline_i_green_white" ? "绿地白线 I 型" : "扫描线 I 型");
   const button = $("#autonomousToggle"), unavailable = $("#routePreviewUnavailable"), image = $("#routePreview");
   button.disabled = !available;
@@ -47,33 +48,35 @@ function updateAutonomousUi(autonomous) {
   unavailable.classList.toggle("hidden", available);
   if (!available) image.removeAttribute("src");
   const tuning = autonomous.tuning || {};
-  const activeTuningInputs = document.querySelectorAll(scanlineI ? "[data-scanline-tuning]" : "[data-route-tuning]");
+  const activeTuningInputs = document.querySelectorAll(scanlineI ? "[data-scanline-tuning]" : (endLine ? "[data-end-line-tuning]" : "[data-route-tuning]"));
   for (const input of activeTuningInputs) {
-    const key = scanlineI ? input.dataset.scanlineTuning : input.dataset.routeTuning;
+    const key = scanlineI ? input.dataset.scanlineTuning : (endLine ? input.dataset.endLineTuning : input.dataset.routeTuning);
     if (Object.prototype.hasOwnProperty.call(tuning, key) && document.activeElement !== input) input.value = tuning[key];
     input.disabled = !available;
   }
   $("#scanlineRouteTuning").classList.toggle("hidden", !scanlineI);
-  $("#genericRouteTuning").classList.toggle("hidden", scanlineI);
-  $("#genericRouteTuningNote").classList.toggle("hidden", scanlineI);
+  $("#endLineRouteTuning").classList.toggle("hidden", !endLine);
+  $("#genericRouteTuning").classList.toggle("hidden", scanlineI || endLine);
+  $("#genericRouteTuningNote").classList.toggle("hidden", scanlineI || endLine);
   const tuningState = $("#routeTuningState");
-  if (tuningState) tuningState.textContent = available ? (scanlineI ? "扫描线 I 型实时参数" : "实时参数") : "路线预判未开启";
+  if (tuningState) tuningState.textContent = available ? (scanlineI ? "扫描线 I 型实时参数" : (endLine ? "单白线红终点实时参数" : "实时参数")) : "路线预判未开启";
   $("#applyRouteTuning").disabled = !available;
-  $("#applyRouteTuning").textContent = scanlineI ? "实时应用并保存 I 型参数" : "实时应用并保存路线参数";
+  $("#applyRouteTuning").textContent = scanlineI ? "实时应用并保存 I 型参数" : (endLine ? "实时应用并保存单白线参数" : "实时应用并保存路线参数");
 }
 $("#autonomousToggle").onclick = toggleAutonomousDrive;
 $("#applyRouteTuning").onclick = async () => {
   const payload = {};
   const scanlineI = $("#scanlineRouteTuning").classList.contains("hidden") === false;
-  for (const input of document.querySelectorAll(scanlineI ? "[data-scanline-tuning]" : "[data-route-tuning]")) {
-    payload[scanlineI ? input.dataset.scanlineTuning : input.dataset.routeTuning] = Number(input.value);
+  const endLine = $("#endLineRouteTuning").classList.contains("hidden") === false;
+  for (const input of document.querySelectorAll(scanlineI ? "[data-scanline-tuning]" : (endLine ? "[data-end-line-tuning]" : "[data-route-tuning]"))) {
+    payload[scanlineI ? input.dataset.scanlineTuning : (endLine ? input.dataset.endLineTuning : input.dataset.routeTuning)] = Number(input.value);
   }
   try {
     const response = await requestJson("/api/autonomous/tuning", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)}, 1500);
     const data = await response.json();
     if (!response.ok || !data.ok) throw Error(data.error || "循迹参数应用失败");
     updateAutonomousUi(data.autonomous || {});
-    note(scanlineI ? "I 型直行、掉头与预判刹车参数已实时应用并保存。" : "循迹参数已实时应用，并保存到 tuning.py。");
+    note(scanlineI ? "I 型直行、掉头与预判刹车参数已实时应用并保存。" : (endLine ? "单白线红终点参数已实时应用，并保存到 end_line_web_tuning.json。" : "循迹参数已实时应用，并保存到 tuning.py。"));
   } catch (error) { note(error.message); }
 };
 
