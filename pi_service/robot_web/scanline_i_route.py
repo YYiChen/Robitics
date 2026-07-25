@@ -106,6 +106,7 @@ class ScanlineIShapeRouteTracker:
         self._lock = threading.Lock()
         self._tuning_lock = threading.RLock()
         self._motor_active = False
+        self._planner: IShapeTurnaroundPlanner | None = None
         self._run_log = None
         self._last_logged_lookahead: tuple[float | None, int | None] | None = None
         self._status = {"available": True, "running": False, "enabled": False, "mode": self.route_mode, "state": "starting", "detail": "正在启动扫描线 I 型识别", "frame": 0, "confidence": None}
@@ -168,6 +169,10 @@ class ScanlineIShapeRouteTracker:
                 values = {field: getattr(updated, field) for field in SCANLINE_TUNING_FIELDS}
                 updated.tuning_path.write_text(json.dumps(values, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             self.config = updated
+            if self._planner is not None:
+                # Apply the changed thresholds without resetting BAR_MARKED or
+                # PIVOT progress in the active M-gated run.
+                self._planner.config = self._planner_config(updated)
         self._set_status(detail="扫描线 I 型直行与掉头参数已实时应用并保存")
         return self.status_dict()
 
@@ -313,6 +318,8 @@ class ScanlineIShapeRouteTracker:
             self._open_run_log(initial_config)
             self._set_status(running=True, state="ready", **self._ready_status(initial_config))
             planner = IShapeTurnaroundPlanner(self._planner_config(initial_config))
+            with self._tuning_lock:
+                self._planner = planner
             interval, last, frame_index = 1.0 / max(1.0, self.config.process_fps), 0.0, 0
             while not self._stop.is_set():
                 jpeg, now = self.camera.latest_jpeg(), time.monotonic()
@@ -359,6 +366,8 @@ class ScanlineIShapeRouteTracker:
                     # paused camera can remain parked on the bar indefinitely;
                     # the next M press must start a fresh confirmation window.
                     planner = IShapeTurnaroundPlanner(self._planner_config(config))
+                    with self._tuning_lock:
+                        self._planner = planner
                     decision = planner.step(evidence, now)
                 annotated = self._draw(cv2, frame, result, decision, motor_text)
                 ok, encoded = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
@@ -373,4 +382,6 @@ class ScanlineIShapeRouteTracker:
         finally:
             self._stop_motor()
             self._close_run_log()
+            with self._tuning_lock:
+                self._planner = None
             self._set_status(running=False)

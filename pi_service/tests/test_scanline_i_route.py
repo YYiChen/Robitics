@@ -13,7 +13,7 @@ from scanline_i_route import (  # noqa: E402
     ScanlineIShapeRouteTracker,
     load_scanline_tuning_config,
 )
-from scanline_i_logic import TurnaroundState  # noqa: E402
+from scanline_i_logic import IShapeTurnaroundPlanner, TurnaroundState  # noqa: E402
 
 
 class _Gate:
@@ -41,6 +41,20 @@ class ScanlineIRouteTests(unittest.TestCase):
         tracker = ScanlineIShapeRouteTracker(None, None, None, _Gate())
         with self.assertRaisesRegex(ValueError, "最短掉头时间"):
             tracker.update_tuning({"pivot_min_seconds": 6.0, "pivot_max_seconds": 5.0})
+
+    def test_web_tuning_updates_running_planner_without_resetting_route_state(self):
+        tracker = ScanlineIShapeRouteTracker(None, None, None, _Gate())
+        planner = IShapeTurnaroundPlanner(tracker._planner_config(tracker.config))
+        planner.state = TurnaroundState.BAR_MARKED
+        tracker._planner = planner
+
+        tracker.update_tuning({"pivot_min_seconds": 1.2, "pivot_max_seconds": 3.4, "bar_mark_timeout_seconds": 2.1})
+
+        self.assertIs(tracker._planner, planner)
+        self.assertIs(planner.state, TurnaroundState.BAR_MARKED)
+        self.assertEqual(planner.config.pivot_min_seconds, 1.2)
+        self.assertEqual(planner.config.pivot_max_seconds, 3.4)
+        self.assertEqual(planner.config.bar_mark_timeout_seconds, 2.1)
 
     def test_straight_following_uses_differential_pwm_for_off_center_line(self):
         evidence = SimpleNamespace(line_center_x=400.0, line_centers=((1, 400.0, 20),) * 3)
