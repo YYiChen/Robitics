@@ -11,6 +11,15 @@ chmod +x /home/g11/Desktop/pi_service/experiments/marker_count_preview_validatio
 
 在浏览器打开 `http://100.80.46.54:5055`。仅完整的四臂 X 横杠会进入候选；同一个横杠需连续识别两帧才记一次，离开画面约 1.2 秒后才能再次计数。四个横杠为一圈：显示由 `1/4`、`2/4`、`3/4` 变为 `0/4 LAP=1`。
 
+绿底白线的仅识别预览（同样不会启动电机）：
+
+```bash
+chmod +x /home/g11/Desktop/pi_service/experiments/marker_count_preview_validation/run_pi_green_white_route_preview.sh
+/home/g11/Desktop/pi_service/experiments/marker_count_preview_validation/run_pi_green_white_route_preview.sh
+```
+
+它使用 HSV 白线/绿底分割，而不是黑线版本使用的灰度阈值。
+
 原始逐帧日志在：
 
 ```text

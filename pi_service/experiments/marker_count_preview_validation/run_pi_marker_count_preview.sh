@@ -10,7 +10,9 @@ ROBOT_WEB_DIR="${PI_SERVICE_DIR}/robot_web"
 WEB_PORT=5000
 DEBUG_WEB_PORT=5055
 CONTROLLER_URL="http://127.0.0.1:${WEB_PORT}"
-TRACK_CONFIG="${WORKSPACE}/third_party/DeskMate-Advance/src/track_line/config.continuous_path.json"
+# May be overridden by a specialised display-only launcher, for example the
+# green-floor/white-line preview. Keep the dark-line config as the default.
+TRACK_CONFIG="${TRACK_CONFIG:-${WORKSPACE}/third_party/DeskMate-Advance/src/track_line/config.continuous_path.json}"
 LOG_DIR="${PI_SERVICE_DIR}/logs/marker_count_preview"
 LOG_FILE="${LOG_DIR}/latest.log"
 ROBOT_WEB_PID=""
