@@ -44,8 +44,27 @@ function updateAutonomousUi(autonomous) {
   $("#routePreviewMeta").textContent = available ? `${enabled ? "行驶中" : "已暂停"} · ${autonomous.confidence == null ? "—" : `置信度 ${fixed(autonomous.confidence)}`}` : "未开启";
   unavailable.classList.toggle("hidden", available);
   if (!available) image.removeAttribute("src");
+  const tuning = autonomous.tuning || {};
+  for (const input of document.querySelectorAll("[data-route-tuning]")) {
+    const key = input.dataset.routeTuning;
+    if (Object.prototype.hasOwnProperty.call(tuning, key) && document.activeElement !== input) input.value = tuning[key];
+    input.disabled = !available;
+  }
+  const tuningState = $("#routeTuningState");
+  if (tuningState) tuningState.textContent = available ? "实时参数" : "路线预判未开启";
 }
 $("#autonomousToggle").onclick = toggleAutonomousDrive;
+$("#applyRouteTuning").onclick = async () => {
+  const payload = {};
+  for (const input of document.querySelectorAll("[data-route-tuning]")) payload[input.dataset.routeTuning] = Number(input.value);
+  try {
+    const response = await requestJson("/api/autonomous/tuning", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)}, 1500);
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw Error(data.error || "循迹参数应用失败");
+    updateAutonomousUi(data.autonomous || {});
+    note("循迹参数已实时应用，并保存到 tuning.py。");
+  } catch (error) { note(error.message); }
+};
 
 async function requestJson(url, options = {}, timeoutMs = 500) {
   const abort = new AbortController(), timer = setTimeout(() => abort.abort(), timeoutMs);

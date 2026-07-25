@@ -1,8 +1,9 @@
 """In-process route preview and M-key controlled autonomous driving."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+import re
 import sys
 import threading
 import time
@@ -50,6 +51,7 @@ class RoutePreviewPublisher:
 @dataclass(frozen=True)
 class AutonomousRouteConfig:
     detector_config: Path
+    tuning_path: Path | None = None
     process_fps: float = 20.0
     straight_pwm: int = 95
     launch_pwm: int = 155
@@ -58,11 +60,53 @@ class AutonomousRouteConfig:
     correction_deadband: float = 0.01
     minimum_correction_pwm: int = 20
     maximum_correction_pwm: int = 130
-    minimum_wheel_pwm: int = 0
+    minimum_wheel_pwm: int = 55
     maximum_wheel_pwm: int = 200
     sharp_turn_error: float = 0.08
     sharp_turn_correction_pwm: int = 55
     sharp_turn_inner_pwm: int = 0
+    line_lost_stop_frames: int = 3
+    line_lost_prediction_seconds: float = 0.75
+    line_lost_stop_seconds: float = 1.0
+    marker_confirm_frames: int = 2
+    marker_clear_frames: int = 12
+    marker_rearm_y_drop_ratio: float = 0.18
+    markers_per_lap: int = 4
+
+
+TUNING_FIELDS = {
+    "process_fps": ("PROCESS_FPS", float, 1.0, 30.0),
+    "line_lost_stop_frames": ("LINE_LOST_STOP_FRAMES", int, 1, 60),
+    "line_lost_prediction_seconds": ("LINE_LOST_PREDICTION_SECONDS", float, 0.0, 5.0),
+    "line_lost_stop_seconds": ("LINE_LOST_STOP_SECONDS", float, 0.0, 8.0),
+    "marker_confirm_frames": ("MARKER_CONFIRM_FRAMES", int, 1, 30),
+    "marker_clear_frames": ("MARKER_CLEAR_FRAMES", int, 1, 120),
+    "marker_rearm_y_drop_ratio": ("MARKER_REARM_Y_DROP_RATIO", float, 0.0, 1.0),
+    "markers_per_lap": ("MARKERS_PER_LAP", int, 1, 20),
+    "straight_pwm": ("STRAIGHT_PWM", int, 0, 200),
+    "launch_pwm": ("LAUNCH_PWM", int, 0, 200),
+    "lookahead_gain": ("LOOKAHEAD_GAIN", float, 0.0, 500.0),
+    "heading_weight": ("HEADING_WEIGHT", float, 0.0, 2.0),
+    "correction_deadband": ("CORRECTION_DEADBAND", float, 0.0, 1.0),
+    "minimum_correction_pwm": ("MINIMUM_CORRECTION_PWM", int, 0, 200),
+    "maximum_correction_pwm": ("MAXIMUM_CORRECTION_PWM", int, 0, 200),
+    "minimum_wheel_pwm": ("MINIMUM_WHEEL_PWM", int, 0, 200),
+    "maximum_wheel_pwm": ("MAXIMUM_WHEEL_PWM", int, 0, 200),
+    "sharp_turn_error": ("SHARP_TURN_ERROR", float, 0.0, 1.0),
+    "sharp_turn_correction_pwm": ("SHARP_TURN_CORRECTION_PWM", int, 0, 200),
+    "sharp_turn_inner_pwm": ("SHARP_TURN_INNER_PWM", int, -200, 200),
+}
+
+
+def load_tuning_config(detector_config: Path, tuning_path: Path) -> AutonomousRouteConfig:
+    """Load trusted constant assignments from the existing tuning.py file."""
+    values: dict[str, object] = {}
+    namespace: dict[str, object] = {}
+    exec(tuning_path.read_text(encoding="utf-8"), namespace)
+    for field, (constant, converter, _low, _high) in TUNING_FIELDS.items():
+        if constant in namespace:
+            values[field] = converter(namespace[constant])
+    return AutonomousRouteConfig(detector_config=detector_config, tuning_path=tuning_path, **values)
 
 
 class AutonomousRouteTracker:
@@ -70,7 +114,7 @@ class AutonomousRouteTracker:
     def __init__(self, controller, camera, publisher: RoutePreviewPublisher, gate: AutonomousRunGate, config: AutonomousRouteConfig) -> None:
         self.controller, self.camera, self.publisher, self.gate, self.config = controller, camera, publisher, gate, config
         self._stop = threading.Event(); self._thread: threading.Thread | None = None; self._lock = threading.Lock()
-        self._motor_active = False; self._launch_until = 0.0
+        self._motor_active = False; self._launch_until = 0.0; self._tuning_lock = threading.RLock(); self._tuning_version = 0
         self._status = {"available": True, "running": False, "enabled": False, "state": "starting", "detail": "等待路线识别器启动", "frame": 0}
 
     def start(self) -> None:
@@ -83,6 +127,8 @@ class AutonomousRouteTracker:
 
     def status_dict(self) -> dict:
         with self._lock: status = dict(self._status)
+        with self._tuning_lock:
+            status["tuning"] = {key: getattr(self.config, key) for key in TUNING_FIELDS}
         status["enabled"] = self.gate.enabled()
         return status
 
@@ -90,6 +136,42 @@ class AutonomousRouteTracker:
         enabled = self.gate.toggle()
         if not enabled: self._stop_motor()
         self._set_status(enabled=enabled, detail="自动行驶已开启" if enabled else "自动行驶已暂停，电机已停止")
+        return self.status_dict()
+
+    def update_tuning(self, payload: dict) -> dict:
+        """Validate, persist and atomically publish a new route-control setup."""
+        changes: dict[str, object] = {}
+        for field, (_constant, converter, low, high) in TUNING_FIELDS.items():
+            if field not in payload:
+                continue
+            try:
+                value = converter(payload[field])
+            except (TypeError, ValueError):
+                raise ValueError(f"{field} 必须是有效数字") from None
+            if not low <= value <= high:
+                raise ValueError(f"{field} 必须在 {low} 到 {high} 之间")
+            changes[field] = value
+        if not changes:
+            raise ValueError("没有可更新的循迹参数")
+        if changes.get("line_lost_prediction_seconds", self.config.line_lost_prediction_seconds) > changes.get("line_lost_stop_seconds", self.config.line_lost_stop_seconds):
+            raise ValueError("盲区预测时间不能大于最终停车时间")
+        if changes.get("minimum_correction_pwm", self.config.minimum_correction_pwm) > changes.get("maximum_correction_pwm", self.config.maximum_correction_pwm):
+            raise ValueError("最小转向差不能大于最大转向差")
+        if changes.get("minimum_wheel_pwm", self.config.minimum_wheel_pwm) > changes.get("maximum_wheel_pwm", self.config.maximum_wheel_pwm):
+            raise ValueError("最小轮速不能大于最大轮速")
+        with self._tuning_lock:
+            updated = replace(self.config, **changes)
+            if updated.tuning_path:
+                source = updated.tuning_path.read_text(encoding="utf-8")
+                for field, value in changes.items():
+                    constant = TUNING_FIELDS[field][0]
+                    source, count = re.subn(rf"(?m)^{constant}\\s*=\\s*[^\\n#]+", f"{constant} = {value!r}", source, count=1)
+                    if count != 1:
+                        source += f"\n{constant} = {value!r}\n"
+                updated.tuning_path.write_text(source, encoding="utf-8")
+            self.config = updated
+            self._tuning_version += 1
+        self._set_status(detail="循迹参数已实时应用并保存到 tuning.py")
         return self.status_dict()
 
     def _set_status(self, **changes) -> None:
@@ -130,12 +212,16 @@ class AutonomousRouteTracker:
             from continuous_motor_control import ContinuousMotorConfig, path_drive_details
             from marker_counter import MarkerCounter, MarkerCounterConfig
             detector = OpenCVLineDetector(LineDetectorConfig.from_json(self.config.detector_config))
-            planner = ContinuousPathPlanner(ContinuousPathConfig())
-            marker_counter = MarkerCounter(MarkerCounterConfig(confirm_frames=3, clear_frames=4, markers_per_lap=4, rearm_y_drop_ratio=.55))
-            motor = ContinuousMotorConfig("in-process", straight_pwm=self.config.straight_pwm, launch_pwm=self.config.launch_pwm, lookahead_gain=self.config.lookahead_gain, heading_weight=self.config.heading_weight, correction_deadband=self.config.correction_deadband, minimum_correction_pwm=self.config.minimum_correction_pwm, maximum_correction_pwm=self.config.maximum_correction_pwm, minimum_wheel_pwm=self.config.minimum_wheel_pwm, sharp_turn_error=self.config.sharp_turn_error, sharp_turn_correction_pwm=self.config.sharp_turn_correction_pwm, sharp_turn_inner_pwm=self.config.sharp_turn_inner_pwm)
             self._set_status(running=True, state="ready", detail="视觉识别运行中；按 M 开启自动行驶")
-            last, index, last_pair, interval = 0.0, 0, None, 1.0 / max(1.0, self.config.process_fps)
+            last, index, last_pair, interval, applied_version = 0.0, 0, None, 0.05, -1
             while not self._stop.is_set():
+                with self._tuning_lock:
+                    config, version = self.config, self._tuning_version
+                if version != applied_version:
+                    planner = ContinuousPathPlanner(ContinuousPathConfig(minimum_confidence=.38, line_lost_stop_frames=config.line_lost_stop_frames, line_lost_prediction_seconds=config.line_lost_prediction_seconds, line_lost_stop_seconds=config.line_lost_stop_seconds))
+                    marker_counter = MarkerCounter(MarkerCounterConfig(confirm_frames=config.marker_confirm_frames, clear_frames=config.marker_clear_frames, markers_per_lap=config.markers_per_lap, rearm_y_drop_ratio=config.marker_rearm_y_drop_ratio))
+                    motor = ContinuousMotorConfig("in-process", straight_pwm=config.straight_pwm, launch_pwm=config.launch_pwm, lookahead_gain=config.lookahead_gain, heading_weight=config.heading_weight, correction_deadband=config.correction_deadband, minimum_correction_pwm=config.minimum_correction_pwm, maximum_correction_pwm=config.maximum_correction_pwm, minimum_wheel_pwm=config.minimum_wheel_pwm, sharp_turn_error=config.sharp_turn_error, sharp_turn_correction_pwm=config.sharp_turn_correction_pwm, sharp_turn_inner_pwm=config.sharp_turn_inner_pwm)
+                    interval, applied_version = 1.0 / max(1.0, config.process_fps), version
                 jpeg, now = self.camera.latest_jpeg(), time.monotonic()
                 if jpeg is None or now - last < interval:
                     self._stop.wait(.005); continue
