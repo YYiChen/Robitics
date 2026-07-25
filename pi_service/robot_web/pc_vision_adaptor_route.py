@@ -25,7 +25,6 @@ from protocol import VisionEvent, parse_event  # noqa: E402
 class PcVisionAdaptorConfig:
     process_fps: float = 20.0
     straight_pwm: int = 85
-    slow_pwm: int = 55
     pivot_pwm: int = 200
     pivot_seconds: float = 2.5
     brake_hold_seconds: float = .18
