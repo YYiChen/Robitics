@@ -13,6 +13,8 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[2]
 SCANLINE_EXPERIMENT = ROOT / "pi_service" / "experiments" / "i_shape_scanline_turnaround_validation"
 STRAIGHT_LINE_EXPERIMENT = ROOT / "pi_service" / "experiments" / "straight_line_stop_validation"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 if str(SCANLINE_EXPERIMENT) not in sys.path:
     sys.path.insert(0, str(SCANLINE_EXPERIMENT))
 if str(STRAIGHT_LINE_EXPERIMENT) not in sys.path:
