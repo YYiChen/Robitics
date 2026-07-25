@@ -54,6 +54,12 @@ class ScanlineEvidence:
     red_marker_detected: bool = False
     red_marker_y: int | None = None
     red_marker_span: int | None = None
+    # ---- Fixed-course two-red-band calibration (optional) ----
+    red_layer_count: int = 0
+    red_calibration_state: str = "NO_RED"
+    red_far_y: int | None = None
+    red_far_bottom_y: int | None = None
+    red_near_y: int | None = None
     frame_height: int = 0
 
 

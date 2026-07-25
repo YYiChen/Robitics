@@ -91,6 +91,15 @@ class RedBandLayer:
     y_spread: int
 
 
+@dataclass(frozen=True)
+class RedBandCalibration:
+    """Stateful interpretation of the two physical red calibration layers."""
+    state: str
+    layer_count: int
+    far: RedBandLayer | None
+    near: RedBandLayer | None
+
+
 class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
     """Reuse all I-turn geometry; replace only black-tape Otsu segmentation."""
     def __init__(self, config: GreenWhiteScanlineConfig = GreenWhiteScanlineConfig()) -> None:
@@ -103,6 +112,9 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         self._latest_red_marker_mask: np.ndarray | None = None
         self._latest_tape_fit_line: tuple[tuple[int, int], tuple[int, int]] | None = None
         self._latest_red_band_layers: tuple[RedBandLayer, ...] = ()
+        self._latest_red_calibration = RedBandCalibration("NO_RED", 0, None, None)
+        self._red_pair_seen = False
+        self._red_far_only_seen = False
 
     @staticmethod
     def _odd(value: int) -> int:
@@ -147,6 +159,11 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         return self._latest_green_field
 
     @property
+    def course_roi_mask(self) -> np.ndarray | None:
+        """Exact permitted region; preview outline and candidate gate match."""
+        return self._latest_course_allowed
+
+    @property
     def red_marker_mask(self) -> np.ndarray | None:
         return self._latest_red_marker_mask
 
@@ -164,6 +181,10 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
     def red_band_layers(self) -> tuple[RedBandLayer, ...]:
         """Visible red layers, ordered from far (small Y) to near (large Y)."""
         return self._latest_red_band_layers
+
+    @property
+    def red_band_calibration(self) -> RedBandCalibration:
+        return self._latest_red_calibration
 
     @staticmethod
     def _fit_permissive_tape(mask: np.ndarray) -> tuple[tuple[int, int], tuple[int, int]] | None:
@@ -192,6 +213,7 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         self._latest_red_marker_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
         self._latest_tape_fit_line = None
         self._latest_red_band_layers = ()
+        self._latest_red_calibration = RedBandCalibration("NO_RED", 0, None, None)
         white = cv2.inRange(
             hsv,
             np.array((0, 0, config.white_value_min), dtype=np.uint8),
@@ -253,6 +275,10 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         cleanup = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (cleanup_size, cleanup_size))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, cleanup)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cleanup)
+        # Morphology can grow an edge by a few pixels.  Apply the same ROI
+        # gate one final time so neither visual yellow nor route/endpoint
+        # evidence can leak outside the red permitted-region outline.
+        mask = cv2.bitwise_and(mask, course_allowed)
         self._latest_tape_candidate_mask = mask
         self._latest_tape_fit_line = self._fit_permissive_tape(mask)
         return mask
@@ -467,6 +493,32 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         self._latest_red_band_layers = tuple(sorted(layers, key=lambda layer: layer.y))
         return (best is not None, None if best is None else best[1], None if best is None else best[2])
 
+    def _update_red_band_calibration(self) -> RedBandCalibration:
+        """Decode near warning vs far calibration layers without turning yet.
+
+        A single red layer is deliberately inert until this run has first
+        observed the two-layer pattern.  Once that proof exists, the remaining
+        layer is the far calibration band; its ``bottom_y`` is the future
+        turn-position measurement.  Motion policy remains separate so this
+        classification cannot itself command a pivot.
+        """
+        layers = self._latest_red_band_layers
+        if len(layers) >= 2:
+            self._red_pair_seen = True
+            self._red_far_only_seen = False
+            calibration = RedBandCalibration("TWO_LAYERS_KEEP_FORWARD", len(layers), layers[0], layers[-1])
+        elif len(layers) == 1 and self._red_pair_seen:
+            self._red_far_only_seen = True
+            calibration = RedBandCalibration("FAR_ONLY_CALIBRATING", 1, layers[0], None)
+        elif not layers and self._red_far_only_seen:
+            calibration = RedBandCalibration("FAR_EXITED_TURN_READY", 0, None, None)
+        elif len(layers) == 1:
+            calibration = RedBandCalibration("ONE_LAYER_UNARMED", 1, layers[0], None)
+        else:
+            calibration = RedBandCalibration("NO_RED", 0, None, None)
+        self._latest_red_calibration = calibration
+        return calibration
+
     def analyze(self, frame: np.ndarray):
         result = super().analyze(frame)
         evidence = result.evidence
@@ -486,6 +538,15 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
             if junction and junction_y is not None and junction_y < frame.shape[0] * self.config.early_junction_max_y_ratio:
                 evidence = replace(evidence, junction_detected=True, junction_y=junction_y, junction_arm_count=arms)
         detected, marker_y, marker_span = self._detect_red_band_marker(frame, evidence.line_center_x)
+        calibration = self._update_red_band_calibration()
+        evidence = replace(
+            evidence,
+            red_layer_count=calibration.layer_count,
+            red_calibration_state=calibration.state,
+            red_far_y=None if calibration.far is None else calibration.far.y,
+            red_far_bottom_y=None if calibration.far is None else calibration.far.bottom_y,
+            red_near_y=None if calibration.near is None else calibration.near.y,
+        )
         if not detected or marker_y is None:
             return result.__class__(evidence, result.component_mask)
         # Red only pre-authorizes the white T. White endpoint confirmation and

@@ -156,6 +156,7 @@ class FourEndpointValidationRouteTracker(GreenWhiteScanlineIShapeRouteTracker):
                     continue
                 result = analyzer.analyze(frame)
                 self._visual_course_field = analyzer.course_field_mask
+                self._visual_course_roi = analyzer.course_roi_mask
                 self._visual_tape_candidate_mask = analyzer.tape_candidate_mask
                 self._visual_red_marker_mask = analyzer.red_marker_mask
                 self._visual_tape_fit_line = analyzer.tape_fit_line

@@ -106,6 +106,33 @@ class GreenWhiteScanlineTests(unittest.TestCase):
         self.assertEqual(self.analyzer.red_band_layers[0].fragment_count, 1)
         self.assertEqual(self.analyzer.red_band_layers[1].fragment_count, 2)
 
+    def test_two_layer_red_calibration_requires_pair_before_far_only_is_armed(self):
+        two_layers = green_i_frame(transverse=True)
+        cv2.rectangle(two_layers, (190, 205), (450, 225), (0, 0, 255), -1)
+        cv2.rectangle(two_layers, (180, 330), (305, 350), (0, 0, 255), -1)
+        cv2.rectangle(two_layers, (335, 365), (460, 385), (0, 0, 255), -1)
+        self.analyzer.analyze(two_layers)
+        calibration = self.analyzer.red_band_calibration
+        self.assertEqual(calibration.state, "TWO_LAYERS_KEEP_FORWARD")
+        self.assertIsNotNone(calibration.far)
+        self.assertIsNotNone(calibration.near)
+
+        far_only = green_i_frame(transverse=True)
+        cv2.rectangle(far_only, (190, 240), (450, 260), (0, 0, 255), -1)
+        self.analyzer.analyze(far_only)
+        calibration = self.analyzer.red_band_calibration
+        self.assertEqual(calibration.state, "FAR_ONLY_CALIBRATING")
+        self.assertIsNotNone(calibration.far)
+        self.assertIsNone(calibration.near)
+
+    def test_candidate_mask_never_leaks_outside_the_displayed_course_roi(self):
+        self.analyzer.analyze(green_i_frame(transverse=True, red_band=True))
+        candidate = self.analyzer.tape_candidate_mask
+        roi = self.analyzer.course_roi_mask
+        self.assertIsNotNone(candidate)
+        self.assertIsNotNone(roi)
+        self.assertEqual(int(np.count_nonzero(cv2.bitwise_and(candidate, cv2.bitwise_not(roi)))), 0)
+
     def test_red_band_outside_the_white_route_is_rejected(self):
         image = green_i_frame()
         cv2.rectangle(image, (20, 250), (100, 270), (0, 0, 255), -1)
