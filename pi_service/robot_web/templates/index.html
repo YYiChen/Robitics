@@ -21,7 +21,7 @@
 
 <main class="console-shell">
   <section class="visual-workspace" aria-label="实时画面">
-    <div class="feed-grid single-feed-grid">
+    <div class="feed-grid">
       <article class="feed-card">
         <div class="feed-heading"><div><span class="eyebrow">低延迟控制画面</span><h2>实时预览</h2></div><span class="feed-badge" id="liveFeedMeta">连接中…</span></div>
         <div class="feed-stage">
@@ -29,6 +29,14 @@
           <video id="webrtcVideo" class="hidden" muted autoplay playsinline aria-label="H.264 WebRTC 视频" style="display:block;width:100%;height:100%;border:0;object-fit:contain"></video>
         </div>
         <div class="feed-footer"><span id="cameraMeta">读取视频参数…</span><span id="cameraBandwidth">—</span></div>
+      </article>
+      <article class="feed-card route-preview-card" id="routePreviewCard">
+        <div class="feed-heading"><div><span class="eyebrow">主进程内识别 · 仅最新帧</span><h2>路线预判</h2></div><span class="feed-badge" id="routePreviewMeta">未开启</span></div>
+        <div class="feed-stage">
+          <img id="routePreview" src="/route_preview_feed" alt="路线识别与预判画面">
+          <div class="feed-unavailable hidden" id="routePreviewUnavailable">本次服务未开启路线预判。</div>
+        </div>
+        <div class="feed-footer"><span id="autonomousState">视觉识别：等待中</span><button class="compact-button primary" id="autonomousToggle" type="button">M：开启自动行驶</button></div>
       </article>
       <article class="feed-card hidden" id="highresCard">
         <div class="feed-heading"><div><span class="eyebrow">2 FPS · JPEG 75</span><h2>高清图片预览</h2></div><span class="feed-badge" id="highresFeedMeta">预览关闭</span><button class="compact-button primary" id="highresPreviewToggle" type="button">开启预览</button></div>
@@ -43,7 +51,7 @@
     <section class="cockpit-strip" aria-label="驾驶态势">
       <article class="cockpit-card"><div class="cockpit-heading"><span>实时流状态</span><strong id="dashboardFlowState">读取中…</strong></div><div class="flow-grid"><div><span>采集 / 发送</span><strong id="dashboardFps">—</strong></div><div><span>帧龄</span><strong id="dashboardFrameAge">—</strong></div><div><span>编码</span><strong id="dashboardEncode">—</strong></div><div><span>发送带宽</span><strong id="dashboardBandwidth">—</strong></div></div><small id="dashboardFlowHint">显示当前低延迟预览链路的关键参数。</small></article>
     </section>
-    <p class="workspace-note">实时预览用于遥控；高清图片按设定帧率刷新（最高 30 FPS），供对照与 DL 使用。两条流均只保留最新帧，不写入树莓派磁盘。</p>
+    <p class="workspace-note">左侧为原始控制画面，右侧为同一主进程的路线预判。按 <strong>M</strong> 只切换自动行驶/立即停车，识别画面持续运行；两条流均只保留最新帧，不写入树莓派磁盘。</p>
   </section>
 
   <aside class="control-rail">
@@ -101,6 +109,6 @@
   </aside>
 </main>
 <script src="/static/i18n.js"></script>
-<script src="/static/app.js?v=20260724-card-direction-v6"></script>
+<script src="/static/app.js?v=20260725-autonomous-route-v1"></script>
 </body>
 </html>

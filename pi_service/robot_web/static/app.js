@@ -16,6 +16,36 @@ const actionKeys = {F:"w", SF:"slow", PL:"a", PR:"d", SPL:"x", SPR:"c", B:"s"};
 const keyboardKeys = {w:"w", a:"a", s:"s", d:"d", x:"x", c:"c", ArrowUp:"w", ArrowDown:"s", ArrowLeft:"a", ArrowRight:"d"};
 const heldKeys = new Set();
 const heldSteeringKeys = new Set();
+let autonomousToggleBusy = false;
+
+async function toggleAutonomousDrive() {
+  if (autonomousToggleBusy) return;
+  autonomousToggleBusy = true;
+  try {
+    // Never leave a manual key held when handing control to the route tracker.
+    releaseKeys();
+    const response = await requestJson("/api/autonomous/toggle", {method:"POST"}, 1000);
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw Error(data.error || "自动行驶切换失败");
+    updateAutonomousUi(data.autonomous || {});
+  } catch (error) {
+    note(error.message);
+  } finally {
+    autonomousToggleBusy = false;
+  }
+}
+function updateAutonomousUi(autonomous) {
+  const available = autonomous.available === true;
+  const enabled = autonomous.enabled === true;
+  const button = $("#autonomousToggle"), unavailable = $("#routePreviewUnavailable"), image = $("#routePreview");
+  button.disabled = !available;
+  button.textContent = available ? (enabled ? "M：暂停并停车" : "M：开启自动行驶") : "路线预判未开启";
+  $("#autonomousState").textContent = available ? `视觉：${autonomous.state || "等待"} · ${autonomous.detail || "—"}` : "视觉识别：本次服务未开启";
+  $("#routePreviewMeta").textContent = available ? `${enabled ? "行驶中" : "已暂停"} · ${autonomous.confidence == null ? "—" : `置信度 ${fixed(autonomous.confidence)}`}` : "未开启";
+  unavailable.classList.toggle("hidden", available);
+  if (!available) image.removeAttribute("src");
+}
+$("#autonomousToggle").onclick = toggleAutonomousDrive;
 
 async function requestJson(url, options = {}, timeoutMs = 500) {
   const abort = new AbortController(), timer = setTimeout(() => abort.abort(), timeoutMs);
@@ -469,6 +499,9 @@ for (const button of document.querySelectorAll("[data-feed]")) button.addEventLi
 for (const button of document.querySelectorAll("[data-deal]")) button.addEventListener("click", dealCard);
 for (const button of document.querySelectorAll("[data-servo-center]")) button.addEventListener("click", centerServo);
 addEventListener("keydown", event => { if (event.repeat) return;
+  // M controls only the autonomous motor gate. Vision stays alive and the
+  // current route-prediction frame remains visible while it is paused.
+  if (!editing(event) && (event.code === "KeyM" || event.key?.toLowerCase() === "m")) { event.preventDefault(); toggleAutonomousDrive(); return; }
   // P is reserved for the combined M3/M4 card action. Use KeyboardEvent.code as well
   // so the physical key still works with a Chinese input method enabled.
   if (event.code === "KeyP" || event.key?.toLowerCase() === "p") { event.preventDefault(); dealCard(); return; }
@@ -622,6 +655,7 @@ function streamDiagnosis(camera) {
   return ["未发现明显传输瓶颈", `树莓派编码 ${fixed(capture)} FPS、本浏览器收到 ${fixed(browserReceiveFps)} FPS、RTT ${fixed(statusRttMs)} ms；若操作仍卡，重点检查控制请求和浏览器负载。`];
 }
 async function refreshStatus() { try { const statusStartedAt = performance.now(); const response = await fetch("/api/status", {cache:"no-store"}), data = await response.json(), robot = data.robot, system = data.system || {}, oled = data.oled || {}, capabilities = data.capabilities || {}; statusRttMs = performance.now() - statusStartedAt;
+    updateAutonomousUi(data.autonomous || {});
     const camera = data.camera || {};
     setVideoTransport(camera);
     $("#cameraState").innerHTML = dot(camera.online, camera.online ? "在线" : camera.status); $("#arduinoState").innerHTML = dot(robot.arduino_online, robot.arduino_online ? "在线" : robot.serial ? "无响应" : "离线", robot.serial);

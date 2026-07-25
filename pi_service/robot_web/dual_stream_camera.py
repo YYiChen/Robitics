@@ -275,6 +275,11 @@ class DualStreamCamera:
         # the browser preview is deliberately switched off.
         return self._capture_highres_frame() or cached
 
+    def latest_jpeg(self) -> bytes | None:
+        """Return the newest JPEG available from the dual-stream camera."""
+        with self._condition:
+            return self._jpeg
+
     def iter_highres_mjpeg(self) -> Iterator[bytes]:
         last = -1
         self._highres_client_started()

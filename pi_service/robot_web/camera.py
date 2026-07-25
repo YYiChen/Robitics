@@ -708,6 +708,11 @@ class CameraStreamer:
         finally:
             self._client_stopped()
 
+    def latest_jpeg(self) -> bytes | None:
+        """Return the newest low-latency JPEG without creating a stream client."""
+        with self._condition:
+            return self._jpeg
+
     def latest_highres_jpeg(self) -> bytes | None:
         """Return a recent high-resolution JPEG without writing to disk."""
         with self._condition:

@@ -10,8 +10,9 @@ from dual_stream_camera import DualStreamCamera
 from oled_status import OledStatusService
 from system_metrics import SystemMetrics
 from webrtc_stream import WebRTCStreamer
+from autonomous_route import AutonomousRouteConfig, AutonomousRouteTracker, AutonomousRunGate, RoutePreviewPublisher
 
-def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStreamer | DualStreamCamera, system_metrics: SystemMetrics | None = None, oled: OledStatusService | None = None) -> Flask:
+def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStreamer | DualStreamCamera, system_metrics: SystemMetrics | None = None, oled: OledStatusService | None = None, route_preview: RoutePreviewPublisher | None = None, route_tracker: AutonomousRouteTracker | None = None) -> Flask:
     app = Flask(__name__)
     system_metrics = system_metrics or SystemMetrics()
     def mjpeg_only():
@@ -34,6 +35,16 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
         if unavailable is not None: return unavailable
         if not camera.online: return jsonify(error=camera.error or camera.status), 503
         return Response(camera.iter_highres_mjpeg(), mimetype="multipart/x-mixed-replace; boundary=frame")
+    @app.get("/route_preview_feed")
+    def route_preview_feed():
+        if route_preview is None:
+            return jsonify(error="路线预判未通过启动参数开启"), 404
+        return Response(route_preview.iter_mjpeg(), mimetype="multipart/x-mixed-replace; boundary=frame")
+    @app.post("/api/autonomous/toggle")
+    def autonomous_toggle():
+        if route_tracker is None:
+            return jsonify(ok=False, error="路线预判未通过启动参数开启"), 409
+        return jsonify(ok=True, autonomous=route_tracker.toggle_drive())
     @app.get("/api/camera/highres/latest")
     def latest_highres_image():
         unavailable = highres_available()
@@ -161,6 +172,7 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
             camera=camera.status_dict(),
             system=system_metrics.status_dict(),
             oled=oled.status_dict() if oled else {"online": False, "disabled": True, "error": "已通过启动参数关闭"},
+            autonomous=route_tracker.status_dict() if route_tracker else {"available": False, "enabled": False, "state": "disabled", "detail": "未通过启动参数开启"},
         )
     return app
 
@@ -181,6 +193,9 @@ def main() -> None:
     parser.add_argument("--highres-height", type=int, default=1232)
     parser.add_argument("--webrtc-udp-output", default="udp://127.0.0.1:1234?pkt_size=1316")
     parser.add_argument("--disable-oled", action="store_true")
+    parser.add_argument("--enable-autonomous-route", action="store_true", help="run green/white route preview inside the port-5000 service")
+    parser.add_argument("--route-config", type=Path, default=Path(__file__).resolve().parents[2] / "third_party" / "DeskMate-Advance" / "src" / "track_line" / "config.fixed_green_white_course.json")
+    parser.add_argument("--route-process-fps", type=float, default=20.0)
     parser.add_argument("--oled-address", type=lambda value: int(value, 0), default=0x3C)
     parser.add_argument("--oled-i2c-port", type=int, default=1)
     args = parser.parse_args()
@@ -200,16 +215,24 @@ def main() -> None:
     camera.start(); controller = RobotController(args.port, config_path=config_path); controller.start()
     oled = None if args.disable_oled else OledStatusService(controller, camera, address=args.oled_address, i2c_port=args.oled_i2c_port)
     if oled: oled.start()
+    route_preview = RoutePreviewPublisher() if args.enable_autonomous_route else None
+    route_gate = AutonomousRunGate() if args.enable_autonomous_route else None
+    route_tracker = None
+    if route_preview is not None and route_gate is not None:
+        route_tracker = AutonomousRouteTracker(controller, camera, route_preview, route_gate, AutonomousRouteConfig(args.route_config, process_fps=args.route_process_fps))
+        route_tracker.start()
     # Persist the current wheel profiles on normal process exit as well as
     # when the browser clicks the save button.  This covers Ctrl+C and service
     # shutdown, while RobotController.stop() remains idempotent.
     atexit.register(controller.stop)
     atexit.register(camera.stop)
     if oled: atexit.register(oled.stop)
+    if route_tracker: atexit.register(route_tracker.stop)
     try:
-        create_app(controller,camera,oled=oled).run(host="0.0.0.0",port=args.web_port,threaded=True,use_reloader=False)
+        create_app(controller,camera,oled=oled,route_preview=route_preview,route_tracker=route_tracker).run(host="0.0.0.0",port=args.web_port,threaded=True,use_reloader=False)
     finally:
         controller.stop()
         camera.stop()
         if oled: oled.stop()
+        if route_tracker: route_tracker.stop()
 if __name__ == "__main__": main()
