@@ -13,6 +13,7 @@ from scanline_i_route import (  # noqa: E402
     ScanlineIShapeRouteTracker,
     load_scanline_tuning_config,
 )
+from scanline_i_logic import TurnaroundState  # noqa: E402
 
 
 class _Gate:
@@ -44,3 +45,7 @@ class ScanlineIRouteTests(unittest.TestCase):
         right, left = ScanlineIShapeRouteTracker._straight_pair(evidence, 640, ScanlineIRouteConfig(straight_pwm=120))
         self.assertLess(right, left)
         self.assertEqual(right + left, 240)
+
+    def test_early_bar_prediction_keeps_line_following_active(self):
+        self.assertTrue(ScanlineIShapeRouteTracker._keeps_forward_motion(TurnaroundState.EARLY_BAR_PREDICTED))
+        self.assertFalse(ScanlineIShapeRouteTracker._keeps_forward_motion(TurnaroundState.BRAKE_BEFORE_PIVOT))

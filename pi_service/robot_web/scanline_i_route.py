@@ -31,6 +31,13 @@ from scanline_i_logic import (  # noqa: E402
 from straight_motor_control import StraightMotorConfig, drive_pwm_for_offset  # noqa: E402
 
 
+FORWARD_TRACKING_STATES = frozenset((
+    TurnaroundState.FOLLOW_STRAIGHT,
+    TurnaroundState.EARLY_BAR_PREDICTED,
+    TurnaroundState.BAR_MARKED,
+))
+
+
 @dataclass(frozen=True)
 class ScanlineIRouteConfig:
     process_fps: float = 20.0
@@ -163,6 +170,11 @@ class ScanlineIShapeRouteTracker:
         )
         return drive_pwm_for_offset(observation, motor)
 
+    @staticmethod
+    def _keeps_forward_motion(state: TurnaroundState) -> bool:
+        """A far junction is a prediction only; it must never brake the car."""
+        return state in FORWARD_TRACKING_STATES
+
     def _stop_motor(self) -> None:
         if self._motor_active:
             self.controller.stop_now()
@@ -204,7 +216,7 @@ class ScanlineIShapeRouteTracker:
                 initial_config = self.config
             if initial_config.use_hybrid:
                 analyzer = HybridScanlineAnalyzer()
-                self._set_status(running=True, state="ready", detail="Hybrid 扫描线 I 型识别运行中（骨架+交叉点预判）；按 M 开启自动行驶", mode="hybrid")
+                self._set_status(running=True, state="ready", detail="Hybrid 扫描线 I 型识别运行中（骨架+交叉点预判）；按 M 开启自动行驶", variant="hybrid")
             else:
                 analyzer = IShapeScanlineAnalyzer()
                 self._set_status(running=True, state="ready", detail="扫描线 I 型识别运行中；按 M 开启自动行驶", mode="legacy")
@@ -228,9 +240,10 @@ class ScanlineIShapeRouteTracker:
                     # Only an explicitly M-enabled drive session may advance
                     # endpoint confirmation or pivot timing.
                     decision = planner.step(evidence, now)
-                    if decision.state in (TurnaroundState.FOLLOW_STRAIGHT, TurnaroundState.BAR_MARKED):
-                        # A marked bar is deliberately driven through until
-                        # the near longitudinal stem disappears.
+                    if self._keeps_forward_motion(decision.state):
+                        # A far junction is only a prediction.  Continue to
+                        # follow the near line until the bar is marked and
+                        # the stem-loss confirmation authorizes braking.
                         right_pwm, left_pwm = self._straight_pair(evidence, frame.shape[1], config)
                         self.controller.set_direct_drive(right_pwm, left_pwm)
                         self._motor_active, motor_text = True, f"P_STRAIGHT R={right_pwm} L={left_pwm}"
