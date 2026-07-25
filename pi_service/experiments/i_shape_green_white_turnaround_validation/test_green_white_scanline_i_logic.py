@@ -52,6 +52,16 @@ class GreenWhiteScanlineTests(unittest.TestCase):
         evidence = self.analyzer.analyze(frame).evidence
         self.assertTrue(evidence.line_lost)
 
+    def test_pale_floor_patch_touching_green_on_one_side_is_rejected(self):
+        image = np.full((480, 640, 3), (55, 150, 45), dtype=np.uint8)
+        # Broad bright floor touches the green course only along its lower
+        # edge.  It passes the permissive HSV candidate mask but does not
+        # have a green-supported tape backbone.
+        cv2.rectangle(image, (120, 100), (639, 385), (215, 215, 215), -1)
+        result = self.analyzer.analyze(image)
+        self.assertTrue(result.evidence.line_lost)
+        self.assertEqual(int(np.count_nonzero(result.component_mask)), 0)
+
     def test_confirmed_white_bar_brakes_when_near_red_band_exits_bottom(self):
         planner = IShapeTurnaroundPlanner(
             TurnaroundConfig(

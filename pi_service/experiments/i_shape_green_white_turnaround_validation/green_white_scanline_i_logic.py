@@ -28,6 +28,20 @@ class GreenWhiteScanlineConfig(HybridScanlineConfig):
     minimum_green_roi_ratio: float = 0.18
     roi_top_ratio: float = 0.38
     green_neighbour_kernel: int = 31
+    # Do not make the HSV mask stricter.  Instead, after its permissive
+    # candidate stage, require a route backbone to have green floor on both
+    # sides of most of its locally measured widths.
+    green_backbone_min_length: int = 100
+    green_backbone_samples: int = 17
+    green_backbone_min_supported_ratio: float = 0.58
+    green_backbone_min_supported_samples: int = 6
+    green_backbone_side_margin_pixels: int = 7
+    green_backbone_green_probe_radius: int = 2
+    # Measured on the 640x480 fisheye preview: the near tape's half-width is
+    # below this for almost all of its backbone.  A broad pale floor patch
+    # produces a much thicker distance-transform core.
+    green_backbone_max_tape_half_width: float = 40.0
+    green_backbone_max_wide_ratio: float = 0.30
     red_hue_low_max: int = 12
     red_hue_high_min: int = 165
     red_saturation_min: int = 85
@@ -43,6 +57,7 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
     def __init__(self, config: GreenWhiteScanlineConfig = GreenWhiteScanlineConfig()) -> None:
         super().__init__(config)
         self.config = config
+        self._latest_green_mask: np.ndarray | None = None
 
     @staticmethod
     def _odd(value: int) -> int:
@@ -61,6 +76,10 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
             np.array((config.green_hue_min, config.green_saturation_min, config.green_value_min), dtype=np.uint8),
             np.array((config.green_hue_max, 255, 255), dtype=np.uint8),
         )
+        # `_select_route_component` runs immediately after `_make_mask` in
+        # the inherited analyzer.  Retain this frame's green evidence for its
+        # geometry check; the white candidate threshold itself stays broad.
+        self._latest_green_mask = green
         height = frame.shape[0]
         roi_start = min(height - 1, max(0, int(round(height * config.roi_top_ratio))))
         green_roi_ratio = float(np.count_nonzero(green[roi_start:])) / max(1, green[roi_start:].size)
@@ -75,6 +94,100 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         cleanup = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (cleanup_size, cleanup_size))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, cleanup)
         return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cleanup)
+
+    @staticmethod
+    def _green_at(green: np.ndarray, x: float, y: float, radius: int) -> bool:
+        height, width = green.shape
+        centre_x, centre_y = int(round(x)), int(round(y))
+        left, right = max(0, centre_x - radius), min(width, centre_x + radius + 1)
+        top, bottom = max(0, centre_y - radius), min(height, centre_y + radius + 1)
+        return left < right and top < bottom and bool(np.any(green[top:bottom, left:right]))
+
+    def _green_backbone_supported(self, component: np.ndarray) -> tuple[bool, float]:
+        """Check the selected component's centreline, not every white pixel.
+
+        A real tape has a narrow skeleton with green floor on both sides of
+        that skeleton.  A bright floor patch can touch the mat along one edge,
+        but its long skeleton path has no such two-sided support.  The probe
+        distance is derived from the local component width, so fish-eye
+        widening and oblique tape remain valid.
+        """
+        green = self._latest_green_mask
+        if green is None or green.shape != component.shape:
+            return False, 0.0
+        skeleton = self._skeletonize(component)
+        path, _lookahead, path_length = self._trace_skeleton(skeleton)
+        if path_length < self.config.green_backbone_min_length or len(path) < 3:
+            return False, 0.0
+        distance = cv2.distanceTransform((component > 0).astype(np.uint8), cv2.DIST_L2, 3)
+        sample_count = min(self.config.green_backbone_samples, max(3, len(path) - 2))
+        indices = np.linspace(1, len(path) - 2, sample_count, dtype=int)
+        supported = 0
+        checked = 0
+        wide_samples = 0
+        span = max(1, min(6, len(path) // 8))
+        for index in indices:
+            before_x, before_y = path[max(0, index - span)]
+            after_x, after_y = path[min(len(path) - 1, index + span)]
+            tangent_x, tangent_y = after_x - before_x, after_y - before_y
+            norm = float(np.hypot(tangent_x, tangent_y))
+            if norm < 1.0:
+                continue
+            normal_x, normal_y = -tangent_y / norm, tangent_x / norm
+            x, y = path[index]
+            probe = max(
+                self.config.green_backbone_side_margin_pixels,
+                int(round(float(distance[y, x]))) + self.config.green_backbone_side_margin_pixels,
+            )
+            wide_samples += int(float(distance[y, x]) > self.config.green_backbone_max_tape_half_width)
+            radius = self.config.green_backbone_green_probe_radius
+            both_sides = (
+                self._green_at(green, x + normal_x * probe, y + normal_y * probe, radius)
+                and self._green_at(green, x - normal_x * probe, y - normal_y * probe, radius)
+            )
+            checked += 1
+            supported += int(both_sides)
+        ratio = supported / max(1, checked)
+        wide_ratio = wide_samples / max(1, checked)
+        return (
+            checked >= self.config.green_backbone_min_supported_samples
+            and supported >= self.config.green_backbone_min_supported_samples
+            and ratio >= self.config.green_backbone_min_supported_ratio
+            and wide_ratio <= self.config.green_backbone_max_wide_ratio,
+            ratio,
+        )
+
+    def _select_route_component(self, mask: np.ndarray) -> np.ndarray:
+        """Select an anchored route only after green-supported backbone proof."""
+        constrained = cv2.bitwise_and(mask, self._route_corridor_mask(mask.shape))
+        connection_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (self.config.route_connection_kernel, self.config.route_connection_kernel),
+        )
+        constrained = cv2.morphologyEx(constrained, cv2.MORPH_CLOSE, connection_kernel)
+        count, labels, stats, _centroids = cv2.connectedComponentsWithStats(constrained, connectivity=8)
+        height, width = constrained.shape
+        near_start = int(round(height * (1.0 - self.config.route_anchor_near_ratio)))
+        near_labels = labels[near_start:, :]
+        best_label, best_score = 0, float("-inf")
+        for label in range(1, count):
+            x, y, component_width, component_height, area = map(int, stats[label])
+            if component_height / max(1, height) < self.config.route_minimum_vertical_coverage:
+                continue
+            near_count = int(np.count_nonzero(near_labels == label))
+            if near_count == 0:
+                continue
+            component = np.where(labels == label, 255, 0).astype(np.uint8)
+            supported, support_ratio = self._green_backbone_supported(component)
+            if not supported:
+                continue
+            centre_distance = abs((x + component_width / 2) - width / 2) / max(1, width)
+            score = near_count * 4.0 + area * .25 - centre_distance * area * .10 + support_ratio * area
+            if score > best_score:
+                best_label, best_score = label, score
+        if best_label == 0:
+            return np.zeros_like(constrained)
+        return np.where(labels == best_label, 255, 0).astype(np.uint8)
 
     def _detect_red_band_marker(self, frame: np.ndarray, route_center_x: float | None) -> tuple[bool, int | None, int | None]:
         """Find the two red fragments flanking the incoming white stem."""
