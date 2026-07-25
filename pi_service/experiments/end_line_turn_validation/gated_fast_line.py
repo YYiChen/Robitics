@@ -108,7 +108,13 @@ def analyse_fast_line(frame: np.ndarray, previous_center_x: float | None = None,
         lower_green = green
         course = np.ones((height, width), dtype=bool)
     white = (hsv[:, :, 2] >= config.white_min_value) & (hsv[:, :, 1] <= config.white_max_saturation)
-    candidate = white & course
+    # Do not intersect the white tape with the dilated green mask here.  Close
+    # to the camera the tape can be wider than the dilation radius, so that
+    # intersection keeps only its two white edges and makes the later
+    # two-sided-green check reject the real line.  The check below is the
+    # actual course gate: a complete white run is accepted only when green is
+    # visible on *both* of its sides.
+    candidate = white
     target = previous_center_x if previous_center_x is not None else width / 2.0
     centers: list[tuple[int, float, int]] = []
     max_width = int(width * config.max_run_width_ratio)

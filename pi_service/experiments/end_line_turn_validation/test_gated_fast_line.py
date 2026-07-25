@@ -28,6 +28,13 @@ class GatedFastLineTests(unittest.TestCase):
         result = analyse_fast_line(course_frame(white_line=False, floor_white=True)).result
         self.assertFalse(result.valid)
 
+    def test_keeps_wide_near_tape_when_green_is_on_both_sides(self):
+        image = course_frame(white_line=False)
+        cv2.line(image, (320, 479), (320, 170), (255, 255, 255), 62)
+        result = analyse_fast_line(image).result
+        self.assertTrue(result.valid)
+        self.assertAlmostEqual(result.center_x or 0, 320, delta=3)
+
     def test_gate_can_be_disabled_only_for_diagnostic_comparison(self):
         result = analyse_fast_line(course_frame(white_line=False, floor_white=True), config=FastLineConfig(green_gate_enabled=False)).result
         self.assertTrue(result.valid)
