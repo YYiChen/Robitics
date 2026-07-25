@@ -28,6 +28,10 @@ class ContinuousMotorConfig:
     minimum_correction_pwm: int = 20
     maximum_correction_pwm: int = 70
     minimum_wheel_pwm: int = 55
+    # At a clearly visible bend, a loaded four-wheel chassis needs more than
+    # the tiny P correction used for ordinary centre-line micro-adjustments.
+    sharp_turn_error: float = 0.08
+    sharp_turn_correction_pwm: int = 55
 
 
 def path_drive_pwm(observation: PathObservation, config: ContinuousMotorConfig) -> tuple[int, int]:
@@ -43,6 +47,9 @@ def path_drive_pwm(observation: PathObservation, config: ContinuousMotorConfig) 
         config.minimum_correction_pwm,
         min(config.maximum_correction_pwm, math.ceil(abs(error) * config.lookahead_gain)),
     )
+    if abs(error) >= config.sharp_turn_error:
+        correction = max(correction, config.sharp_turn_correction_pwm)
+        correction = min(correction, config.maximum_correction_pwm)
     # Never command a nearly-zero inner wheel during a continuous turn: with
     # this loaded four-wheel chassis that can produce driver current noise but
     # insufficient torque to overcome static friction.

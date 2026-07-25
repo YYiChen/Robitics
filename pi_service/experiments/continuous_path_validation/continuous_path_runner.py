@@ -40,6 +40,8 @@ from tuning import (  # noqa: E402
     MARKERS_PER_LAP,
     PROCESS_FPS,
     STRAIGHT_PWM,
+    SHARP_TURN_CORRECTION_PWM,
+    SHARP_TURN_ERROR,
 )
 
 
@@ -62,6 +64,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--minimum-correction-pwm", type=int, default=MINIMUM_CORRECTION_PWM)
     parser.add_argument("--maximum-correction-pwm", type=int, default=MAXIMUM_CORRECTION_PWM)
     parser.add_argument("--minimum-wheel-pwm", type=int, default=MINIMUM_WHEEL_PWM)
+    parser.add_argument("--sharp-turn-error", type=float, default=SHARP_TURN_ERROR)
+    parser.add_argument("--sharp-turn-correction-pwm", type=int, default=SHARP_TURN_CORRECTION_PWM)
     parser.add_argument("--debug-web-port", type=int, default=DEBUG_WEB_PORT)
     parser.add_argument("--enable-motors", action="store_true")
     parser.add_argument("--headless", action="store_true")
@@ -122,6 +126,8 @@ def main() -> int:
             minimum_correction_pwm=args.minimum_correction_pwm,
             maximum_correction_pwm=args.maximum_correction_pwm,
             minimum_wheel_pwm=args.minimum_wheel_pwm,
+            sharp_turn_error=args.sharp_turn_error,
+            sharp_turn_correction_pwm=args.sharp_turn_correction_pwm,
         ))
         executor.arm()
     capture = cv2.VideoCapture(source_value(args.source))

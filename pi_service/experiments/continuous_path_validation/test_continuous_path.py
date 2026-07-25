@@ -27,6 +27,13 @@ class ContinuousPathTests(unittest.TestCase):
         self.assertGreaterEqual(right, 55)
         self.assertGreaterEqual(left, 55)
 
+    def test_visible_sharp_turn_gets_stronger_than_micro_adjustment(self):
+        right, left = path_drive_pwm(
+            Observation(lookahead_offset=.09, heading=.0),
+            ContinuousMotorConfig("http://example", straight_pwm=95, sharp_turn_error=.08, sharp_turn_correction_pwm=55),
+        )
+        self.assertEqual((right, left), (55, 150))
+
     def test_short_line_loss_keeps_last_turning_pair(self):
         pair, label = drive_pwm_with_last_path(
             Observation(True, 0, None),
