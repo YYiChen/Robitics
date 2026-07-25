@@ -9,6 +9,7 @@ CONFIG="${HERE}/../third_party/DeskMate-Advance/src/track_line/config.fixed_gree
 
 exec "${HERE}/start_robot.sh" \
   --enable-autonomous-route \
+  --route-mode generic \
   --route-config "${CONFIG}" \
   --route-process-fps 20 \
   "$@"
