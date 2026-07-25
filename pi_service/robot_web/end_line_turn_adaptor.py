@@ -73,7 +73,7 @@ class EndLineTurnAdaptorRouteTracker:
         self._red_detector = RedEndBandDetector(self._line_config)
         self._last_red_side, self._last_red_seen_frame = None, -10_000
         self._motion_phase, self._action_until, self._pending_turn_side = "FOLLOW", 0.0, None
-        self._manual_degrees, self._manual_profile, self._manual_search_until = None, None, 0.0
+        self._manual_degrees, self._manual_profile = None, None
         self._manual_total_steps, self._manual_remaining_steps = 0, 0
         # This deployment is deliberately keyboard-only: M arms turn commands
         # but must never make the vehicle start following the white line.
@@ -141,7 +141,6 @@ class EndLineTurnAdaptorRouteTracker:
         self._pending_turn_side, self._manual_degrees, self._manual_profile = side, degrees, profile
         self._manual_total_steps = self._manual_remaining_steps = steps
         self._motion_phase, self._action_until = "MANUAL_STEP", time.monotonic() + profile.step_seconds
-        self._manual_search_until = 0.0
         self._set_status(state="MANUAL_STEP", detail=f"{side} {degrees}° step 1/{steps}", manual_turn=f"{side}_{degrees}")
         return self.status_dict()
 
@@ -303,9 +302,8 @@ class EndLineTurnAdaptorRouteTracker:
                             self._action_until = now + self._turn_interstep_pause_seconds
                             state, motor = "MANUAL_INTERSTEP_PAUSE", f"STOP_COOLDOWN_{self._turn_interstep_pause_seconds:.2f}s"
                         else:
-                            self._motion_phase = "MANUAL_SEARCH"
-                            self._manual_search_until = now + (1.5 if self._manual_degrees == 90 else 3.0)
-                            state, motor = "MANUAL_STEPS_COMPLETE", "STOP_BEFORE_RED_ALIGN"
+                            self._motion_phase = "MANUAL_COMPLETE"
+                            state, motor = "MANUAL_STEPS_COMPLETE", "STOP_ALL_CONFIGURED_STEPS_COMPLETE"
                     elif self._motion_phase == "MANUAL_INTERSTEP_PAUSE" and now < self._action_until:
                         self._stop_motor()
                         state, motor = "MANUAL_INTERSTEP_PAUSE", f"STOP_COOLDOWN_{self._action_until - now:.2f}s"
@@ -313,24 +311,6 @@ class EndLineTurnAdaptorRouteTracker:
                         self._motion_phase = "MANUAL_STEP"
                         self._action_until = now + self._manual_profile.step_seconds
                         state, motor = "MANUAL_NEXT_STEP", "STOP_STARTING_NEXT_STEP"
-                    elif self._motion_phase == "MANUAL_SEARCH":
-                        # A ground strip parallel to the car's forward axis is
-                        # near vertical in the local camera image.  The wide
-                        # tolerance absorbs fish-eye curvature; require live
-                        # red evidence rather than trusting the preset alone.
-                        aligned = red.detected and red.angle_degrees is not None and red.angle_degrees >= 75.0
-                        if aligned:
-                            self._stop_motor(); self._motion_phase = "MANUAL_COMPLETE"
-                            state, motor = "MANUAL_ALIGN_COMPLETE", "STOP_RED_PARALLEL"
-                        elif now >= self._manual_search_until:
-                            self._stop_motor(); self._motion_phase = "MANUAL_COMPLETE"
-                            state, motor = "MANUAL_ALIGN_TIMEOUT", "STOP_RED_NOT_ALIGNED"
-                        else:
-                            profile = self._manual_profile
-                            search_pwm = max(70, int(round(profile.pwm * .65)))
-                            commanded = (search_pwm, -search_pwm) if self._pending_turn_side == "LEFT" else (-search_pwm, search_pwm)
-                            self.controller.set_direct_drive(*commanded); self._motor_active = True
-                            state, motor = "MANUAL_RED_SEARCH", f"SEARCH angle={red.angle_degrees} R={commanded[0]} L={commanded[1]}"
                     elif self._motion_phase == "MANUAL_COMPLETE":
                         self._stop_motor(); state, motor = "MANUAL_COMPLETE", "STOP_MANUAL_TURN_COMPLETE"
                     elif self._motion_phase == "BRAKE_HOLD" and now < self._action_until:

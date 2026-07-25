@@ -464,7 +464,7 @@ async function manualVisionTurn(command) {
     const data = await response.json();
     if (!response.ok || !data.ok) throw Error(data.error || "转向请求失败");
     updateAutonomousUi(data.autonomous || {});
-    note(`${command} 已触发：预设转动后使用红线进行实时对齐；空格或 M 可停止。`);
+    note(`${command} 已触发：仅按配置的分段时间转动，全部段完成即停车；红线仅作画面诊断。空格或 M 可停止。`);
   } catch (error) { note(error.message); }
 }
 function timedMotorSettings(prefix) {
