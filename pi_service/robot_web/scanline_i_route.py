@@ -13,7 +13,12 @@ SCANLINE_EXPERIMENT = ROOT / "pi_service" / "experiments" / "i_shape_scanline_tu
 if str(SCANLINE_EXPERIMENT) not in sys.path:
     sys.path.insert(0, str(SCANLINE_EXPERIMENT))
 
-from scanline_i_logic import IShapeScanlineAnalyzer, IShapeTurnaroundPlanner, TurnaroundConfig, TurnaroundState  # noqa: E402
+from scanline_i_logic import (  # noqa: E402
+    IShapeScanlineAnalyzer,
+    IShapeTurnaroundPlanner,
+    TurnaroundConfig,
+    TurnaroundState,
+)
 
 
 @dataclass(frozen=True)
@@ -112,9 +117,11 @@ class ScanlineIShapeRouteTracker:
                     continue
                 result = analyzer.analyze(frame)
                 evidence = result.evidence
-                decision = planner.step(evidence, now)
                 motor_text = "PAUSED"
                 if self.gate.enabled():
+                    # Only an explicitly M-enabled drive session may advance
+                    # endpoint confirmation or pivot timing.
+                    decision = planner.step(evidence, now)
                     if decision.state is TurnaroundState.FOLLOW_STRAIGHT and evidence.valid_line and not evidence.endpoint_detected:
                         self.controller.set_direct_drive(self.config.straight_pwm, self.config.straight_pwm)
                         self._motor_active, motor_text = True, f"STRAIGHT R={self.config.straight_pwm} L={self.config.straight_pwm}"
@@ -127,6 +134,16 @@ class ScanlineIShapeRouteTracker:
                         motor_text = "STOP_WAITING_FOR_ENDPOINT_CONFIRMATION"
                 else:
                     self._stop_motor()
+                    # Preview must not consume a future drive session.  A
+                    # paused camera can remain parked on the bar indefinitely;
+                    # the next M press must start a fresh confirmation window.
+                    planner = IShapeTurnaroundPlanner(
+                        TurnaroundConfig(
+                            pivot_min_seconds=self.config.pivot_min_seconds,
+                            pivot_max_seconds=self.config.pivot_max_seconds,
+                        )
+                    )
+                    decision = planner.step(evidence, now)
                 annotated = self._draw(cv2, frame, result, decision, motor_text)
                 ok, encoded = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 if ok:
