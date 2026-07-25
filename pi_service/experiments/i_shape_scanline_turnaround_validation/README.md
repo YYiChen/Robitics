@@ -21,7 +21,7 @@ ROBOT_ENABLE_AUTONOMOUS_ROUTE=0 ./start_robot.sh
 /home/g11/Desktop/pi_service/experiments/i_shape_scanline_turnaround_validation/run_pi_scanline_i_drive.sh
 ```
 
-The drive script uses straight `120`, fixed right pivot `R=+200/L=-200`, and a
+The drive script uses straight `120`, fixed right pivot `R=-200/L=+200`, and a
 minimum pivot of `2.5 s`; it logs visual confidence, endpoint width/position,
 PWM request/acknowledgement, Arduino output telemetry, and scene/line changes
 to `pi_service/logs/i_shape_scanline_turnaround/latest.jsonl`.

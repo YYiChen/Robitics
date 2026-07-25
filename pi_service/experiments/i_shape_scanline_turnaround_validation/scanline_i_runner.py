@@ -109,7 +109,7 @@ def main() -> int:
                         acknowledged = client.send_drive_pwm(*requested)
                         motor = f"STRAIGHT R={acknowledged[0]} L={acknowledged[1]}"
                     elif decision.state is TurnaroundState.PIVOT_180:
-                        requested = (args.pivot_pwm, -args.pivot_pwm)
+                        requested = (-args.pivot_pwm, args.pivot_pwm)
                         acknowledged = client.send_drive_pwm(*requested)
                         motor = f"PIVOT_RIGHT R={acknowledged[0]} L={acknowledged[1]}"
                     else:

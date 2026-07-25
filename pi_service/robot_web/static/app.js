@@ -37,10 +37,11 @@ async function toggleAutonomousDrive() {
 function updateAutonomousUi(autonomous) {
   const available = autonomous.available === true;
   const enabled = autonomous.enabled === true;
+  const scanlineI = autonomous.mode === "scanline_i";
   const button = $("#autonomousToggle"), unavailable = $("#routePreviewUnavailable"), image = $("#routePreview");
   button.disabled = !available;
   button.textContent = available ? (enabled ? "M：暂停并停车" : "M：开启自动行驶") : "路线预判未开启";
-  $("#autonomousState").textContent = available ? `视觉：${autonomous.state || "等待"} · ${autonomous.detail || "—"}` : "视觉识别：本次服务未开启";
+  $("#autonomousState").textContent = available ? `${scanlineI ? "扫描线 I 型" : "视觉"}：${autonomous.state || "等待"} · ${autonomous.detail || "—"}` : "视觉识别：本次服务未开启";
   $("#routePreviewMeta").textContent = available ? `${enabled ? "行驶中" : "已暂停"} · ${autonomous.confidence == null ? "—" : `置信度 ${fixed(autonomous.confidence)}`}` : "未开启";
   unavailable.classList.toggle("hidden", available);
   if (!available) image.removeAttribute("src");
@@ -48,10 +49,11 @@ function updateAutonomousUi(autonomous) {
   for (const input of document.querySelectorAll("[data-route-tuning]")) {
     const key = input.dataset.routeTuning;
     if (Object.prototype.hasOwnProperty.call(tuning, key) && document.activeElement !== input) input.value = tuning[key];
-    input.disabled = !available;
+    input.disabled = !available || scanlineI;
   }
   const tuningState = $("#routeTuningState");
-  if (tuningState) tuningState.textContent = available ? "实时参数" : "路线预判未开启";
+  if (tuningState) tuningState.textContent = available ? (scanlineI ? "扫描线 I 型固定安全参数" : "实时参数") : "路线预判未开启";
+  $("#applyRouteTuning").disabled = !available || scanlineI;
 }
 $("#autonomousToggle").onclick = toggleAutonomousDrive;
 $("#applyRouteTuning").onclick = async () => {

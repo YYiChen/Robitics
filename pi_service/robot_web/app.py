@@ -11,6 +11,7 @@ from oled_status import OledStatusService
 from system_metrics import SystemMetrics
 from webrtc_stream import WebRTCStreamer
 from autonomous_route import AutonomousRouteTracker, AutonomousRunGate, RoutePreviewPublisher, load_tuning_config
+from scanline_i_route import ScanlineIShapeRouteTracker
 
 def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStreamer | DualStreamCamera, system_metrics: SystemMetrics | None = None, oled: OledStatusService | None = None, route_preview: RoutePreviewPublisher | None = None, route_tracker: AutonomousRouteTracker | None = None) -> Flask:
     app = Flask(__name__)
@@ -201,7 +202,8 @@ def main() -> None:
     parser.add_argument("--highres-height", type=int, default=1232)
     parser.add_argument("--webrtc-udp-output", default="udp://127.0.0.1:1234?pkt_size=1316")
     parser.add_argument("--disable-oled", action="store_true")
-    parser.add_argument("--enable-autonomous-route", action="store_true", help="run green/white route preview inside the port-5000 service")
+    parser.add_argument("--enable-autonomous-route", action="store_true", help="run route preview inside the port-5000 service")
+    parser.add_argument("--route-mode", choices=("generic", "scanline_i"), default="generic", help="generic skeleton route or scanline I-shape turnaround")
     parser.add_argument("--route-config", type=Path, default=Path(__file__).resolve().parents[2] / "third_party" / "DeskMate-Advance" / "src" / "track_line" / "config.fixed_green_white_course.json")
     parser.add_argument("--route-process-fps", type=float, default=20.0)
     parser.add_argument("--route-tuning", type=Path, default=Path(__file__).resolve().parents[1] / "experiments" / "continuous_path_validation" / "tuning.py")
@@ -228,10 +230,13 @@ def main() -> None:
     route_gate = AutonomousRunGate() if args.enable_autonomous_route else None
     route_tracker = None
     if route_preview is not None and route_gate is not None:
-        route_config = load_tuning_config(args.route_config, args.route_tuning)
-        if args.route_process_fps != 20.0:
-            route_config = route_config.__class__(**{**route_config.__dict__, "process_fps": args.route_process_fps})
-        route_tracker = AutonomousRouteTracker(controller, camera, route_preview, route_gate, route_config)
+        if args.route_mode == "scanline_i":
+            route_tracker = ScanlineIShapeRouteTracker(controller, camera, route_preview, route_gate)
+        else:
+            route_config = load_tuning_config(args.route_config, args.route_tuning)
+            if args.route_process_fps != 20.0:
+                route_config = route_config.__class__(**{**route_config.__dict__, "process_fps": args.route_process_fps})
+            route_tracker = AutonomousRouteTracker(controller, camera, route_preview, route_gate, route_config)
         route_tracker.start()
     # Persist the current wheel profiles on normal process exit as well as
     # when the browser clicks the save button.  This covers Ctrl+C and service
