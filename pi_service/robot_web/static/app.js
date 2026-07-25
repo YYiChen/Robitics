@@ -518,12 +518,12 @@ for (const button of document.querySelectorAll("[data-feed]")) button.addEventLi
 for (const button of document.querySelectorAll("[data-deal]")) button.addEventListener("click", dealCard);
 for (const button of document.querySelectorAll("[data-servo-center]")) button.addEventListener("click", centerServo);
 addEventListener("keydown", event => { if (event.repeat) return;
-  // M controls only the autonomous motor gate. Vision stays alive and the
-  // current route-prediction frame remains visible while it is paused.
-  if (!editing(event) && (event.code === "KeyM" || event.key?.toLowerCase() === "m")) { event.preventDefault(); toggleAutonomousDrive(); return; }
   // P is reserved for the combined M3/M4 card action. Use KeyboardEvent.code as well
   // so the physical key still works with a Chinese input method enabled.
   if (event.code === "KeyP" || event.key?.toLowerCase() === "p") { event.preventDefault(); dealCard(); return; }
+  // M controls only the autonomous motor gate. Vision stays alive and the
+  // current route-prediction frame remains visible while no form field is active.
+  if (!editing(event) && (event.code === "KeyM" || event.key?.toLowerCase() === "m")) { event.preventDefault(); toggleAutonomousDrive(); return; }
   if (editing(event)) return;
   if (event.code === "Space") { event.preventDefault(); releaseKeys(); return; }
   if (event.key?.toLowerCase() === "z") { event.preventDefault(); centerServo(); return; }

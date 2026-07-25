@@ -8,10 +8,11 @@ the current white-floor / black-tape camera setup (`config.dark_line.json`).
 - `run_pi_i_turnaround_drive.sh`: the I-route test, fixed at straight `120`, right pivot `R=+200/L=-200`, and a minimum pivot time of `2.5 s`.
 
 Before either motor script, stop the 5000 process that was launched with
-`--enable-autonomous-route`, then launch only `cd /home/g11/Desktop/pi_service &&
-./start_robot.sh`.  Both motor scripts reject a status response that still has
-an in-process autonomous route available: merely pausing it is not sufficient
-for this isolated test.
+`--enable-autonomous-route`, then launch the isolated controller with
+`cd /home/g11/Desktop/pi_service && ROBOT_ENABLE_AUTONOMOUS_ROUTE=0 ./start_robot.sh`.
+Both motor scripts reject a status response that still has an in-process
+autonomous route available: merely pausing it is not sufficient for this
+isolated test.
 
 Run the right-pivot probe with the wheels raised first, then in a clear low-speed
 area.  Confirm physically that the right wheel moves forward, the left wheel

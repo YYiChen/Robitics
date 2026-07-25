@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # White floor + black tape route preview inside the main port-5000 web service.
-# Vision starts paused for safety. Open http://<Pi-IP>:5000 and press M to
-# enable or pause automatic driving without terminating this process.
+# This remains the explicit launcher; start_robot.sh now has the same black-line
+# default. Vision starts paused. Press M on http://<Pi-IP>:5000 to drive/stop.
 set -Eeuo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
