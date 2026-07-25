@@ -51,6 +51,16 @@ class GreenWhiteScanlineConfig(HybridScanlineConfig):
     # produces a much thicker distance-transform core.
     green_backbone_max_tape_half_width: float = 40.0
     green_backbone_max_wide_ratio: float = 0.30
+    # The raw-green proof above is deliberately conservative.  At a close
+    # junction the tape itself, a red marker, or a fish-eye stretched edge can
+    # temporarily erase one of those raw-green probes even though the white
+    # candidate is completely enclosed by the recovered green course field.
+    # This second proof is only a fallback; it still rejects broad floor
+    # patches by width and requires support on both sides of the skeleton.
+    course_backbone_min_supported_ratio: float = 0.42
+    course_backbone_min_supported_samples: int = 4
+    course_backbone_max_tape_half_width: float = 58.0
+    course_backbone_max_wide_ratio: float = 0.45
     red_excess_min: int = 44
     red_channel_min: int = 120
     red_hue_low_max: int = 12
@@ -59,8 +69,22 @@ class GreenWhiteScanlineConfig(HybridScanlineConfig):
     red_value_min: int = 70
     red_min_component_area_ratio: float = 0.00015
     red_min_span_ratio: float = 0.18
-    red_group_y_tolerance_ratio: float = 0.06
+    # A single physical red layer can be skewed by the 160-degree fisheye:
+    # its left/right fragments need not have equal image Y.  The two physical
+    # layers are roughly 10 cm apart and remain visibly farther apart than
+    # this tolerance in the intended camera view.
+    red_group_y_tolerance_ratio: float = 0.10
     red_centre_tolerance_ratio: float = 0.20
+
+
+@dataclass(frozen=True)
+class RedBandLayer:
+    """One physical red-band layer reconstructed from one or more blobs."""
+    y: int
+    bottom_y: int
+    span: int
+    fragment_count: int
+    y_spread: int
 
 
 class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
@@ -73,6 +97,7 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         self._latest_course_allowed: np.ndarray | None = None
         self._latest_red_marker_mask: np.ndarray | None = None
         self._latest_tape_fit_line: tuple[tuple[int, int], tuple[int, int]] | None = None
+        self._latest_red_band_layers: tuple[RedBandLayer, ...] = ()
 
     @staticmethod
     def _odd(value: int) -> int:
@@ -125,6 +150,11 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         """Diagnostic-only best straight segment through permissive tape pixels."""
         return self._latest_tape_fit_line
 
+    @property
+    def red_band_layers(self) -> tuple[RedBandLayer, ...]:
+        """Visible red layers, ordered from far (small Y) to near (large Y)."""
+        return self._latest_red_band_layers
+
     @staticmethod
     def _fit_permissive_tape(mask: np.ndarray) -> tuple[tuple[int, int], tuple[int, int]] | None:
         """Fit a display-only line before strict component validation.
@@ -150,6 +180,7 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         self._latest_course_allowed = None
         self._latest_red_marker_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
         self._latest_tape_fit_line = None
+        self._latest_red_band_layers = ()
         white = cv2.inRange(
             hsv,
             np.array((0, 0, config.white_value_min), dtype=np.uint8),
@@ -197,7 +228,16 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         top, bottom = max(0, centre_y - radius), min(height, centre_y + radius + 1)
         return left < right and top < bottom and bool(np.any(green[top:bottom, left:right]))
 
-    def _green_backbone_supported(self, component: np.ndarray) -> tuple[bool, float]:
+    def _backbone_supported_by(
+        self,
+        component: np.ndarray,
+        support_mask: np.ndarray | None,
+        *,
+        minimum_ratio: float,
+        minimum_samples: int,
+        maximum_half_width: float,
+        maximum_wide_ratio: float,
+    ) -> tuple[bool, float]:
         """Check the selected component's centreline, not every white pixel.
 
         A real tape has a narrow skeleton with green floor on both sides of
@@ -206,8 +246,7 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         distance is derived from the local component width, so fish-eye
         widening and oblique tape remain valid.
         """
-        green = self._latest_green_mask
-        if green is None or green.shape != component.shape:
+        if support_mask is None or support_mask.shape != component.shape:
             return False, 0.0
         skeleton = self._skeletonize(component)
         path, _lookahead, path_length = self._trace_skeleton(skeleton)
@@ -239,22 +278,52 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
                 self.config.green_backbone_side_margin_pixels,
                 int(round(float(distance[y, x]))) + self.config.green_backbone_side_margin_pixels,
             )
-            wide_samples += int(float(distance[y, x]) > self.config.green_backbone_max_tape_half_width)
+            wide_samples += int(float(distance[y, x]) > maximum_half_width)
             radius = self.config.green_backbone_green_probe_radius
             both_sides = (
-                self._green_at(green, x + normal_x * probe, y + normal_y * probe, radius)
-                and self._green_at(green, x - normal_x * probe, y - normal_y * probe, radius)
+                self._green_at(support_mask, x + normal_x * probe, y + normal_y * probe, radius)
+                and self._green_at(support_mask, x - normal_x * probe, y - normal_y * probe, radius)
             )
             checked += 1
             supported += int(both_sides)
         ratio = supported / max(1, checked)
         wide_ratio = wide_samples / max(1, checked)
         return (
-            checked >= self.config.green_backbone_min_supported_samples
-            and supported >= self.config.green_backbone_min_supported_samples
-            and ratio >= self.config.green_backbone_min_supported_ratio
-            and wide_ratio <= self.config.green_backbone_max_wide_ratio,
+            checked >= minimum_samples
+            and supported >= minimum_samples
+            and ratio >= minimum_ratio
+            and wide_ratio <= maximum_wide_ratio,
             ratio,
+        )
+
+    def _green_backbone_supported(self, component: np.ndarray) -> tuple[bool, float]:
+        """Strict raw-green proof used whenever it is available."""
+        return self._backbone_supported_by(
+            component,
+            self._latest_green_mask,
+            minimum_ratio=self.config.green_backbone_min_supported_ratio,
+            minimum_samples=self.config.green_backbone_min_supported_samples,
+            maximum_half_width=self.config.green_backbone_max_tape_half_width,
+            maximum_wide_ratio=self.config.green_backbone_max_wide_ratio,
+        )
+
+    def _course_backbone_supported(self, component: np.ndarray) -> tuple[bool, float]:
+        """Fallback proof against the recovered green course, not raw HSV.
+
+        `green_field` is deliberately hole-filled before white-tape masking,
+        so it represents the carpet underneath tape and red markers.  This
+        repairs close-range white tape that is real but lacks raw-green pixels
+        immediately beside its skeleton.  It is not an unrestricted white
+        fallback: the candidate must still be near-anchored, narrow enough,
+        and surrounded by the same connected green course on both sides.
+        """
+        return self._backbone_supported_by(
+            component,
+            self._latest_green_field,
+            minimum_ratio=self.config.course_backbone_min_supported_ratio,
+            minimum_samples=self.config.course_backbone_min_supported_samples,
+            maximum_half_width=self.config.course_backbone_max_tape_half_width,
+            maximum_wide_ratio=self.config.course_backbone_max_wide_ratio,
         )
 
     def _select_route_component(self, mask: np.ndarray) -> np.ndarray:
@@ -280,6 +349,8 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
             component = np.where(labels == label, 255, 0).astype(np.uint8)
             supported, support_ratio = self._green_backbone_supported(component)
             if not supported:
+                supported, support_ratio = self._course_backbone_supported(component)
+            if not supported:
                 continue
             centre_distance = abs((x + component_width / 2) - width / 2) / max(1, width)
             score = near_count * 4.0 + area * .25 - centre_distance * area * .10 + support_ratio * area
@@ -290,7 +361,14 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         return np.where(labels == best_label, 255, 0).astype(np.uint8)
 
     def _detect_red_band_marker(self, frame: np.ndarray, route_center_x: float | None) -> tuple[bool, int | None, int | None]:
-        """Find the two red fragments flanking the incoming white stem."""
+        """Recover physical red layers despite left/right perspective skew.
+
+        A layer can be two separated fragments around the white stem or a
+        single intact strip.  Fragments are clustered by a generous but
+        bounded Y interval, then exposed as ordered layers so higher-level
+        motion code can distinguish ``two layers visible`` from ``far layer
+        only`` without assuming the two halves share exactly one image row.
+        """
         height, width = frame.shape[:2]
         config = self.config
         blue, green, red_channel = cv2.split(frame)
@@ -319,22 +397,37 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
             if height * .15 <= cy <= height * .92:
                 fragments.append((x, y, component_width, component_height, area, float(cx), float(cy)))
         expected_x = width / 2.0 if route_center_x is None else route_center_x
+        fragments.sort(key=lambda item: item[6])
+        tolerance = height * config.red_group_y_tolerance_ratio
+        raw_groups: list[list[tuple[int, int, int, int, int, float, float]]] = []
+        for fragment in fragments:
+            if not raw_groups or fragment[6] - raw_groups[-1][-1][6] > tolerance:
+                raw_groups.append([fragment])
+            else:
+                raw_groups[-1].append(fragment)
+
+        layers: list[RedBandLayer] = []
+        expected_x = width / 2.0 if route_center_x is None else route_center_x
         best: tuple[float, int, int] | None = None
-        for _x, _y, _w, _h, _area, _cx, seed_y in fragments:
-            group = [item for item in fragments if abs(item[6] - seed_y) <= height * config.red_group_y_tolerance_ratio]
-            if len(group) < 2:
-                continue
+        for group in raw_groups:
             left = min(item[0] for item in group)
             right = max(item[0] + item[2] - 1 for item in group)
             span = right - left + 1
             centre = (left + right) / 2.0
-            if span < width * config.red_min_span_ratio or abs(centre - expected_x) > width * config.red_centre_tolerance_ratio:
-                continue
             total_area = sum(item[4] for item in group)
             marker_y = int(round(sum(item[4] * item[6] for item in group) / total_area))
+            bottom_y = max(item[1] + item[3] - 1 for item in group)
+            y_spread = int(round(max(item[6] for item in group) - min(item[6] for item in group)))
+            layers.append(RedBandLayer(marker_y, bottom_y, span, len(group), y_spread))
+            # A single wide strip is a valid far calibration layer.  Narrow
+            # singleton noise is not.  Near split fragments remain valid even
+            # when fish-eye projection offsets their centroids in Y.
+            if span < width * config.red_min_span_ratio or abs(centre - expected_x) > width * config.red_centre_tolerance_ratio:
+                continue
             score = span + min(total_area / max(1, height), width * .20)
             if best is None or score > best[0]:
                 best = (score, marker_y, span)
+        self._latest_red_band_layers = tuple(sorted(layers, key=lambda layer: layer.y))
         return (best is not None, None if best is None else best[1], None if best is None else best[2])
 
     def analyze(self, frame: np.ndarray):

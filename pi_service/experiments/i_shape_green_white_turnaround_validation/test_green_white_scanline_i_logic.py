@@ -40,6 +40,32 @@ class GreenWhiteScanlineTests(unittest.TestCase):
         self.assertGreater(evidence.red_marker_span or 0, 100)
         self.assertTrue(evidence.junction_detected)
 
+    def test_perspective_skewed_red_fragments_stay_one_physical_layer(self):
+        image = green_i_frame(transverse=True)
+        # The two pieces are one physical near band, but fisheye projection
+        # shifts their centroids vertically by 35 px.  They must not become
+        # two separate layers.
+        cv2.rectangle(image, (180, 290), (305, 310), (0, 0, 255), -1)
+        cv2.rectangle(image, (335, 325), (460, 345), (0, 0, 255), -1)
+        evidence = self.analyzer.analyze(image).evidence
+        self.assertTrue(evidence.red_marker_detected)
+        self.assertEqual(len(self.analyzer.red_band_layers), 1)
+        self.assertEqual(self.analyzer.red_band_layers[0].fragment_count, 2)
+        self.assertGreaterEqual(self.analyzer.red_band_layers[0].y_spread, 30)
+
+    def test_two_red_layers_remain_distinct_when_their_fragments_are_skewed(self):
+        image = green_i_frame(transverse=True)
+        # Far calibration band: one intact strip.  Near warning band: two
+        # skewed fragments.  Their inter-layer gap exceeds the perspective
+        # grouping tolerance.
+        cv2.rectangle(image, (190, 205), (450, 225), (0, 0, 255), -1)
+        cv2.rectangle(image, (180, 330), (305, 350), (0, 0, 255), -1)
+        cv2.rectangle(image, (335, 365), (460, 385), (0, 0, 255), -1)
+        self.analyzer.analyze(image)
+        self.assertEqual(len(self.analyzer.red_band_layers), 2)
+        self.assertEqual(self.analyzer.red_band_layers[0].fragment_count, 1)
+        self.assertEqual(self.analyzer.red_band_layers[1].fragment_count, 2)
+
     def test_red_band_outside_the_white_route_is_rejected(self):
         image = green_i_frame()
         cv2.rectangle(image, (20, 250), (100, 270), (0, 0, 255), -1)
@@ -85,6 +111,25 @@ class GreenWhiteScanlineTests(unittest.TestCase):
         result = self.analyzer.analyze(image)
         self.assertTrue(result.evidence.line_lost)
         self.assertEqual(int(np.count_nonzero(result.component_mask)), 0)
+
+    def test_green_field_fallback_keeps_close_tape_when_raw_side_probes_are_occluded(self):
+        image = green_i_frame()
+        # Simulate close-range glare/marker contamination right beside the
+        # tape.  It removes the raw HSV-green side probes, while the recovered
+        # connected green course correctly fills these thin carpet blemishes.
+        cv2.rectangle(image, (299, 180), (303, 479), (80, 80, 80), -1)
+        cv2.rectangle(image, (337, 180), (341, 479), (80, 80, 80), -1)
+        # Set an intentionally impossible raw-proof ratio so the selection
+        # path must exercise the recovered-course fallback, not merely the
+        # ordinary raw-green proof.
+        analyzer = GreenWhiteHybridScanlineAnalyzer(
+            GreenWhiteScanlineConfig(route_path_update_frames=1, green_backbone_min_supported_ratio=1.01)
+        )
+        result = analyzer.analyze(image)
+        self.assertTrue(result.evidence.valid_line)
+        self.assertGreater(int(np.count_nonzero(result.component_mask)), 0)
+        self.assertFalse(analyzer._green_backbone_supported(result.component_mask)[0])
+        self.assertTrue(analyzer._course_backbone_supported(result.component_mask)[0])
 
     def test_tape_can_continue_out_of_green_roi_in_far_field(self):
         image = np.full((480, 640, 3), (55, 150, 45), dtype=np.uint8)
