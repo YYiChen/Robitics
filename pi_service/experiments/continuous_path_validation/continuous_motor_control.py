@@ -35,6 +35,10 @@ class ContinuousMotorConfig:
     # At a sharp turn, use this signed PWM for the inside wheel. Zero is a
     # controlled stop; a negative value creates a pivot-like turn.
     sharp_turn_inner_pwm: int = 0
+    # When configured together with a negative inside PWM, this makes a sharp
+    # turn an equal-magnitude in-place pivot instead of a one-wheel arc.
+    # None preserves the historical outer-wheel calculation for generic tests.
+    sharp_turn_outer_pwm: int | None = None
 
 
 def steering_error(observation: PathObservation, config: ContinuousMotorConfig) -> float | None:
@@ -73,10 +77,13 @@ def path_drive_details(
         if sharp_turn
         else max(config.minimum_wheel_pwm, base_pwm - correction)
     )
-    outer = min(255, base_pwm + correction)
-    # Positive error means the target is right of image centre: slow the right
-    # wheel and speed up the left wheel to arc right. The same rule works for
-    # any polygon, smooth curve, or line orientation visible ahead.
+    outer = (
+        max(-255, min(255, config.sharp_turn_outer_pwm))
+        if sharp_turn and config.sharp_turn_outer_pwm is not None
+        else min(255, base_pwm + correction)
+    )
+    # Positive error means the target is right of image centre. For a configured
+    # pivot this is R negative / L positive; otherwise it remains an arc right.
     return ((inner, outer) if error > 0 else (outer, inner)), error, correction
 
 

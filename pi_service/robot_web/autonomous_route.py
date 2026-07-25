@@ -64,7 +64,8 @@ class AutonomousRouteConfig:
     maximum_wheel_pwm: int = 200
     sharp_turn_error: float = 0.08
     sharp_turn_correction_pwm: int = 55
-    sharp_turn_inner_pwm: int = 0
+    sharp_turn_inner_pwm: int = -200
+    sharp_turn_outer_pwm: int = 200
     line_lost_stop_frames: int = 3
     line_lost_prediction_seconds: float = 0.75
     line_lost_stop_seconds: float = 1.0
@@ -98,6 +99,7 @@ TUNING_FIELDS = {
     "sharp_turn_error": ("SHARP_TURN_ERROR", float, 0.0, 1.0),
     "sharp_turn_correction_pwm": ("SHARP_TURN_CORRECTION_PWM", int, 0, 255),
     "sharp_turn_inner_pwm": ("SHARP_TURN_INNER_PWM", int, -255, 255),
+    "sharp_turn_outer_pwm": ("SHARP_TURN_OUTER_PWM", int, -255, 255),
     "motion_observe_seconds": ("MOTION_OBSERVE_SECONDS", float, 0.1, 60.0),
     "motion_min_path_shift_px": ("MOTION_MIN_PATH_SHIFT_PX", float, 1.0, 1000.0),
     "motion_step_pwm": ("MOTION_STEP_PWM", int, 1, 255),
@@ -274,7 +276,7 @@ class AutonomousRouteTracker:
                 if version != applied_version:
                     planner = ContinuousPathPlanner(ContinuousPathConfig(minimum_confidence=.38, line_lost_stop_frames=config.line_lost_stop_frames, line_lost_prediction_seconds=config.line_lost_prediction_seconds, line_lost_stop_seconds=config.line_lost_stop_seconds))
                     marker_counter = MarkerCounter(MarkerCounterConfig(confirm_frames=config.marker_confirm_frames, clear_frames=config.marker_clear_frames, markers_per_lap=config.markers_per_lap, rearm_y_drop_ratio=config.marker_rearm_y_drop_ratio))
-                    motor = ContinuousMotorConfig("in-process", straight_pwm=config.straight_pwm, launch_pwm=config.launch_pwm, lookahead_gain=config.lookahead_gain, heading_weight=config.heading_weight, correction_deadband=config.correction_deadband, minimum_correction_pwm=config.minimum_correction_pwm, maximum_correction_pwm=config.maximum_correction_pwm, minimum_wheel_pwm=config.minimum_wheel_pwm, sharp_turn_error=config.sharp_turn_error, sharp_turn_correction_pwm=config.sharp_turn_correction_pwm, sharp_turn_inner_pwm=config.sharp_turn_inner_pwm)
+                    motor = ContinuousMotorConfig("in-process", straight_pwm=config.straight_pwm, launch_pwm=config.launch_pwm, lookahead_gain=config.lookahead_gain, heading_weight=config.heading_weight, correction_deadband=config.correction_deadband, minimum_correction_pwm=config.minimum_correction_pwm, maximum_correction_pwm=config.maximum_correction_pwm, minimum_wheel_pwm=config.minimum_wheel_pwm, sharp_turn_error=config.sharp_turn_error, sharp_turn_correction_pwm=config.sharp_turn_correction_pwm, sharp_turn_inner_pwm=config.sharp_turn_inner_pwm, sharp_turn_outer_pwm=config.sharp_turn_outer_pwm)
                     interval, applied_version = 1.0 / max(1.0, config.process_fps), version
                 jpeg, now = self.camera.latest_jpeg(), time.monotonic()
                 if jpeg is None or now - last < interval:

@@ -71,9 +71,10 @@ MAXIMUM_WHEEL_PWM = 200
 # 这只依赖路线在画面中的偏差，不假设矩形、八边形或固定左右转。
 SHARP_TURN_ERROR = 0.08
 SHARP_TURN_CORRECTION_PWM = 55
-# 锐弯时内侧轮的 PWM。0 表示停止内侧轮，能显著缩小转弯半径；
-# 若场地仍不足以转弯，可谨慎改为 -40 到 -70，使内侧轮缓慢反转。
-SHARP_TURN_INNER_PWM = 0
+# 锐弯时采用等幅反向对转，得到原地转向：右转 R=-200/L=+200，
+# 左转 R=+200/L=-200。实车符号方向已经按当前电机接线校正。
+SHARP_TURN_INNER_PWM = -200
+SHARP_TURN_OUTER_PWM = 200
 
 # ========== 视觉起步助推 ==========
 

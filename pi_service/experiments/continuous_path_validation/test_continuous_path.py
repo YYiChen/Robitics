@@ -41,6 +41,13 @@ class ContinuousPathTests(unittest.TestCase):
         )
         self.assertEqual((right, left), (-60, 130))
 
+    def test_sharp_turn_can_use_equal_opposite_pwm_for_in_place_pivot(self):
+        right, left = path_drive_pwm(
+            Observation(lookahead_offset=.25),
+            ContinuousMotorConfig("http://example", sharp_turn_inner_pwm=-200, sharp_turn_outer_pwm=200),
+        )
+        self.assertEqual((right, left), (-200, 200))
+
     def test_small_green_course_error_is_not_discarded_by_old_deadband(self):
         right, left = path_drive_pwm(
             Observation(lookahead_offset=.020, heading=.030),
