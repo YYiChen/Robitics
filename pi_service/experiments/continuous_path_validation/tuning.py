@@ -25,8 +25,9 @@ LINE_LOST_STOP_SECONDS = 1.00
 # 同一个 X 连续识别到多少处理帧后才算真正经过。误检时可改为 3。
 MARKER_CONFIRM_FRAMES = 2
 
-# X 从画面消失多少处理帧后，才允许下一次计数。避免同一个 X 被重复计数。
-MARKER_CLEAR_FRAMES = 4
+# X 从画面消失多少处理帧后，才允许下一次计数。预览以 10 FPS 运行时，12 帧约为
+# 1.2 秒，可避免同一个 X 在视野边缘闪烁时被重复计数。
+MARKER_CLEAR_FRAMES = 12
 
 # 本次路线一圈有几个 X 路标。当前贴了四个，所以每累计四次 lap 加 1。
 MARKERS_PER_LAP = 4

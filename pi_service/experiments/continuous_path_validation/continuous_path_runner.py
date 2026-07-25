@@ -164,6 +164,8 @@ def main() -> int:
                 "confidence": result.observation.confidence,
                 "marker_detected": marker_update.detected,
                 "marker_event": marker_update.event,
+                "marker_point_px": result.observation.marker_point_px,
+                "marker_branch_count": result.observation.marker_branch_count,
                 "marker_in_lap": marker_update.marker_in_lap,
                 "lap_count": marker_update.lap_count,
             }
