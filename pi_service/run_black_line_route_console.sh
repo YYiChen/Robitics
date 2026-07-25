@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# White floor + black tape route preview inside the main port-5000 web service.
+# Vision starts paused for safety. Open http://<Pi-IP>:5000 and press M to
+# enable or pause automatic driving without terminating this process.
+set -Eeuo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG="${HERE}/../third_party/DeskMate-Advance/src/track_line/config.dark_line.json"
+
+exec "${HERE}/start_robot.sh" \
+  --enable-autonomous-route \
+  --route-config "${CONFIG}" \
+  --route-process-fps 20 \
+  "$@"
