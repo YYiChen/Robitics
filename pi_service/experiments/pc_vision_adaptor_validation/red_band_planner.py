@@ -23,7 +23,11 @@ class RedBandConfig:
     minimum_span_ratio: float = .18
     brake_y_ratio: float = .50
     pivot_y_ratio: float = .84
-    exit_arm_y_ratio: float = .70
+    # Arm overshoot recovery before the pre-authorized 70% pivot threshold;
+    # otherwise a dropped frame could never produce REVERSE_REQUEST.
+    exit_arm_y_ratio: float = .60
+    preauthorized_brake_y_ratio: float = .35
+    preauthorized_pivot_y_ratio: float = .70
 
 
 @dataclass(frozen=True)
@@ -48,6 +52,7 @@ class TwoRedBandPlanner:
 
     def reset(self) -> None:
         self._two_layers_seen = False
+        self._first_band_confirmed = False
         self._turn_band_seen = False
         self._brake_sent = False
         self._turn_bottom_armed = False
@@ -67,17 +72,21 @@ class TwoRedBandPlanner:
         valid.sort(key=lambda layer: layer.y)
         if len(valid) >= 2:
             self._two_layers_seen = True
+            self._first_band_confirmed = True
             return RedBandDecision("SLOW_DOWN", "TWO_LAYERS_APPROACH", len(valid), None, None)
         if len(valid) == 1:
             layer = valid[0]
             if not self._two_layers_seen:
+                self._first_band_confirmed = True
                 return RedBandDecision("SLOW_DOWN", "FIRST_BAND_APPROACH", 1, layer.y, layer.bottom_y)
             self._turn_band_seen = True
             self._turn_bottom_armed = self._turn_bottom_armed or layer.bottom_y >= frame_height * self.config.exit_arm_y_ratio
-            if not self._pivot_sent and layer.bottom_y >= frame_height * self.config.pivot_y_ratio:
+            brake_ratio = self.config.preauthorized_brake_y_ratio if self._first_band_confirmed else self.config.brake_y_ratio
+            pivot_ratio = self.config.preauthorized_pivot_y_ratio if self._first_band_confirmed else self.config.pivot_y_ratio
+            if not self._pivot_sent and layer.bottom_y >= frame_height * pivot_ratio:
                 self._pivot_sent = True
                 return RedBandDecision("PIVOT_REQUEST", "TURN_BAND_BOTTOM", 1, layer.y, layer.bottom_y)
-            if not self._brake_sent and layer.y >= frame_height * self.config.brake_y_ratio:
+            if not self._brake_sent and layer.y >= frame_height * brake_ratio:
                 self._brake_sent = True
                 return RedBandDecision("BRAKE_NOW", "TURN_BAND_MID", 1, layer.y, layer.bottom_y)
             return RedBandDecision("SLOW_DOWN", "TURN_BAND_CREEP", 1, layer.y, layer.bottom_y)

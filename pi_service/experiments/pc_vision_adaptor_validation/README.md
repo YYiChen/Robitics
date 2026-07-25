@@ -21,9 +21,15 @@ cluster tolerance, so left/right fish-eye skew does not make one red band look
 like two.  One early band means `SLOW_DOWN`.  When two layers have been seen
 and the first leaves, the remaining turn band owns the final timing: at 50%
 of image height it emits one `BRAKE_NOW` pulse, then Pi creeps; at 84% of image
-height it emits one `PIVOT_REQUEST`; if it exits after reaching 70% but before
+height it emits one `PIVOT_REQUEST`; if it exits after reaching 60% but before
 the pivot trigger, it emits one `REVERSE_REQUEST`.  Pi fixes the duration and
 PWM of all three actions locally.
+
+The first visible red band also pre-authorizes the turn band: its brake/pivot
+thresholds become 35%/70% of frame height rather than 50%/84%.  This is an
+earlier reaction, not a low-PWM slowdown.  During `SLOW_DOWN`,
+`TURN_WINDOW_ARMED`, and after the brake pulse Pi keeps `straight_pwm=85`, but
+uses a 260 correction gain and 0.015 deadband for tighter line locking.
 
 ## Run
 

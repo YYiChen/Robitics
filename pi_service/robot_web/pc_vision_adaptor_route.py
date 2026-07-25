@@ -29,7 +29,10 @@ class PcVisionAdaptorConfig:
     pivot_pwm: int = 200
     pivot_seconds: float = 2.5
     brake_hold_seconds: float = .18
-    creep_pwm: int = 35
+    # Red is an early-warning signal, not a stop command.  Retain 85 base
+    # PWM and tighten only steering sensitivity while it is active.
+    precision_gain: float = 260.0
+    precision_deadband: float = .015
     reverse_pwm: int = 55
     reverse_seconds: float = .45
     remote_event_max_age_ms: int = 750
@@ -193,17 +196,19 @@ class PcVisionAdaptorRouteTracker:
                         elif self._motion_phase in {"PIVOT", "REVERSE"}:
                             self._stop_motor(); state, motor = f"{self._motion_phase}_COMPLETE", "STOP_ACTION_COMPLETE"
                         else:
-                            # The mid-frame brake pulse deliberately ends in
-                            # creep, not a permanent stop: this allows the
-                            # calibrated turn band to reach its 84% trigger.
-                            crawl = event_type in {"SLOW_DOWN", "TURN_WINDOW_ARMED", "BRAKE_NOW"} or self._motion_phase == "BRAKE_HOLD"
+                            # After the short brake pulse, resume the same
+                            # base speed.  Red pre-warning tightens steering;
+                            # it must never command the 35-PWM static-friction
+                            # stall that the old creep mode caused.
+                            precision = event_type in {"SLOW_DOWN", "TURN_WINDOW_ARMED", "BRAKE_NOW"} or self._motion_phase == "BRAKE_HOLD"
                             if self._motion_phase == "BRAKE_HOLD": self._motion_phase = "FOLLOW"
-                            pwm = pwm_for_line(result, image.shape[1], self.config.creep_pwm if crawl else self.config.straight_pwm)
+                            precision_config = FastLineConfig(correction_gain=self.config.precision_gain, deadband=self.config.precision_deadband)
+                            pwm = pwm_for_line(result, image.shape[1], self.config.straight_pwm, precision_config if precision else FastLineConfig())
                             if pwm is None:
                                 self._stop_motor(); state, motor = "LINE_LOST_STOP", "STOP_NO_NEAR_LINE"
                             else:
                                 commanded = pwm
-                                self.controller.set_direct_drive(*commanded); self._motor_active = True; state, motor = ("CREEP" if crawl else "FAST_FOLLOW"), f"FAST_PWM R={pwm[0]} L={pwm[1]}"
+                                self.controller.set_direct_drive(*commanded); self._motor_active = True; state, motor = ("PRECISION_FOLLOW" if precision else "FAST_FOLLOW"), f"FAST_PWM R={pwm[0]} L={pwm[1]}"
                 else: self._stop_motor(); state = "PAUSED"
                 annotated = image.copy()
                 for y, x, _w in result.centers: cv2.circle(annotated, (int(x), y), 5, (0, 255, 0), -1)
