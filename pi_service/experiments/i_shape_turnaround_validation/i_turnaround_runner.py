@@ -96,7 +96,7 @@ def main() -> int:
                         right, left = client.send_drive_pwm(*pair); motor = f"PIVOT_{args.turn_direction.upper()} R={right} L={left}"
                     else:
                         client.stop(); motor = "STOP"
-                payload = {"wall_time": time.strftime("%Y-%m-%dT%H:%M:%S"), "frame": frame_index, "state": decision.state.value, "reason": decision.reason, "end_frames": decision.end_frames, "reacquire_frames": decision.reacquire_frames, "pivot_elapsed_seconds": decision.pivot_elapsed_seconds, "confidence": result.observation.confidence, "marker_detected": result.observation.marker_detected, "marker_branch_count": result.observation.marker_branch_count, "motor": motor}
+                payload = {"wall_time": time.strftime("%Y-%m-%dT%H:%M:%S"), "frame": frame_index, "state": decision.state.value, "reason": decision.reason, "end_frames": decision.end_frames, "reacquire_frames": decision.reacquire_frames, "pivot_elapsed_seconds": decision.pivot_elapsed_seconds, "confidence": result.observation.confidence, "marker_detected": result.observation.marker_detected, "marker_point_px": result.observation.marker_point_px, "marker_branch_count": result.observation.marker_branch_count, "motor": motor}
                 log.write(json.dumps(payload, ensure_ascii=False) + "\n"); log.flush()
                 annotated = draw(frame, result, decision, bool(client), motor)
                 if publisher: publisher.publish(annotated, payload)

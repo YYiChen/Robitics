@@ -16,9 +16,12 @@ class TurnaroundState(str, Enum):
 class TurnaroundConfig:
     end_confirm_frames: int = 3
     reacquire_confirm_frames: int = 3
-    endpoint_margin_px: float = 45.0
     minimum_straight_span_ratio: float = 0.28
     minimum_straight_aspect: float = 1.35
+    # The transverse end bar must be in the lower portion of the camera
+    # image. This prevents a distant bar from causing an early pivot while the
+    # car still has a visible longitudinal guide line ahead.
+    terminal_marker_min_y_ratio: float = 0.58
     pivot_min_seconds: float = 1.60
     pivot_max_seconds: float = 5.00
     minimum_confidence: float = 0.45
@@ -77,12 +80,12 @@ class IShapeTurnaroundPlanner:
         span_x, span_y = evidence.span
         if span_y < evidence.frame_height * self.config.minimum_straight_span_ratio:
             return False
+        # Do not require the detector's chosen main-route skeleton to end at
+        # the bar. At a T-shaped end the skeleton is often connected through
+        # the transverse tape, so that condition incorrectly rejects the real
+        # end bar (the exact failure seen in the first vehicle run).
         marker_y = evidence.marker_point_px[1]
-        # The selected near-to-far route must end at the transverse mark. If
-        # it extends substantially above the bar, this is a mid-route crossbar
-        # rather than the end of the I-shaped guide line.
-        end_y = evidence.centerline_px[-1][1] if evidence.centerline_px else evidence.frame_height
-        return end_y >= marker_y - self.config.endpoint_margin_px
+        return marker_y >= evidence.frame_height * self.config.terminal_marker_min_y_ratio
 
     def _is_reacquired_straight(self, evidence: RouteEvidence) -> bool:
         if not evidence.valid_line or evidence.confidence < self.config.minimum_confidence:
