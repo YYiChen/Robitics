@@ -19,15 +19,20 @@ from scanline_i_logic import HybridScanlineAnalyzer, HybridScanlineConfig  # noq
 @dataclass(frozen=True)
 class GreenWhiteScanlineConfig(HybridScanlineConfig):
     """HSV thresholds verified by the fixed green-course detector config."""
-    white_saturation_max: int = 82
-    white_value_min: int = 168
+    white_saturation_max: int = 55
+    white_value_min: int = 185
     green_hue_min: int = 32
     green_hue_max: int = 96
     green_saturation_min: int = 45
     green_value_min: int = 28
     minimum_green_roi_ratio: float = 0.18
     roi_top_ratio: float = 0.38
-    green_neighbour_kernel: int = 31
+    green_neighbour_kernel: int = 23
+    green_support_distance_pixels: int = 14
+    green_support_bridge_kernel: int = 21
+    near_track_max_width_ratio: float = 0.22
+    near_track_centre_tolerance_ratio: float = 0.24
+    minimum_near_track_rows: int = 2
     red_hue_low_max: int = 12
     red_hue_high_min: int = 165
     red_saturation_min: int = 85
@@ -48,6 +53,18 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
     def _odd(value: int) -> int:
         return value if value % 2 else value + 1
 
+    @staticmethod
+    def _shift(mask: np.ndarray, dx: int, dy: int) -> np.ndarray:
+        height, width = mask.shape
+        return cv2.warpAffine(
+            mask,
+            np.float32(((1, 0, dx), (0, 1, dy))),
+            (width, height),
+            flags=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
+
     def _make_mask(self, frame: np.ndarray, blur_kernel: int, morphology_kernel: int) -> np.ndarray:
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         config = self.config
@@ -66,15 +83,83 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         green_roi_ratio = float(np.count_nonzero(green[roi_start:])) / max(1, green[roi_start:].size)
         if green_roi_ratio < config.minimum_green_roi_ratio:
             return np.zeros_like(white)
-        # White tape replaces the green beneath it.  Keep white pixels only
-        # when they are immediately surrounded by the expected green floor.
+        # White tape replaces the green beneath it.  It must have green on
+        # both sides along at least one axis: a vertical strip has green to
+        # its left/right, and a horizontal bar has green above/below.  Merely
+        # touching green on one side (the pale floor beside the mat) is not
+        # sufficient.
         neighbour_size = self._odd(max(3, config.green_neighbour_kernel))
         neighbour = cv2.dilate(green, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (neighbour_size, neighbour_size)))
-        mask = cv2.bitwise_and(white, neighbour)
+        support = max(2, config.green_support_distance_pixels)
+        horizontal_support = cv2.bitwise_and(self._shift(green, support, 0), self._shift(green, -support, 0))
+        vertical_support = cv2.bitwise_and(self._shift(green, 0, support), self._shift(green, 0, -support))
+        green_surrounded = cv2.bitwise_or(horizontal_support, vertical_support)
+        strict_tape = cv2.bitwise_and(cv2.bitwise_and(white, neighbour), green_surrounded)
+        # At a T intersection the crossing's central square has tape on all
+        # four sides, so the two-sided-green test intentionally leaves a
+        # small hole there.  Reconnect only from already strict tape pixels;
+        # this bridges the T centre without admitting a whole floor region.
+        bridge_size = self._odd(max(3, config.green_support_bridge_kernel))
+        bridge = cv2.dilate(strict_tape, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (bridge_size, bridge_size)))
+        mask = cv2.bitwise_and(cv2.bitwise_and(white, neighbour), bridge)
         cleanup_size = self._odd(max(3, morphology_kernel))
         cleanup = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (cleanup_size, cleanup_size))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, cleanup)
         return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cleanup)
+
+    def _select_route_component(self, mask: np.ndarray) -> np.ndarray:
+        """Choose only a near, centred narrow-tape component as the route.
+
+        The parent scorer intentionally favours a large near component.  On a
+        green-mat boundary that makes a large pale floor patch beat the tape.
+        A valid driving route must instead look like a narrow strip on at
+        least two bottom scan rows; the transverse bar is still retained in
+        the same connected component for endpoint evidence.
+        """
+        constrained = cv2.bitwise_and(mask, self._route_corridor_mask(mask.shape))
+        connection_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (self.config.route_connection_kernel, self.config.route_connection_kernel),
+        )
+        constrained = cv2.morphologyEx(constrained, cv2.MORPH_CLOSE, connection_kernel)
+        count, labels, stats, _centroids = cv2.connectedComponentsWithStats(constrained, connectivity=8)
+        height, width = constrained.shape
+        near_start = int(round(height * (1.0 - self.config.route_anchor_near_ratio)))
+        near_labels = labels[near_start:, :]
+        track_ys = tuple(min(height - 1, max(0, int(round(height * ratio)))) for ratio in self.config.track_rows)
+        maximum_width = width * self.config.near_track_max_width_ratio
+        centre_tolerance = width * self.config.near_track_centre_tolerance_ratio
+        best_label, best_score = 0, float("-inf")
+        for label in range(1, count):
+            x, y, component_width, component_height, area = map(int, stats[label])
+            if component_height / max(1, height) < self.config.route_minimum_vertical_coverage:
+                continue
+            near_count = int(np.count_nonzero(near_labels == label))
+            if near_count == 0:
+                continue
+            narrow_rows = 0
+            for row_y in track_ys:
+                xs = np.flatnonzero(labels[row_y] == label)
+                if xs.size == 0:
+                    continue
+                gaps = np.flatnonzero(np.diff(xs) > 1)
+                starts = np.r_[0, gaps + 1]
+                ends = np.r_[gaps, xs.size - 1]
+                for start, end in zip(starts, ends):
+                    left, right = int(xs[start]), int(xs[end])
+                    run_width = right - left + 1
+                    if run_width <= maximum_width and abs((left + right) / 2.0 - width / 2.0) <= centre_tolerance:
+                        narrow_rows += 1
+                        break
+            if narrow_rows < self.config.minimum_near_track_rows:
+                continue
+            centre_distance = abs((x + component_width / 2.0) - width / 2.0) / max(1, width)
+            score = narrow_rows * width * height + near_count * 2.0 + area * .05 - centre_distance * area * .10
+            if score > best_score:
+                best_label, best_score = label, score
+        if best_label == 0:
+            return np.zeros_like(constrained)
+        return np.where(labels == best_label, 255, 0).astype(np.uint8)
 
     def _detect_red_band_marker(self, frame: np.ndarray, route_center_x: float | None) -> tuple[bool, int | None, int | None]:
         """Find the two red fragments flanking the incoming white stem."""

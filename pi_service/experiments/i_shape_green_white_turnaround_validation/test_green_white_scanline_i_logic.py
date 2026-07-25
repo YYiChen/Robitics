@@ -52,6 +52,16 @@ class GreenWhiteScanlineTests(unittest.TestCase):
         evidence = self.analyzer.analyze(frame).evidence
         self.assertTrue(evidence.line_lost)
 
+    def test_large_pale_floor_patch_is_not_selected_as_a_route(self):
+        image = np.full((480, 640, 3), (55, 150, 45), dtype=np.uint8)
+        # This models the pale floor beside the green mat: it is bright and
+        # low saturation, but has green only on one side rather than being a
+        # narrow white tape embedded in green.
+        cv2.rectangle(image, (0, 100), (639, 390), (215, 215, 215), -1)
+        result = self.analyzer.analyze(image)
+        self.assertTrue(result.evidence.line_lost)
+        self.assertEqual(int(np.count_nonzero(result.component_mask)), 0)
+
     def test_confirmed_white_bar_brakes_when_near_red_band_exits_bottom(self):
         planner = IShapeTurnaroundPlanner(
             TurnaroundConfig(
