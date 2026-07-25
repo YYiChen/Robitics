@@ -19,6 +19,9 @@ class MarkerCounterConfig:
     confirm_frames: int = 2
     clear_frames: int = 4
     markers_per_lap: int = 4
+    # If a still-visible candidate suddenly returns higher in the image, it is
+    # a new physical marker, not the tail of the previous one.
+    rearm_y_drop_ratio: float = 0.18
 
 
 @dataclass(frozen=True)
@@ -38,12 +41,15 @@ class MarkerCounter:
         self.config = config or MarkerCounterConfig()
         if self.config.confirm_frames < 1 or self.config.clear_frames < 1 or self.config.markers_per_lap < 1:
             raise ValueError("marker counter settings must be positive")
+        if not 0 < self.config.rearm_y_drop_ratio < 1:
+            raise ValueError("rearm_y_drop_ratio must be in (0, 1)")
         self._state = MarkerState.ARMED
         self._present_frames = 0
         self._clear_frames = 0
         self._total = 0
+        self._last_event_y_ratio: float | None = None
 
-    def update(self, detected: bool) -> MarkerUpdate:
+    def update(self, detected: bool, marker_y_ratio: float | None = None) -> MarkerUpdate:
         event = False
         if self._state is MarkerState.ARMED:
             if detected:
@@ -56,12 +62,27 @@ class MarkerCounter:
                     self._total += 1
                     event = True
                     self._clear_frames = 0
+                    self._last_event_y_ratio = marker_y_ratio
                     self._state = MarkerState.COOLDOWN
             else:
                 self._present_frames = 0
                 self._state = MarkerState.ARMED
         else:  # COOLDOWN: the same X can be visible in many consecutive frames.
-            if detected:
+            reappeared_higher = (
+                detected
+                and marker_y_ratio is not None
+                and self._last_event_y_ratio is not None
+                and marker_y_ratio <= self._last_event_y_ratio - self.config.rearm_y_drop_ratio
+            )
+            if reappeared_higher:
+                # Detector leakage can keep the old marker true for too long.
+                # A new marker first appears high in the image, so safely rearm
+                # and require the normal confirmation frames again.
+                self._present_frames = 0
+                self._clear_frames = 0
+                self._last_event_y_ratio = None
+                self._state = MarkerState.ARMED
+            elif detected:
                 self._clear_frames = 0
             else:
                 self._clear_frames += 1

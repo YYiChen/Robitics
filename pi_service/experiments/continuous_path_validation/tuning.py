@@ -29,6 +29,10 @@ MARKER_CONFIRM_FRAMES = 2
 # 1.2 秒，可避免同一个 X 在视野边缘闪烁时被重复计数。
 MARKER_CLEAR_FRAMES = 12
 
+# 若上一个 X 的候选一直没有消失，但新 X 从画面更上方出现，纵向位置
+# 至少下降这个比例就重新解锁计数器。一般无需改；误重复计数再调大。
+MARKER_REARM_Y_DROP_RATIO = 0.18
+
 # 本次路线一圈有几个 X 路标。当前贴了四个，所以每累计四次 lap 加 1。
 MARKERS_PER_LAP = 4
 

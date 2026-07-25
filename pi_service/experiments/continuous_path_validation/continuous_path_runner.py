@@ -37,6 +37,7 @@ from tuning import (  # noqa: E402
     MINIMUM_WHEEL_PWM,
     MARKER_CLEAR_FRAMES,
     MARKER_CONFIRM_FRAMES,
+    MARKER_REARM_Y_DROP_RATIO,
     MARKERS_PER_LAP,
     PROCESS_FPS,
     STRAIGHT_PWM,
@@ -114,6 +115,7 @@ def main() -> int:
         confirm_frames=MARKER_CONFIRM_FRAMES,
         clear_frames=MARKER_CLEAR_FRAMES,
         markers_per_lap=MARKERS_PER_LAP,
+        rearm_y_drop_ratio=MARKER_REARM_Y_DROP_RATIO,
     ))
     executor = None
     if args.enable_motors:
@@ -148,7 +150,10 @@ def main() -> int:
                 continue
             last = now
             result = detector.detect(frame, frame_index=frame_index, timestamp_ns=time.monotonic_ns())
-            marker_update = marker_counter.update(result.observation.marker_detected)
+            marker_update = marker_counter.update(
+                result.observation.marker_detected,
+                result.observation.marker_y_ratio,
+            )
             decision = planner.step(result.observation, now)
             motor_action = executor.apply(decision.intent, result.observation) if executor else "DISPLAY_ONLY"
             annotated = overlay(render_debug(frame, result), decision, motor_action, result.observation, marker_update)

@@ -71,6 +71,25 @@ class ContinuousPathTests(unittest.TestCase):
         self.assertTrue(second.event)
         self.assertEqual(second.marker_in_lap, 2)
 
+    def test_new_marker_high_in_image_rearms_when_old_candidate_leaks(self):
+        counter = MarkerCounter(MarkerCounterConfig(
+            confirm_frames=2,
+            clear_frames=12,
+            markers_per_lap=4,
+            rearm_y_drop_ratio=.18,
+        ))
+        counter.update(True, .74)
+        first = counter.update(True, .76)
+        self.assertTrue(first.event)
+        # The old candidate incorrectly stays detected. A new marker enters
+        # near the top of the image, therefore it must not remain locked out.
+        rearmed = counter.update(True, .52)
+        self.assertEqual(rearmed.state, MarkerState.ARMED)
+        counter.update(True, .54)
+        second = counter.update(True, .56)
+        self.assertTrue(second.event)
+        self.assertEqual(second.marker_in_lap, 2)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
