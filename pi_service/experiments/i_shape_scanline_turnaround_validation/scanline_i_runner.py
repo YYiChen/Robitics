@@ -16,7 +16,14 @@ sys.path[:0] = [str(ROOT), str(CONTINUOUS), str(HERE)]
 
 from debug_web import DebugMjpegPublisher  # noqa: E402
 from pi_service.robot_client import RobotClientConfig, RobotWebClient  # noqa: E402
-from scanline_i_logic import IShapeScanlineAnalyzer, IShapeTurnaroundPlanner, TurnaroundConfig, TurnaroundState  # noqa: E402
+from scanline_i_logic import (  # noqa: E402
+    HybridScanlineAnalyzer,
+    HybridScanlineConfig,
+    IShapeScanlineAnalyzer,
+    IShapeTurnaroundPlanner,
+    TurnaroundConfig,
+    TurnaroundState,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,6 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--status-hz", type=float, default=4.0)
     parser.add_argument("--log", type=Path, default=ROOT / "pi_service" / "logs" / "i_shape_scanline_turnaround" / "latest.jsonl")
     parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--hybrid", action="store_true", help="use HybridScanlineAnalyzer (skeleton + junction)")
     return parser.parse_args()
 
 
@@ -59,17 +67,30 @@ def draw(frame, result, decision, motor: str):
         cv2.circle(output, (int(x), y), 5, (0, 255, 0), -1)
     if evidence.endpoint_y is not None:
         cv2.line(output, (0, evidence.endpoint_y), (output.shape[1] - 1, evidence.endpoint_y), (0, 165, 255), 2)
-    cv2.rectangle(output, (10, 10), (930, 132), (20, 20, 20), cv2.FILLED)
+    # Hybrid: draw lookahead point
+    if evidence.lookahead_x is not None and evidence.lookahead_y is not None:
+        cv2.circle(output, (int(evidence.lookahead_x), evidence.lookahead_y), 7, (0, 255, 255), -1)
+    # Hybrid: draw junction line
+    if evidence.junction_detected and evidence.junction_y is not None:
+        cv2.line(output, (0, evidence.junction_y), (output.shape[1] - 1, evidence.junction_y), (255, 0, 255), 1)
+    cv2.rectangle(output, (10, 10), (930, 168), (20, 20, 20), cv2.FILLED)
     cv2.putText(output, f"SCANLINE I-TURN: {decision.state.value}", (18, 38), cv2.FONT_HERSHEY_SIMPLEX, .65, (0, 220, 0), 2)
     cv2.putText(output, f"bar={evidence.endpoint_detected} y={evidence.endpoint_y} width={evidence.endpoint_width} normal={evidence.normal_tape_width}", (18, 65), cv2.FONT_HERSHEY_SIMPLEX, .47, (100, 220, 255), 1)
-    cv2.putText(output, f"confidence={evidence.confidence:.2f} {decision.reason} {motor}", (18, 92), cv2.FONT_HERSHEY_SIMPLEX, .46, (255, 255, 255), 1)
-    cv2.putText(output, "This experiment ignores skeleton branches; Q/Esc stops.", (18, 117), cv2.FONT_HERSHEY_SIMPLEX, .42, (190, 190, 190), 1)
+    hybrid_line = f"junction={evidence.junction_detected} j_y={evidence.junction_y} arms={evidence.junction_arm_count} lookahead=({evidence.lookahead_x},{evidence.lookahead_y}) path={evidence.path_length_px}px"
+    cv2.putText(output, hybrid_line, (18, 92), cv2.FONT_HERSHEY_SIMPLEX, .42, (255, 200, 255), 1)
+    cv2.putText(output, f"confidence={evidence.confidence:.2f} {decision.reason} {motor}", (18, 118), cv2.FONT_HERSHEY_SIMPLEX, .46, (255, 255, 255), 1)
+    cv2.putText(output, "Q/Esc stops.", (18, 148), cv2.FONT_HERSHEY_SIMPLEX, .42, (190, 190, 190), 1)
     return output
 
 
 def main() -> int:
     args = parse_args()
-    analyzer = IShapeScanlineAnalyzer()
+    if args.hybrid:
+        analyzer = HybridScanlineAnalyzer()
+        print("analyzer=hybrid_skeleton_junction", flush=True)
+    else:
+        analyzer = IShapeScanlineAnalyzer()
+        print("analyzer=legacy_scanline", flush=True)
     planner = IShapeTurnaroundPlanner(TurnaroundConfig(pivot_min_seconds=args.pivot_min_seconds, pivot_max_seconds=args.pivot_max_seconds))
     client = RobotWebClient(RobotClientConfig(args.controller_url)) if args.enable_motors else None
     latest_status = require_isolated_controller(client) if client else None
@@ -117,7 +138,7 @@ def main() -> int:
                     if now >= next_status:
                         latest_status = client.status()
                         next_status = now + 1.0 / max(1.0, args.status_hz)
-                payload = {"wall_time": time.strftime("%Y-%m-%dT%H:%M:%S"), "frame": frame_index, "vision_confidence": evidence.confidence, "route_state": decision.state.value, "route_line_center_x": evidence.line_center_x, "transverse_bar_detected": evidence.endpoint_detected, "transverse_bar_position_px": evidence.endpoint_y, "transverse_bar_width_px": evidence.endpoint_width, "requested_right_pwm": requested[0] if requested else 0, "requested_left_pwm": requested[1] if requested else 0, "acknowledged_right_pwm": acknowledged[0] if acknowledged else 0, "acknowledged_left_pwm": acknowledged[1] if acknowledged else 0, "scene_change_score": scene_change, "scene_motion_detected": scene_change is not None and scene_change >= 8.0, "route_position_changed": route_changed, "reason": decision.reason, **robot_snapshot(latest_status)}
+                payload = {"wall_time": time.strftime("%Y-%m-%dT%H:%M:%S"), "frame": frame_index, "vision_confidence": evidence.confidence, "route_state": decision.state.value, "route_line_center_x": evidence.line_center_x, "transverse_bar_detected": evidence.endpoint_detected, "transverse_bar_position_px": evidence.endpoint_y, "transverse_bar_width_px": evidence.endpoint_width, "lookahead_x": evidence.lookahead_x, "lookahead_y": evidence.lookahead_y, "path_length_px": evidence.path_length_px, "junction_detected": evidence.junction_detected, "junction_y": evidence.junction_y, "junction_arm_count": evidence.junction_arm_count, "requested_right_pwm": requested[0] if requested else 0, "requested_left_pwm": requested[1] if requested else 0, "acknowledged_right_pwm": acknowledged[0] if acknowledged else 0, "acknowledged_left_pwm": acknowledged[1] if acknowledged else 0, "scene_change_score": scene_change, "scene_motion_detected": scene_change is not None and scene_change >= 8.0, "route_position_changed": route_changed, "reason": decision.reason, **robot_snapshot(latest_status)}
                 log.write(json.dumps(payload, ensure_ascii=False) + "\n"); log.flush()
                 annotated = draw(frame, result, decision, motor)
                 if publisher:
