@@ -151,6 +151,7 @@ def main() -> int:
             annotated = overlay(render_debug(frame, result), decision, motor_action, result.observation, marker_update)
             payload = {
                 "frame": frame_index,
+                "wall_time": time.strftime("%Y-%m-%dT%H:%M:%S"),
                 "intent": decision.intent.value,
                 "reason": decision.reason,
                 "motor": motor_action,
