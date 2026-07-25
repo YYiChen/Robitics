@@ -95,6 +95,7 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         self._latest_green_mask: np.ndarray | None = None
         self._latest_green_field: np.ndarray | None = None
         self._latest_course_allowed: np.ndarray | None = None
+        self._latest_tape_candidate_mask: np.ndarray | None = None
         self._latest_red_marker_mask: np.ndarray | None = None
         self._latest_tape_fit_line: tuple[tuple[int, int], tuple[int, int]] | None = None
         self._latest_red_band_layers: tuple[RedBandLayer, ...] = ()
@@ -146,6 +147,11 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         return self._latest_red_marker_mask
 
     @property
+    def tape_candidate_mask(self) -> np.ndarray | None:
+        """All white tape evidence inside the recovered course (display-only)."""
+        return self._latest_tape_candidate_mask
+
+    @property
     def tape_fit_line(self) -> tuple[tuple[int, int], tuple[int, int]] | None:
         """Diagnostic-only best straight segment through permissive tape pixels."""
         return self._latest_tape_fit_line
@@ -178,6 +184,7 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         # Do not leave a previous frame's diagnostic overlay visible if the
         # current frame has no valid green course field.
         self._latest_course_allowed = None
+        self._latest_tape_candidate_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
         self._latest_red_marker_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
         self._latest_tape_fit_line = None
         self._latest_red_band_layers = ()
@@ -199,7 +206,31 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         # the inherited analyzer.  Retain raw green for side probes, and its
         # connected course field for the spatial candidate gate.
         self._latest_green_mask = green
-        green_field = self._course_field_mask(green)
+        # White tape and red markers physically cover strips of the carpet.
+        # Treat those colour-confirmed strips as *bridges* only while
+        # recovering the connected course field: otherwise a wide near tape
+        # can split the lower carpet from the anchored upper carpet and make
+        # its own white pixels ineligible on the next line.  We do not bridge
+        # arbitrary dark/bright floor pixels.
+        blue, green_channel, red_channel = cv2.split(frame)
+        red_excess = red_channel.astype(np.int16) - np.maximum(green_channel, blue).astype(np.int16)
+        red_bridge = np.where(
+            (red_channel >= config.red_channel_min) & (red_excess >= config.red_excess_min),
+            255,
+            0,
+        ).astype(np.uint8)
+        # A bridge must begin next to real green carpet.  This prevents a
+        # red object or bright room floor from manufacturing an entire course
+        # when no green field exists at all, while the generous radius still
+        # spans the widest close tape in the fisheye view.
+        bridge_radius = self._odd(max(3, config.green_field_white_margin_pixels * 4 + 1))
+        green_neighbourhood = cv2.dilate(
+            green,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (bridge_radius, bridge_radius)),
+        )
+        bridge = cv2.bitwise_and(cv2.bitwise_or(white, red_bridge), green_neighbourhood)
+        course_seed = cv2.bitwise_or(green, bridge)
+        green_field = self._course_field_mask(course_seed)
         self._latest_green_field = green_field
         if not np.any(green_field):
             return np.zeros_like(white)
@@ -217,6 +248,7 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         cleanup = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (cleanup_size, cleanup_size))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, cleanup)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cleanup)
+        self._latest_tape_candidate_mask = mask
         self._latest_tape_fit_line = self._fit_permissive_tape(mask)
         return mask
 
@@ -433,9 +465,24 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
     def analyze(self, frame: np.ndarray):
         result = super().analyze(frame)
         evidence = result.evidence
+        # A near transverse bar is intentionally not accepted as a steering
+        # route.  It is nevertheless strong endpoint evidence even when it
+        # fills the near view so completely that no narrow longitudinal
+        # component can pass the route selector.  Analyse it independently
+        # from the permissive candidate mask; it can only mark a bar, never
+        # produce a left/right steering centre.
+        if not evidence.endpoint_detected and self._latest_tape_candidate_mask is not None:
+            bar_y, bar_width = self._find_wide_bar(self._latest_tape_candidate_mask, evidence.normal_tape_width)
+            if bar_y is not None and bar_y >= frame.shape[0] * self.config.endpoint_min_y_ratio:
+                evidence = replace(evidence, endpoint_detected=True, endpoint_y=bar_y, endpoint_width=bar_width)
+        if not evidence.junction_detected and self._latest_tape_candidate_mask is not None:
+            candidate_skeleton = self._skeletonize(self._latest_tape_candidate_mask)
+            junction, junction_y, arms = self._detect_junction(candidate_skeleton)
+            if junction and junction_y is not None and junction_y < frame.shape[0] * self.config.early_junction_max_y_ratio:
+                evidence = replace(evidence, junction_detected=True, junction_y=junction_y, junction_arm_count=arms)
         detected, marker_y, marker_span = self._detect_red_band_marker(frame, evidence.line_center_x)
         if not detected or marker_y is None:
-            return result
+            return result.__class__(evidence, result.component_mask)
         # Red only pre-authorizes the white T. White endpoint confirmation and
         # stem loss are still required before braking or pivoting.
         junction_y = max(value for value in (evidence.junction_y, marker_y) if value is not None)

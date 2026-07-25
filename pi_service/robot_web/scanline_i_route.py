@@ -248,11 +248,20 @@ class ScanlineIShapeRouteTracker:
         return {"mode": self.route_mode, "variant": "legacy", "detail": "扫描线 I 型识别运行中；按 M 开启自动行驶"}
 
     def _draw(self, cv2, frame, result, decision, motor_text: str):
+        candidate_mask = getattr(self, "_visual_tape_candidate_mask", None)
+        output = frame.copy()
+        # Pale yellow is every white tape candidate retained inside the green
+        # course.  It gives a truthful visual answer when a near horizontal
+        # bar is deliberately withheld from steering control.
+        if candidate_mask is not None and candidate_mask.shape == frame.shape[:2] and candidate_mask.any():
+            candidate = output.copy()
+            candidate[candidate_mask > 0] = (90, 210, 255)
+            output = cv2.addWeighted(output, .72, candidate, .28, 0)
         # Yellow, not grayscale: this is the selected near-anchored route
         # component used by control, so it remains legible on a grey floor.
-        yellow_route = frame.copy()
+        yellow_route = output.copy()
         yellow_route[result.component_mask > 0] = (0, 220, 255)
-        output = cv2.addWeighted(frame, .62, yellow_route, .38, 0)
+        output = cv2.addWeighted(output, .62, yellow_route, .38, 0)
         course_field = getattr(self, "_visual_course_field", None)
         if course_field is not None and course_field.shape == output.shape[:2] and course_field.any():
             contours, _ = cv2.findContours(course_field, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -316,6 +325,7 @@ class ScanlineIShapeRouteTracker:
                     continue
                 result = analyzer.analyze(frame)
                 self._visual_course_field = getattr(analyzer, "course_field_mask", None)
+                self._visual_tape_candidate_mask = getattr(analyzer, "tape_candidate_mask", None)
                 self._visual_red_marker_mask = getattr(analyzer, "red_marker_mask", None)
                 self._visual_tape_fit_line = getattr(analyzer, "tape_fit_line", None)
                 evidence = result.evidence

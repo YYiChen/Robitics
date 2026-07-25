@@ -33,6 +33,32 @@ class GreenWhiteScanlineTests(unittest.TestCase):
         self.assertTrue(evidence.valid_line)
         self.assertTrue(evidence.endpoint_detected or evidence.junction_detected)
 
+    def test_near_bar_remains_endpoint_evidence_without_a_steering_component(self):
+        image = np.full((480, 640, 3), (55, 150, 45), dtype=np.uint8)
+        # At the turn position the near bar can fill the frame.  It is not a
+        # valid longitudinal steering route, but must still be reported as a
+        # confirmed endpoint rather than disappearing completely.
+        cv2.rectangle(image, (20, 370), (620, 460), (245, 245, 245), -1)
+        result = self.analyzer.analyze(image)
+        self.assertFalse(result.evidence.valid_line)
+        self.assertEqual(int(np.count_nonzero(result.component_mask)), 0)
+        self.assertTrue(result.evidence.endpoint_detected)
+        self.assertIsNotNone(result.evidence.endpoint_y)
+        self.assertGreater(int(np.count_nonzero(self.analyzer.tape_candidate_mask)), 0)
+
+    def test_white_and_red_course_bridges_reconnect_green_below_a_near_bar(self):
+        image = np.full((480, 640, 3), (55, 150, 45), dtype=np.uint8)
+        # White tape plus the red warning band completely split the raw-green
+        # pixels into upper/lower islands.  The recovered course must contain
+        # green on both sides, including the lower driving field.
+        cv2.rectangle(image, (0, 350), (639, 420), (245, 245, 245), -1)
+        cv2.rectangle(image, (180, 421), (460, 445), (0, 0, 255), -1)
+        self.analyzer.analyze(image)
+        field = self.analyzer.course_field_mask
+        self.assertIsNotNone(field)
+        self.assertGreater(int(np.count_nonzero(field[300:340, :])), 0)
+        self.assertGreater(int(np.count_nonzero(field[450:479, :])), 0)
+
     def test_split_red_band_pre_authorizes_the_white_t_junction(self):
         evidence = self.analyzer.analyze(green_i_frame(transverse=True, red_band=True)).evidence
         self.assertTrue(evidence.red_marker_detected)
