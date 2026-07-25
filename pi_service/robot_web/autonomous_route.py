@@ -72,6 +72,9 @@ class AutonomousRouteConfig:
     marker_clear_frames: int = 12
     marker_rearm_y_drop_ratio: float = 0.18
     markers_per_lap: int = 4
+    motion_observe_seconds: float = 1.0
+    motion_min_path_shift_px: float = 25.0
+    motion_step_pwm: int = 5
 
 
 TUNING_FIELDS = {
@@ -95,6 +98,9 @@ TUNING_FIELDS = {
     "sharp_turn_error": ("SHARP_TURN_ERROR", float, 0.0, 1.0),
     "sharp_turn_correction_pwm": ("SHARP_TURN_CORRECTION_PWM", int, 0, 255),
     "sharp_turn_inner_pwm": ("SHARP_TURN_INNER_PWM", int, -255, 255),
+    "motion_observe_seconds": ("MOTION_OBSERVE_SECONDS", float, 0.1, 60.0),
+    "motion_min_path_shift_px": ("MOTION_MIN_PATH_SHIFT_PX", float, 1.0, 1000.0),
+    "motion_step_pwm": ("MOTION_STEP_PWM", int, 1, 255),
 }
 
 
@@ -115,6 +121,8 @@ class AutonomousRouteTracker:
         self.controller, self.camera, self.publisher, self.gate, self.config = controller, camera, publisher, gate, config
         self._stop = threading.Event(); self._thread: threading.Thread | None = None; self._lock = threading.Lock()
         self._motor_active = False; self._launch_until = 0.0; self._tuning_lock = threading.RLock(); self._tuning_version = 0
+        self._motion_reference: tuple[float, tuple[tuple[float, float], ...]] | None = None
+        self._motion_boost_pwm: int | None = None; self._motion_confirmed = False; self._motion_text = "WAIT_STRAIGHT"
         self._status = {"available": True, "running": False, "enabled": False, "state": "starting", "detail": "等待路线识别器启动", "frame": 0}
 
     def start(self) -> None:
@@ -181,6 +189,50 @@ class AutonomousRouteTracker:
         if self._motor_active:
             self.controller.stop_now(); self._motor_active = False; self._launch_until = 0.0
 
+    def _reset_motion_assist(self) -> None:
+        self._motion_reference = None; self._motion_boost_pwm = None; self._motion_confirmed = False; self._motion_text = "WAIT_STRAIGHT"
+
+    @staticmethod
+    def _path_signature(path: tuple[tuple[int, int], ...], samples: int = 12) -> tuple[tuple[float, float], ...] | None:
+        if len(path) < 2:
+            return None
+        return tuple(tuple(map(float, path[round(i * (len(path) - 1) / (samples - 1))])) for i in range(samples))
+
+    @staticmethod
+    def _signature_shift(first: tuple[tuple[float, float], ...], second: tuple[tuple[float, float], ...]) -> float:
+        return sum(((ax - bx) ** 2 + (ay - by) ** 2) ** .5 for (ax, ay), (bx, by) in zip(first, second)) / max(1, len(first))
+
+    def _motion_assist_pwm(self, now: float, path: tuple[tuple[int, int], ...], straight: bool, config: AutonomousRouteConfig) -> tuple[int, str]:
+        """Increase only a stationary straight-line launch, based on route motion."""
+        if not straight:
+            self._reset_motion_assist()
+            return config.straight_pwm, self._motion_text
+        signature = self._path_signature(path)
+        if signature is None:
+            self._motion_text = "NO_ROUTE_SIGNATURE"
+            return config.straight_pwm, self._motion_text
+        if self._motion_confirmed:
+            self._motion_text = "MOVING_CONFIRMED"
+            return config.straight_pwm, self._motion_text
+        if self._motion_reference is None:
+            self._motion_reference = (now, signature); self._motion_text = "OBSERVING_ROUTE"
+            return self._motion_boost_pwm or config.straight_pwm, self._motion_text
+        started, reference = self._motion_reference
+        if now - started < config.motion_observe_seconds:
+            self._motion_text = f"OBSERVING {now - started:.1f}/{config.motion_observe_seconds:.1f}s"
+            return self._motion_boost_pwm or config.straight_pwm, self._motion_text
+        shift = self._signature_shift(reference, signature)
+        self._motion_reference = (now, signature)
+        if shift >= config.motion_min_path_shift_px:
+            self._motion_confirmed = True; self._motion_boost_pwm = None
+            self._motion_text = f"MOVING shift={shift:.1f}px"
+            return config.straight_pwm, self._motion_text
+        current = self._motion_boost_pwm if self._motion_boost_pwm is not None else config.straight_pwm
+        boosted = min(config.maximum_wheel_pwm, current + config.motion_step_pwm)
+        self._motion_boost_pwm = boosted
+        self._motion_text = f"STILL shift={shift:.1f}px -> PWM {boosted}"
+        return boosted, self._motion_text
+
     def _bounded(self, value: int) -> int:
         return max(-self.config.maximum_wheel_pwm, min(self.config.maximum_wheel_pwm, value))
 
@@ -188,13 +240,14 @@ class AutonomousRouteTracker:
         from track_line.visualization import render_debug
         output = render_debug(frame, result)
         enabled = self.gate.enabled(); color = (0, 220, 0) if enabled else (0, 180, 255)
-        cv2.rectangle(output, (10, 76), (800, 222), (20, 20, 20), cv2.FILLED)
+        cv2.rectangle(output, (10, 76), (800, 246), (20, 20, 20), cv2.FILLED)
         cv2.putText(output, f"AUTONOMOUS: {'RUNNING' if enabled else 'PAUSED (press M)'}", (18, 104), cv2.FONT_HERSHEY_SIMPLEX, .68, color, 2, cv2.LINE_AA)
         cv2.putText(output, f"PATH: {decision.intent.value}  {decision.reason}", (18, 131), cv2.FONT_HERSHEY_SIMPLEX, .48, (255, 255, 255), 1, cv2.LINE_AA)
         lookahead = "n/a" if result.observation.lookahead_offset is None else f"{result.observation.lookahead_offset:+.3f}"
         cv2.putText(output, f"LOOKAHEAD: {lookahead}  MOTOR: {motor_text}", (18, 158), cv2.FONT_HERSHEY_SIMPLEX, .48, (100, 220, 255), 1, cv2.LINE_AA)
         cv2.putText(output, f"MARKER: {marker.marker_in_lap}/4 lap={marker.lap_count}", (18, 184), cv2.FONT_HERSHEY_SIMPLEX, .48, (0, 220, 255), 1, cv2.LINE_AA)
-        cv2.putText(output, "M: start/pause automatic driving; vision keeps running", (18, 210), cv2.FONT_HERSHEY_SIMPLEX, .42, (190, 190, 190), 1, cv2.LINE_AA)
+        cv2.putText(output, f"START ASSIST: {self._motion_text}", (18, 210), cv2.FONT_HERSHEY_SIMPLEX, .42, (255, 210, 80), 1, cv2.LINE_AA)
+        cv2.putText(output, "M: start/pause automatic driving; vision keeps running", (18, 234), cv2.FONT_HERSHEY_SIMPLEX, .42, (190, 190, 190), 1, cv2.LINE_AA)
         return output
 
     def _run(self) -> None:
@@ -235,18 +288,26 @@ class AutonomousRouteTracker:
                         self._motor_active = True; self._launch_until = now + motor.launch_duration_seconds
                     if now < self._launch_until:
                         pair, motor_text = (self._bounded(motor.launch_pwm), self._bounded(motor.launch_pwm)), "LAUNCH"
-                    elif result.observation.lookahead_offset is None and last_pair is not None: pair, motor_text = last_pair, "HOLD_LAST_PATH"
+                    elif result.observation.lookahead_offset is None and last_pair is not None: pair, motor_text = last_pair, "HOLD_LAST_PATH"; self._reset_motion_assist()
                     else:
-                        pair, error, correction = path_drive_details(result.observation, motor); pair = tuple(self._bounded(p) for p in pair); last_pair = pair
+                        pair, error, correction = path_drive_details(result.observation, motor)
+                        straight = error is not None and abs(error) <= config.correction_deadband
+                        assisted_pwm, assist_text = self._motion_assist_pwm(now, result.centerline_px, straight, config)
+                        if assisted_pwm != config.straight_pwm:
+                            assisted_motor = replace(motor, straight_pwm=assisted_pwm)
+                            pair, error, correction = path_drive_details(result.observation, assisted_motor)
+                        pair = tuple(self._bounded(p) for p in pair); last_pair = pair
                         motor_text = f"P e={error:+.3f} c={correction} R={pair[0]} L={pair[1]}" if error is not None else f"R={pair[0]} L={pair[1]}"
+                        motor_text += f" {assist_text}"
                     self.controller.set_direct_drive(*pair)
                 else:
                     if decision.intent is PathIntent.STOP: last_pair = None
+                    self._reset_motion_assist()
                     self._stop_motor()
                 annotated = self._draw(cv2, frame, result, decision, marker, motor_text)
                 ok, encoded = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 if ok: self.publisher.publish(encoded.tobytes())
-                self._set_status(state=decision.intent.value, detail=decision.reason, frame=index, marker_in_lap=marker.marker_in_lap, lap_count=marker.lap_count, confidence=result.observation.confidence)
+                self._set_status(state=decision.intent.value, detail=decision.reason, frame=index, marker_in_lap=marker.marker_in_lap, lap_count=marker.lap_count, confidence=result.observation.confidence, motion_assist=self._motion_text, motion_boost_pwm=self._motion_boost_pwm)
                 index += 1
         except Exception as exc:
             self._set_status(running=False, state="error", detail=str(exc))
