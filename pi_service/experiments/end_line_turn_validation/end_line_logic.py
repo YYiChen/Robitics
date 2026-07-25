@@ -1,8 +1,8 @@
-"""Straight white line and red terminal-band logic.
+"""Straight white line and red direction-band logic.
 
 This deliberately contains no skeleton, T-junction, transverse-white-bar,
-two-red-band, PC-offload, or 180-degree turnaround behaviour.  The present
-course has one white stem and one red terminal band at each end.
+two-red-band, PC-offload, or 180-degree turnaround behaviour.  The red band
+is a direction observation only; white-line disappearance triggers the stop.
 """
 from __future__ import annotations
 
@@ -21,9 +21,11 @@ class EndLineConfig:
     red_roi_side_ratio: float = .04
     red_min_component_area: int = 100
     red_min_span_ratio: float = .25
-    red_confirm_frames: int = 2
-    red_stop_bottom_ratio: float = .80
     line_lost_confirm_frames: int = 3
+    red_direction_memory_frames: int = 30
+    brake_hold_seconds: float = .18
+    pivot_pwm: int = 200
+    pivot_seconds: float = 2.5
 
 
 @dataclass(frozen=True)
@@ -38,9 +40,8 @@ class RedEndBandObservation:
 
 class EndLineState(str, Enum):
     FOLLOW_LINE = "FOLLOW_LINE"
-    RED_BAND_APPROACH = "RED_BAND_APPROACH"
-    STOPPED_RED_BAND = "STOPPED_RED_BAND"
-    STOPPED_RED_LINE_LOST = "STOPPED_RED_LINE_LOST"
+    RED_DIRECTION_LOCKED = "RED_DIRECTION_LOCKED"
+    STOPPED_LINE_END = "STOPPED_LINE_END"
     STOPPED_UNSAFE_LINE_LOST = "STOPPED_UNSAFE_LINE_LOST"
 
 
@@ -86,35 +87,27 @@ class RedEndBandDetector:
 
 
 class EndLineStopPlanner:
-    """Stop at a confirmed red terminal; stop safely on an unexpected line loss."""
+    """Stop only after a confirmed white-line loss; red never triggers motion."""
 
     def __init__(self, config: EndLineConfig = EndLineConfig()) -> None:
         self.config = config
         self.reset()
 
     def reset(self) -> None:
-        self._red_frames = 0
         self._line_lost_frames = 0
-        self._red_confirmed = False
         self._stopped: EndLineDecision | None = None
 
-    def step(self, *, line_valid: bool, red_band: RedEndBandObservation, frame_height: int) -> EndLineDecision:
+    def step(self, *, line_valid: bool, red_detected: bool) -> EndLineDecision:
         if self._stopped is not None:
             return self._stopped
-        if red_band.detected:
-            self._red_frames += 1
-            self._red_confirmed = self._red_confirmed or self._red_frames >= self.config.red_confirm_frames
-        else:
-            self._red_frames = 0
         self._line_lost_frames = 0 if line_valid else self._line_lost_frames + 1
-        if self._red_confirmed and red_band.detected and (red_band.bottom_y or 0) >= frame_height * self.config.red_stop_bottom_ratio:
-            self._stopped = EndLineDecision(EndLineState.STOPPED_RED_BAND, True, "confirmed_red_terminal_reached_stop_zone")
-        elif self._red_confirmed and self._line_lost_frames >= self.config.line_lost_confirm_frames:
-            self._stopped = EndLineDecision(EndLineState.STOPPED_RED_LINE_LOST, True, "confirmed_red_terminal_then_white_line_lost")
-        elif not self._red_confirmed and self._line_lost_frames >= self.config.line_lost_confirm_frames:
-            self._stopped = EndLineDecision(EndLineState.STOPPED_UNSAFE_LINE_LOST, True, "white_line_lost_without_confirmed_red_terminal")
-        elif self._red_confirmed:
-            return EndLineDecision(EndLineState.RED_BAND_APPROACH, False, "confirmed_red_terminal_approach")
+        if self._line_lost_frames >= self.config.line_lost_confirm_frames:
+            if red_detected:
+                self._stopped = EndLineDecision(EndLineState.STOPPED_LINE_END, True, "white_line_lost_after_red_direction_seen")
+            else:
+                self._stopped = EndLineDecision(EndLineState.STOPPED_UNSAFE_LINE_LOST, True, "white_line_lost_without_recent_red_direction")
+        elif red_detected:
+            return EndLineDecision(EndLineState.RED_DIRECTION_LOCKED, False, "red_direction_recorded_keep_following")
         else:
             return EndLineDecision(EndLineState.FOLLOW_LINE, False, "following_single_white_line")
         return self._stopped

@@ -51,11 +51,17 @@ function updateAutonomousUi(autonomous) {
   const activeTuningInputs = document.querySelectorAll(scanlineI ? "[data-scanline-tuning]" : (endLine ? "[data-end-line-tuning]" : "[data-route-tuning]"));
   for (const input of activeTuningInputs) {
     const key = scanlineI ? input.dataset.scanlineTuning : (endLine ? input.dataset.endLineTuning : input.dataset.routeTuning);
-    if (Object.prototype.hasOwnProperty.call(tuning, key) && document.activeElement !== input) input.value = tuning[key];
+    const supported = Object.prototype.hasOwnProperty.call(tuning, key);
+    if (supported && document.activeElement !== input) input.value = tuning[key];
+    input.closest("label")?.classList.toggle("hidden", endLine && !supported);
     input.disabled = !available;
   }
   $("#scanlineRouteTuning").classList.toggle("hidden", !scanlineI);
   $("#endLineRouteTuning").classList.toggle("hidden", !endLine);
+  $("#endLineTurnOnly").classList.toggle("hidden", !endLine);
+  const endLineLegacyHeading = document.querySelectorAll("#endLineRouteTuning h3")[1];
+  if (endLineLegacyHeading) endLineLegacyHeading.classList.toggle("hidden", endLine);
+  $("#endLineRouteTuning small:last-child")?.classList.toggle("hidden", endLine);
   $("#genericRouteTuning").classList.toggle("hidden", scanlineI || endLine);
   $("#genericRouteTuningNote").classList.toggle("hidden", scanlineI || endLine);
   const tuningState = $("#routeTuningState");

@@ -24,17 +24,16 @@ class EndLineLogicTests(unittest.TestCase):
         self.assertTrue(observation.detected)
         self.assertGreater(observation.span or 0, 450)
 
-    def test_confirmed_band_stops_when_its_bottom_enters_stop_zone(self):
+    def test_red_band_never_stops_a_valid_white_line(self):
         detector = RedEndBandDetector()
         planner = EndLineStopPlanner()
-        planner.step(line_valid=True, red_band=detector.detect(frame(red_y=280)), frame_height=480)
-        decision = planner.step(line_valid=True, red_band=detector.detect(frame(red_y=370, red_height=30)), frame_height=480)
-        self.assertEqual(decision.state, EndLineState.STOPPED_RED_BAND)
-        self.assertTrue(decision.stop)
+        decision = planner.step(line_valid=True, red_detected=detector.detect(frame(red_y=370, red_height=30)).detected)
+        self.assertEqual(decision.state, EndLineState.RED_DIRECTION_LOCKED)
+        self.assertFalse(decision.stop)
 
     def test_unexpected_loss_stops_without_claiming_endpoint(self):
         planner = EndLineStopPlanner(EndLineConfig(line_lost_confirm_frames=2))
         detector = RedEndBandDetector()
-        planner.step(line_valid=False, red_band=detector.detect(frame()), frame_height=480)
-        decision = planner.step(line_valid=False, red_band=detector.detect(frame()), frame_height=480)
+        planner.step(line_valid=False, red_detected=detector.detect(frame()).detected)
+        decision = planner.step(line_valid=False, red_detected=detector.detect(frame()).detected)
         self.assertEqual(decision.state, EndLineState.STOPPED_UNSAFE_LINE_LOST)

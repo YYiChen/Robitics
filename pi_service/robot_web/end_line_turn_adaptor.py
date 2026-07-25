@@ -1,7 +1,7 @@
-"""Port-5000 adaptor for the current single-white-line / red-terminal course.
+"""Port-5000 adaptor for the current single-white-line / red-direction course.
 
-The Pi is the only motor owner.  This first validation intentionally stops at
-the red terminal and never turns; 90-degree target alignment is a later layer.
+The Pi is the only motor owner: red only records LEFT/RIGHT, white-line loss
+stops, then the fresh recorded direction selects a fixed 90-degree pivot.
 """
 from __future__ import annotations
 
@@ -37,9 +37,11 @@ TUNING_RULES = {
     "red_roi_side_ratio": (float, 0.0, .45),
     "red_min_component_area": (int, 1, 100000),
     "red_min_span_ratio": (float, .01, 1.0),
-    "red_confirm_frames": (int, 1, 20),
-    "red_stop_bottom_ratio": (float, .2, .99),
     "line_lost_confirm_frames": (int, 1, 20),
+    "red_direction_memory_frames": (int, 1, 300),
+    "brake_hold_seconds": (float, 0.0, 3.0),
+    "pivot_pwm": (int, 0, 255),
+    "pivot_seconds": (float, .1, 15.0),
 }
 
 
@@ -54,6 +56,8 @@ class EndLineTurnAdaptorRouteTracker:
         self._process_fps, self._straight_pwm, self._fast_config, self._line_config = self._load_tuning()
         self._planner = EndLineStopPlanner(self._line_config)
         self._red_detector = RedEndBandDetector(self._line_config)
+        self._last_red_side, self._last_red_seen_frame = None, -10_000
+        self._motion_phase, self._action_until, self._pending_turn_side = "FOLLOW", 0.0, None
         self._run_log = None
         self._status = {"available": True, "running": False, "enabled": False, "mode": self.route_mode, "state": "starting", "detail": "单白线红终点 adaptor 启动中", "frame": 0, "confidence": 0.0}
 
@@ -91,6 +95,8 @@ class EndLineTurnAdaptorRouteTracker:
             self._stop_motor()
             with self._tuning_lock:
                 self._planner.reset()
+            self._last_red_side, self._last_red_seen_frame = None, -10_000
+            self._motion_phase, self._action_until, self._pending_turn_side = "FOLLOW", 0.0, None
         self._set_status(enabled=enabled, detail="单白线红终点自动行驶已开启" if enabled else "已暂停，电机已停止")
         return self.status_dict()
 
@@ -170,7 +176,8 @@ class EndLineTurnAdaptorRouteTracker:
         self._run_log.write(json.dumps({
             "time_utc": datetime.now(timezone.utc).isoformat(), "kind": "end_line_cycle", "frame": frame,
             "white_line": {"valid": result.valid, "center_x": result.center_x, "confidence": result.confidence, "rows": result.centers},
-            "red_terminal": asdict(red), "planner": {"state": decision.state.value, "reason": decision.reason},
+            "red_direction_marker": asdict(red), "last_red_side": self._last_red_side, "last_red_seen_frame": self._last_red_seen_frame,
+            "planner": {"state": decision.state.value, "reason": decision.reason},
             "gate_enabled": self.gate.enabled(), "state": state, "motor": motor,
             "commanded_pwm": None if commanded is None else {"right": commanded[0], "left": commanded[1]},
             "motor_output": controller_status.get("motor_output"),
@@ -183,7 +190,7 @@ class EndLineTurnAdaptorRouteTracker:
 
         last, frame_index = 0.0, 0
         self._open_log()
-        self._set_status(running=True, state="ready", detail="仅白线跟随与红终点停车；按 M 开始")
+        self._set_status(running=True, state="ready", detail="红线只记录方向；白线消失后停车并转 90°；按 M 开始")
         try:
             while not self._stop.is_set():
                 now, jpeg = time.monotonic(), self.camera.latest_jpeg()
@@ -200,28 +207,58 @@ class EndLineTurnAdaptorRouteTracker:
                     fast_config, detector, planner, straight_pwm = self._fast_config, self._red_detector, self._planner, self._straight_pwm
                     result = find_fast_line(image, self._last_center_x, fast_config)
                     red = detector.detect(image)
-                    decision = planner.step(line_valid=result.valid, red_band=red, frame_height=image.shape[0])
+                    decision = planner.step(line_valid=result.valid, red_detected=red.detected)
                 if result.center_x is not None:
                     self._last_center_x = result.center_x
+                # Red does not cause braking or turning.  It only records the
+                # lateral side of its centroid relative to the white stem.
+                reference_x = result.center_x if result.center_x is not None else self._last_center_x
+                if red.detected and red.center_x is not None and reference_x is not None:
+                    self._last_red_side = "LEFT" if red.center_x < reference_x else "RIGHT"
+                    self._last_red_seen_frame = frame_index
                 state, motor, commanded = decision.state.value, "PAUSED", None
                 if self.gate.enabled():
-                    if decision.stop:
+                    recent_red = self._last_red_side is not None and frame_index - self._last_red_seen_frame <= self._line_config.red_direction_memory_frames
+                    if self._motion_phase == "BRAKE_HOLD" and now < self._action_until:
                         self._stop_motor()
-                        motor = "STOP_RED_TERMINAL" if red.detected else "STOP_LINE_LOST"
+                        state, motor = "BRAKE_BEFORE_90", "STOP_BEFORE_PIVOT"
+                    elif self._motion_phase == "BRAKE_HOLD":
+                        self._motion_phase, self._action_until = "PIVOT", now + self._line_config.pivot_seconds
+                    if self._motion_phase == "PIVOT" and now < self._action_until:
+                        if self._pending_turn_side == "LEFT":
+                            commanded = (self._line_config.pivot_pwm, -self._line_config.pivot_pwm)
+                        else:
+                            commanded = (-self._line_config.pivot_pwm, self._line_config.pivot_pwm)
+                        self.controller.set_direct_drive(*commanded)
+                        self._motor_active = True
+                        state, motor = f"PIVOT_{self._pending_turn_side}_90", f"PIVOT R={commanded[0]} L={commanded[1]}"
+                    elif self._motion_phase == "PIVOT":
+                        self._stop_motor()
+                        state, motor = "TURN_COMPLETE", "STOP_90_COMPLETE"
+                    elif decision.stop:
+                        self._stop_motor()
+                        if recent_red:
+                            self._pending_turn_side = self._last_red_side
+                            self._motion_phase, self._action_until = "BRAKE_HOLD", now + self._line_config.brake_hold_seconds
+                            state, motor = "LINE_END_STOP", f"STOP_LINE_LOST_TURN_{self._pending_turn_side}"
+                        else:
+                            state, motor = "STOPPED_NO_DIRECTION", "STOP_LINE_LOST_NO_RECENT_RED"
                     else:
-                        commanded = pwm_for_line(result, image.shape[1], straight_pwm, fast_config)
+                        precision = red.detected
+                        active_fast_config = replace(fast_config, correction_gain=260.0, deadband=.015) if precision else fast_config
+                        commanded = pwm_for_line(result, image.shape[1], straight_pwm, active_fast_config)
                         if commanded is None:
                             self._stop_motor()
                             state, motor = "STOPPED_UNSAFE_LINE_LOST", "STOP_NO_NEAR_WHITE_LINE"
                         else:
                             self.controller.set_direct_drive(*commanded)
                             self._motor_active = True
-                            motor = f"FOLLOW_PWM R={commanded[0]} L={commanded[1]}"
+                            motor = f"{'PRECISION' if precision else 'FOLLOW'}_PWM R={commanded[0]} L={commanded[1]}"
                 else:
                     self._stop_motor()
                     with self._tuning_lock:
                         self._planner.reset()
-                        decision = self._planner.step(line_valid=result.valid, red_band=red, frame_height=image.shape[0])
+                        decision = self._planner.step(line_valid=result.valid, red_detected=red.detected)
                     state = "PAUSED"
                 overlay = image.copy()
                 for y, x, _width in result.centers:
@@ -231,14 +268,14 @@ class EndLineTurnAdaptorRouteTracker:
                     cv2.line(overlay, (0, red.bottom_y), (overlay.shape[1] - 1, red.bottom_y), (0, 80, 255), 1)
                 cv2.rectangle(overlay, (10, 10), (1110, 112), (20, 20, 20), cv2.FILLED)
                 cv2.putText(overlay, f"END-LINE ADAPTOR: {'RUNNING' if self.gate.enabled() else 'PAUSED (press M)'}", (18, 38), cv2.FONT_HERSHEY_SIMPLEX, .65, (0, 220, 0) if self.gate.enabled() else (0, 180, 255), 2)
-                cv2.putText(overlay, f"WHITE: valid={result.valid} centre={result.center_x} conf={result.confidence:.2f}  RED END: {red.detected} y={red.y} bottom={red.bottom_y} span={red.span}", (18, 66), cv2.FONT_HERSHEY_SIMPLEX, .43, (255, 255, 255), 1)
+                cv2.putText(overlay, f"WHITE: valid={result.valid} centre={result.center_x} conf={result.confidence:.2f}  RED: {red.detected} x={red.center_x} side={self._last_red_side}", (18, 66), cv2.FONT_HERSHEY_SIMPLEX, .43, (255, 255, 255), 1)
                 cv2.putText(overlay, f"STATE: {state}  {decision.reason}  MOTOR: {motor}", (18, 94), cv2.FONT_HERSHEY_SIMPLEX, .43, (0, 255, 255), 1)
                 ok, encoded = cv2.imencode(".jpg", overlay, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 if ok:
                     self.publisher.publish(encoded.tobytes())
                 if self.gate.enabled() or frame_index % 20 == 0:
                     self._write_log(frame_index, result, red, decision, state, motor, commanded)
-                self._set_status(state=state, detail=decision.reason, frame=frame_index, confidence=result.confidence, line_center_x=result.center_x, red_terminal=asdict(red), motor=motor)
+                self._set_status(state=state, detail=decision.reason, frame=frame_index, confidence=result.confidence, line_center_x=result.center_x, red_direction_marker=asdict(red), last_red_side=self._last_red_side, last_red_seen_frame=self._last_red_seen_frame, motion_phase=self._motion_phase, motor=motor)
                 frame_index += 1
         except Exception as exc:
             import traceback

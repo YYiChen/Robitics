@@ -23,10 +23,10 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "tuning.json"
             tracker = EndLineTurnAdaptorRouteTracker(None, None, None, _Gate(), tuning_path=path)
-            status = tracker.update_tuning({"straight_pwm": 91, "red_stop_bottom_ratio": .76, "correction_gain": 190})
+            status = tracker.update_tuning({"straight_pwm": 91, "pivot_seconds": 2.8, "correction_gain": 190})
             self.assertEqual(status["tuning"]["straight_pwm"], 91)
             self.assertEqual(status["tuning"]["correction_gain"], 190.0)
-            self.assertEqual(status["tuning"]["red_stop_bottom_ratio"], .76)
+            self.assertEqual(status["tuning"]["pivot_seconds"], 2.8)
             self.assertTrue(path.exists())
             reloaded = EndLineTurnAdaptorRouteTracker(None, None, None, _Gate(), tuning_path=path)
             self.assertEqual(reloaded.status_dict()["tuning"]["straight_pwm"], 91)
