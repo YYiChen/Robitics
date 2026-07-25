@@ -90,6 +90,10 @@ def load_scanline_tuning_config(tuning_path: Path) -> ScanlineIRouteConfig:
 
 class ScanlineIShapeRouteTracker:
     """Keep the main console's camera, M gate, and preview while reusing the isolated detector."""
+    route_mode = "scanline_i"
+    route_variant = "hybrid"
+    route_ready_detail = "Hybrid 扫描线 I 型识别运行中（骨架+交叉点预判）；按 M 开启自动行驶"
+
     def __init__(self, controller, camera, publisher, gate, config: ScanlineIRouteConfig = ScanlineIRouteConfig()) -> None:
         self.controller, self.camera, self.publisher, self.gate, self.config = controller, camera, publisher, gate, config
         self._stop = threading.Event()
@@ -97,7 +101,7 @@ class ScanlineIShapeRouteTracker:
         self._lock = threading.Lock()
         self._tuning_lock = threading.RLock()
         self._motor_active = False
-        self._status = {"available": True, "running": False, "enabled": False, "mode": "scanline_i", "state": "starting", "detail": "正在启动扫描线 I 型识别", "frame": 0, "confidence": None}
+        self._status = {"available": True, "running": False, "enabled": False, "mode": self.route_mode, "state": "starting", "detail": "正在启动扫描线 I 型识别", "frame": 0, "confidence": None}
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -193,6 +197,14 @@ class ScanlineIShapeRouteTracker:
             early_line_lost_confirm_frames=config.early_line_lost_confirm_frames,
         )
 
+    def _create_analyzer(self, config: ScanlineIRouteConfig):
+        return HybridScanlineAnalyzer() if config.use_hybrid else IShapeScanlineAnalyzer()
+
+    def _ready_status(self, config: ScanlineIRouteConfig) -> dict[str, str]:
+        if config.use_hybrid:
+            return {"mode": self.route_mode, "variant": self.route_variant, "detail": self.route_ready_detail}
+        return {"mode": self.route_mode, "variant": "legacy", "detail": "扫描线 I 型识别运行中；按 M 开启自动行驶"}
+
     def _draw(self, cv2, frame, result, decision, motor_text: str):
         # Yellow, not grayscale: this is the selected near-anchored route
         # component used by control, so it remains legible on a grey floor.
@@ -227,12 +239,8 @@ class ScanlineIShapeRouteTracker:
 
             with self._tuning_lock:
                 initial_config = self.config
-            if initial_config.use_hybrid:
-                analyzer = HybridScanlineAnalyzer()
-                self._set_status(running=True, state="ready", detail="Hybrid 扫描线 I 型识别运行中（骨架+交叉点预判）；按 M 开启自动行驶", variant="hybrid")
-            else:
-                analyzer = IShapeScanlineAnalyzer()
-                self._set_status(running=True, state="ready", detail="扫描线 I 型识别运行中；按 M 开启自动行驶", mode="legacy")
+            analyzer = self._create_analyzer(initial_config)
+            self._set_status(running=True, state="ready", **self._ready_status(initial_config))
             planner = IShapeTurnaroundPlanner(self._planner_config(initial_config))
             interval, last, frame_index = 1.0 / max(1.0, self.config.process_fps), 0.0, 0
             while not self._stop.is_set():

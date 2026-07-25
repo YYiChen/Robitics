@@ -37,11 +37,12 @@ async function toggleAutonomousDrive() {
 function updateAutonomousUi(autonomous) {
   const available = autonomous.available === true;
   const enabled = autonomous.enabled === true;
-  const scanlineI = autonomous.mode === "scanline_i";
+  const scanlineI = autonomous.mode === "scanline_i" || autonomous.mode === "scanline_i_green_white";
+  const scanlineLabel = autonomous.mode === "scanline_i_green_white" ? "绿地白线 I 型" : "扫描线 I 型";
   const button = $("#autonomousToggle"), unavailable = $("#routePreviewUnavailable"), image = $("#routePreview");
   button.disabled = !available;
   button.textContent = available ? (enabled ? "M：暂停并停车" : "M：开启自动行驶") : "路线预判未开启";
-  $("#autonomousState").textContent = available ? `${scanlineI ? "扫描线 I 型" : "视觉"}：${autonomous.state || "等待"} · ${autonomous.detail || "—"}` : "视觉识别：本次服务未开启";
+  $("#autonomousState").textContent = available ? `${scanlineI ? scanlineLabel : "视觉"}：${autonomous.state || "等待"} · ${autonomous.detail || "—"}` : "视觉识别：本次服务未开启";
   $("#routePreviewMeta").textContent = available ? `${enabled ? "行驶中" : "已暂停"} · ${autonomous.confidence == null ? "—" : `置信度 ${fixed(autonomous.confidence)}`}` : "未开启";
   unavailable.classList.toggle("hidden", available);
   if (!available) image.removeAttribute("src");
