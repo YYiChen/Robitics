@@ -28,7 +28,11 @@ class GreenWhiteScanlineConfig(HybridScanlineConfig):
     minimum_green_roi_ratio: float = 0.18
     roi_top_ratio: float = 0.38
     green_neighbour_kernel: int = 23
-    green_support_distance_pixels: int = 14
+    # The CSI fisheye makes the same tape roughly 20 px wide in the distance
+    # and much wider at the bottom of the image.  Test several support radii:
+    # a candidate still needs green on *both* sides, but it is no longer lost
+    # merely because the near-field tape is wider than 28 px.
+    green_support_distances: tuple[int, ...] = (14, 28, 42, 56, 72)
     green_support_bridge_kernel: int = 21
     near_track_max_width_ratio: float = 0.22
     near_track_centre_tolerance_ratio: float = 0.24
@@ -88,20 +92,26 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
         # its left/right, and a horizontal bar has green above/below.  Merely
         # touching green on one side (the pale floor beside the mat) is not
         # sufficient.
-        neighbour_size = self._odd(max(3, config.green_neighbour_kernel))
-        neighbour = cv2.dilate(green, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (neighbour_size, neighbour_size)))
-        support = max(2, config.green_support_distance_pixels)
-        horizontal_support = cv2.bitwise_and(self._shift(green, support, 0), self._shift(green, -support, 0))
-        vertical_support = cv2.bitwise_and(self._shift(green, 0, support), self._shift(green, 0, -support))
-        green_surrounded = cv2.bitwise_or(horizontal_support, vertical_support)
-        strict_tape = cv2.bitwise_and(cv2.bitwise_and(white, neighbour), green_surrounded)
+        green_surrounded = np.zeros_like(green)
+        for distance in config.green_support_distances:
+            support = max(2, int(distance))
+            horizontal_support = cv2.bitwise_and(self._shift(green, support, 0), self._shift(green, -support, 0))
+            vertical_support = cv2.bitwise_and(self._shift(green, 0, support), self._shift(green, 0, -support))
+            green_surrounded = cv2.bitwise_or(
+                green_surrounded,
+                cv2.bitwise_or(horizontal_support, vertical_support),
+            )
+        # `green_surrounded` is itself a two-sided neighbourhood check.  Do
+        # not intersect it again with a tiny one-sided dilation: doing that
+        # deletes the middle of the real, fisheye-widened white tape.
+        strict_tape = cv2.bitwise_and(white, green_surrounded)
         # At a T intersection the crossing's central square has tape on all
         # four sides, so the two-sided-green test intentionally leaves a
         # small hole there.  Reconnect only from already strict tape pixels;
         # this bridges the T centre without admitting a whole floor region.
         bridge_size = self._odd(max(3, config.green_support_bridge_kernel))
         bridge = cv2.dilate(strict_tape, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (bridge_size, bridge_size)))
-        mask = cv2.bitwise_and(cv2.bitwise_and(white, neighbour), bridge)
+        mask = cv2.bitwise_and(white, bridge)
         cleanup_size = self._odd(max(3, morphology_kernel))
         cleanup = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (cleanup_size, cleanup_size))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, cleanup)

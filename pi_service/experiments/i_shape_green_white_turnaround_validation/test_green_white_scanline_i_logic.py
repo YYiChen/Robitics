@@ -28,6 +28,16 @@ class GreenWhiteScanlineTests(unittest.TestCase):
         self.assertFalse(evidence.line_lost)
         self.assertGreater(evidence.confidence, 0.5)
 
+    def test_wide_near_field_white_stem_is_still_a_valid_line(self):
+        image = np.full((480, 640, 3), (55, 150, 45), dtype=np.uint8)
+        # The fisheye makes the tape fan out near the car.  A 60-pixel stem
+        # must not disappear just because the green support radius is too
+        # small for its centre pixels.
+        cv2.rectangle(image, (290, 80), (350, 479), (245, 245, 245), -1)
+        evidence = self.analyzer.analyze(image).evidence
+        self.assertTrue(evidence.valid_line)
+        self.assertFalse(evidence.line_lost)
+
     def test_green_floor_white_transverse_bar_is_never_the_route(self):
         evidence = self.analyzer.analyze(green_i_frame(transverse=True)).evidence
         self.assertTrue(evidence.valid_line)
