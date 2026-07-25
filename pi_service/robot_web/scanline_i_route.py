@@ -49,6 +49,8 @@ class ScanlineIRouteConfig:
     maximum_correction_pwm: int = 60
     pivot_min_seconds: float = 2.5
     pivot_max_seconds: float = 5.0
+    early_junction_trigger_y_ratio: float = 0.75
+    early_line_lost_confirm_frames: int = 1
     tuning_path: Path | None = None
     use_hybrid: bool = True
 
@@ -62,6 +64,8 @@ SCANLINE_TUNING_FIELDS = {
     "maximum_correction_pwm": (int, 0, 255),
     "pivot_min_seconds": (float, 0.0, 20.0),
     "pivot_max_seconds": (float, 0.1, 30.0),
+    "early_junction_trigger_y_ratio": (float, 0.35, 0.98),
+    "early_line_lost_confirm_frames": (int, 1, 10),
 }
 
 
@@ -178,7 +182,16 @@ class ScanlineIShapeRouteTracker:
     def _stop_motor(self) -> None:
         if self._motor_active:
             self.controller.stop_now()
-            self._motor_active = False
+        self._motor_active = False
+
+    @staticmethod
+    def _planner_config(config: ScanlineIRouteConfig) -> TurnaroundConfig:
+        return TurnaroundConfig(
+            pivot_min_seconds=config.pivot_min_seconds,
+            pivot_max_seconds=config.pivot_max_seconds,
+            early_junction_trigger_y_ratio=config.early_junction_trigger_y_ratio,
+            early_line_lost_confirm_frames=config.early_line_lost_confirm_frames,
+        )
 
     def _draw(self, cv2, frame, result, decision, motor_text: str):
         # Yellow, not grayscale: this is the selected near-anchored route
@@ -220,7 +233,7 @@ class ScanlineIShapeRouteTracker:
             else:
                 analyzer = IShapeScanlineAnalyzer()
                 self._set_status(running=True, state="ready", detail="扫描线 I 型识别运行中；按 M 开启自动行驶", mode="legacy")
-            planner = IShapeTurnaroundPlanner(TurnaroundConfig(pivot_min_seconds=initial_config.pivot_min_seconds, pivot_max_seconds=initial_config.pivot_max_seconds))
+            planner = IShapeTurnaroundPlanner(self._planner_config(initial_config))
             interval, last, frame_index = 1.0 / max(1.0, self.config.process_fps), 0.0, 0
             while not self._stop.is_set():
                 jpeg, now = self.camera.latest_jpeg(), time.monotonic()
@@ -259,12 +272,7 @@ class ScanlineIShapeRouteTracker:
                     # Preview must not consume a future drive session.  A
                     # paused camera can remain parked on the bar indefinitely;
                     # the next M press must start a fresh confirmation window.
-                    planner = IShapeTurnaroundPlanner(
-                        TurnaroundConfig(
-                            pivot_min_seconds=config.pivot_min_seconds,
-                            pivot_max_seconds=config.pivot_max_seconds,
-                        )
-                    )
+                    planner = IShapeTurnaroundPlanner(self._planner_config(config))
                     decision = planner.step(evidence, now)
                 annotated = self._draw(cv2, frame, result, decision, motor_text)
                 ok, encoded = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])

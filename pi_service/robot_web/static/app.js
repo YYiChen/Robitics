@@ -58,7 +58,7 @@ function updateAutonomousUi(autonomous) {
   const tuningState = $("#routeTuningState");
   if (tuningState) tuningState.textContent = available ? (scanlineI ? "扫描线 I 型实时参数" : "实时参数") : "路线预判未开启";
   $("#applyRouteTuning").disabled = !available;
-  $("#applyRouteTuning").textContent = scanlineI ? "实时应用并保存 I 型速度参数" : "实时应用并保存路线参数";
+  $("#applyRouteTuning").textContent = scanlineI ? "实时应用并保存 I 型参数" : "实时应用并保存路线参数";
 }
 $("#autonomousToggle").onclick = toggleAutonomousDrive;
 $("#applyRouteTuning").onclick = async () => {
@@ -72,7 +72,7 @@ $("#applyRouteTuning").onclick = async () => {
     const data = await response.json();
     if (!response.ok || !data.ok) throw Error(data.error || "循迹参数应用失败");
     updateAutonomousUi(data.autonomous || {});
-    note(scanlineI ? "I 型直行与掉头速度已实时应用并保存。" : "循迹参数已实时应用，并保存到 tuning.py。");
+    note(scanlineI ? "I 型直行、掉头与预判刹车参数已实时应用并保存。" : "循迹参数已实时应用，并保存到 tuning.py。");
   } catch (error) { note(error.message); }
 };
 

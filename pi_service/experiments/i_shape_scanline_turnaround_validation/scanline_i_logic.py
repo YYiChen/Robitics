@@ -51,6 +51,7 @@ class ScanlineEvidence:
     junction_detected: bool = False
     junction_y: int | None = None
     junction_arm_count: int = 0
+    frame_height: int = 0
 
 
 @dataclass(frozen=True)
@@ -79,7 +80,10 @@ class TurnaroundConfig:
     pivot_min_seconds: float = 2.5
     pivot_max_seconds: float = 5.0
     # ---- Hybrid early-prediction fields ----
-    early_junction_min_y_ratio: float = 0.60
+    # Once the most recently observed junction is this close to the bottom of
+    # the frame, BAR_MARKED may use the faster stem-loss confirmation.
+    early_junction_trigger_y_ratio: float = 0.75
+    early_line_lost_confirm_frames: int = 1
     junction_confirm_frames: int = 2
 
 
@@ -162,6 +166,7 @@ class IShapeScanlineAnalyzer:
             confidence=float(max(0.0, confidence)), valid_line=valid_line, line_lost=not valid_line,
             line_center_x=center_x, line_centers=centers, endpoint_detected=endpoint_y is not None,
             endpoint_y=endpoint_y, endpoint_width=endpoint_width, normal_tape_width=normal_width,
+            frame_height=height,
         )
         return ScanlineResult(evidence, component)
 
@@ -723,6 +728,7 @@ class HybridScanlineAnalyzer:
             junction_detected=junction_detected,
             junction_y=junction_y,
             junction_arm_count=junction_arm_count,
+            frame_height=height,
         )
         return ScanlineResult(evidence, component)
 
@@ -743,6 +749,28 @@ class IShapeTurnaroundPlanner:
         self._pivot_started_at: float | None = None
         # ---- Hybrid ----
         self._junction_frames = 0
+        # Preserve the most recent junction after it is confirmed.  A junction
+        # can disappear while the vehicle is passing under the transverse bar;
+        # the fast stem-loss decision must not lose that prior authorization.
+        self._latched_junction_y: int | None = None
+        self._latched_frame_height = 0
+
+    def _latch_junction(self, evidence: ScanlineEvidence) -> None:
+        if evidence.junction_detected and evidence.junction_y is not None and evidence.frame_height > 0:
+            self._latched_junction_y = evidence.junction_y
+            self._latched_frame_height = evidence.frame_height
+
+    def _fast_stem_loss_authorized(self) -> bool:
+        return (
+            self._latched_junction_y is not None
+            and self._latched_frame_height > 0
+            and self._latched_junction_y >= self._latched_frame_height * self.config.early_junction_trigger_y_ratio
+        )
+
+    def _clear_early_prediction(self) -> None:
+        self._junction_frames = 0
+        self._latched_junction_y = None
+        self._latched_frame_height = 0
 
     def step(self, evidence: ScanlineEvidence, now: float) -> TurnaroundDecision:
         usable = evidence.valid_line and evidence.confidence >= self.config.minimum_confidence
@@ -752,6 +780,7 @@ class IShapeTurnaroundPlanner:
         # ================================================================
         if self.state is TurnaroundState.FOLLOW_STRAIGHT:
             # ---- Junction early prediction (hybrid) ----
+            self._latch_junction(evidence)
             self._junction_frames = (
                 self._junction_frames + 1
                 if usable and evidence.junction_detected
@@ -796,13 +825,16 @@ class IShapeTurnaroundPlanner:
         # False alarm recovery if junction disappears.
         # ================================================================
         if self.state is TurnaroundState.EARLY_BAR_PREDICTED:
+            self._latch_junction(evidence)
             # Confirm: if the bar arrives at bar_rows while we're waiting.
             self._endpoint_frames = (
                 self._endpoint_frames + 1
                 if usable and evidence.endpoint_detected
                 else 0
             )
-            if self._endpoint_frames >= self.config.endpoint_confirm_frames:
+            # The junction already supplied a multi-frame early warning, so
+            # one lower/middle bar frame is sufficient to mark the endpoint.
+            if self._endpoint_frames >= 1:
                 self.state = TurnaroundState.BAR_MARKED
                 self._bar_marked_at = now
                 self._line_lost_frames = 0
@@ -833,6 +865,7 @@ class IShapeTurnaroundPlanner:
                     self.state = TurnaroundState.FOLLOW_STRAIGHT
                     self._endpoint_frames = 0
                     self._line_lost_frames = 0
+                    self._clear_early_prediction()
                     return TurnaroundDecision(
                         self.state,
                         "early_prediction_false_alarm_junction_lost",
@@ -854,7 +887,7 @@ class IShapeTurnaroundPlanner:
                 self.state = TurnaroundState.FOLLOW_STRAIGHT
                 self._endpoint_frames = 0
                 self._line_lost_frames = 0
-                self._junction_frames = 0
+                self._clear_early_prediction()
                 return TurnaroundDecision(
                     self.state, "bar_mark_timeout_returning_to_follow", 0, 0, 0, None,
                 )
@@ -863,12 +896,19 @@ class IShapeTurnaroundPlanner:
             self._line_lost_frames = (
                 self._line_lost_frames + 1 if evidence.line_lost else 0
             )
-            if self._line_lost_frames >= self.config.line_lost_confirm_frames:
+            required_lost_frames = (
+                self.config.early_line_lost_confirm_frames
+                if self._fast_stem_loss_authorized()
+                else self.config.line_lost_confirm_frames
+            )
+            if self._line_lost_frames >= required_lost_frames:
                 self.state = TurnaroundState.BRAKE_BEFORE_PIVOT
                 self._brake_started_at = now
                 return TurnaroundDecision(
                     self.state,
-                    "longitudinal_stem_lost_after_bar_braking",
+                    "longitudinal_stem_lost_after_bar_fast_braking"
+                    if required_lost_frames == self.config.early_line_lost_confirm_frames
+                    else "longitudinal_stem_lost_after_bar_braking",
                     self._endpoint_frames, self._line_lost_frames, 0, 0.0,
                 )
             return TurnaroundDecision(
@@ -925,7 +965,7 @@ class IShapeTurnaroundPlanner:
             if self._reacquire_frames >= self.config.reacquire_confirm_frames:
                 self.state = TurnaroundState.FOLLOW_STRAIGHT
                 self._endpoint_frames = 0
-                self._junction_frames = 0
+                self._clear_early_prediction()
                 return TurnaroundDecision(
                     self.state,
                     "longitudinal_line_reacquired",

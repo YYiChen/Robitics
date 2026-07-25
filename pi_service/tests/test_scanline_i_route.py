@@ -26,7 +26,7 @@ class ScanlineIRouteTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             tuning_path = Path(directory) / "scanline_web_tuning.json"
             tracker = ScanlineIShapeRouteTracker(None, None, None, _Gate(), ScanlineIRouteConfig(tuning_path=tuning_path))
-            status = tracker.update_tuning({"straight_pwm": 135, "pivot_pwm": 210, "correction_gain": 140, "pivot_min_seconds": 3.5, "pivot_max_seconds": 6.0})
+            status = tracker.update_tuning({"straight_pwm": 135, "pivot_pwm": 210, "correction_gain": 140, "pivot_min_seconds": 3.5, "pivot_max_seconds": 6.0, "early_junction_trigger_y_ratio": 0.78, "early_line_lost_confirm_frames": 1})
             self.assertEqual(status["tuning"]["straight_pwm"], 135)
             self.assertEqual(status["tuning"]["pivot_pwm"], 210)
             self.assertEqual(json.loads(tuning_path.read_text(encoding="utf-8"))["correction_gain"], 140)
@@ -34,6 +34,8 @@ class ScanlineIRouteTests(unittest.TestCase):
             self.assertEqual(reloaded.straight_pwm, 135)
             self.assertEqual(reloaded.pivot_pwm, 210)
             self.assertEqual(reloaded.pivot_min_seconds, 3.5)
+            self.assertEqual(reloaded.early_junction_trigger_y_ratio, 0.78)
+            self.assertEqual(reloaded.early_line_lost_confirm_frames, 1)
 
     def test_rejects_pivot_minimum_longer_than_safety_timeout(self):
         tracker = ScanlineIShapeRouteTracker(None, None, None, _Gate())
