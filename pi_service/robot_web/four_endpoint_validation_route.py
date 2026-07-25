@@ -96,19 +96,29 @@ class FourEndpointValidationRouteTracker(GreenWhiteScanlineIShapeRouteTracker):
         return None
 
     @staticmethod
-    def _forward_line_detected(evidence) -> bool:
+    def _forward_line_detected(evidence, frame_width: int = 640) -> bool:
         # During a pivot the planner requires an intervening blank/sideways
-        # phase and then this bottom-centred, valid white route to reappear.
+        # phase and then a route to reappear.  The hybrid skeleton lookahead
+        # remains meaningful while the scanline confidence briefly drops to
+        # zero during rotation, so prefer that centred geometric landmark.
+        lookahead_x = getattr(evidence, "lookahead_x", None)
+        path_length = getattr(evidence, "path_length_px", 0)
+        if (
+            lookahead_x is not None
+            and path_length >= 80
+            and abs(lookahead_x - frame_width / 2.0) <= frame_width * .22
+        ):
+            return True
         return (
             evidence.valid_line
             and evidence.confidence >= .55
             and evidence.line_center_x is not None
         )
 
-    def _vision_observation(self, evidence) -> VisionObservation:
+    def _vision_observation(self, evidence, frame_width: int) -> VisionObservation:
         return VisionObservation(
             junction_detected=self._junction_pass_gate.observe(evidence),
-            forward_line_detected=self._forward_line_detected(evidence),
+            forward_line_detected=self._forward_line_detected(evidence, frame_width),
         )
 
     def _draw(self, cv2, frame, result, decision, motor_text: str):
@@ -146,7 +156,7 @@ class FourEndpointValidationRouteTracker(GreenWhiteScanlineIShapeRouteTracker):
                     continue
                 result = analyzer.analyze(frame)
                 evidence = result.evidence
-                observation = self._vision_observation(evidence)
+                observation = self._vision_observation(evidence, frame.shape[1])
                 with self._tuning_lock:
                     config = self.config
                 motor_text, commanded = "PAUSED", None

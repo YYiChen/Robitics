@@ -30,9 +30,15 @@ class FourEndpointValidationRouteTests(unittest.TestCase):
         )
 
     def test_visual_observation_requires_confident_bottom_line(self):
-        evidence = SimpleNamespace(junction_detected=True, valid_line=True, confidence=.6, line_center_x=320.0)
+        evidence = SimpleNamespace(junction_detected=True, valid_line=True, confidence=.6, line_center_x=320.0, lookahead_x=None, path_length_px=0)
         self.assertTrue(FourEndpointValidationRouteTracker._forward_line_detected(evidence))
-        self.assertFalse(FourEndpointValidationRouteTracker._forward_line_detected(SimpleNamespace(junction_detected=False, valid_line=True, confidence=.5, line_center_x=320.0)))
+        self.assertFalse(FourEndpointValidationRouteTracker._forward_line_detected(SimpleNamespace(junction_detected=False, valid_line=True, confidence=.5, line_center_x=320.0, lookahead_x=None, path_length_px=0)))
+
+    def test_centred_skeleton_lookahead_ends_pivot_even_if_scanline_confidence_drops(self):
+        rotated_line = SimpleNamespace(valid_line=False, confidence=0.0, line_center_x=None, lookahead_x=326.0, path_length_px=180)
+        self.assertTrue(FourEndpointValidationRouteTracker._forward_line_detected(rotated_line, 640))
+        off_centre = SimpleNamespace(valid_line=False, confidence=0.0, line_center_x=None, lookahead_x=520.0, path_length_px=180)
+        self.assertFalse(FourEndpointValidationRouteTracker._forward_line_detected(off_centre, 640))
 
     def test_early_junction_cannot_trigger_a_pivot_before_the_red_band_exits(self):
         gate = JunctionPassGate()
