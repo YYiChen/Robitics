@@ -78,9 +78,10 @@ def main() -> None:
     parser.add_argument("--pi-url", default="http://100.80.46.54:5000")
     parser.add_argument("--token", default="")
     parser.add_argument("--log", type=Path, default=Path("runtime_logs/pc_slow_analyzer.jsonl"))
+    parser.add_argument("--max-frames", type=int, default=0, help="process this many frames then exit; 0 means run continuously")
     args = parser.parse_args()
     args.log.parent.mkdir(parents=True, exist_ok=True)
-    analyzer, planner, last_seq = GreenWhiteHybridScanlineAnalyzer(), TwoRedBandPlanner(), -1
+    analyzer, planner, last_seq, processed = GreenWhiteHybridScanlineAnalyzer(), TwoRedBandPlanner(), -1, 0
     while True:
         try:
             with urlopen(args.pi_url.rstrip("/") + "/api/vision-adaptor/frame", timeout=2) as response:
@@ -117,6 +118,9 @@ def main() -> None:
                 preview_accepted = "jpeg_encode_failed"
             with args.log.open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps({"time_ms": int(time.time() * 1000), "frame_seq": frame_seq, "event": event, "red_phase": red.phase, "red_layers": red.layer_count, "turn_y": red.turn_y, "turn_bottom_y": red.turn_bottom_y, "confidence": result.confidence, "pi_fast_confidence": pi_confidence, "accepted": accepted, "preview": preview_accepted}, ensure_ascii=False) + "\n")
+            processed += 1
+            if args.max_frames and processed >= args.max_frames:
+                return
         except KeyboardInterrupt:
             return
         except Exception as exc:

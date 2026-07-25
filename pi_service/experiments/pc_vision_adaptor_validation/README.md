@@ -36,6 +36,9 @@ cd pi_service/experiments/pc_vision_adaptor_validation
 python3 pc_slow_analyzer.py --pi-url http://100.80.46.54:5000 --token "$ROBOT_PC_ADAPTOR_TOKEN"
 ```
 
+For a no-motion transport/overlay check, append `--max-frames 1`; it uploads
+one annotated image then exits.  The full command runs continuously.
+
 Set the same `ROBOT_PC_ADAPTOR_TOKEN` in the Pi service environment and on the
 PC.  Leave it empty only on an isolated lab network.  The PC now posts a
 complete annotated JPEG to port 5000: PC masks/geometry/red-layer state and
