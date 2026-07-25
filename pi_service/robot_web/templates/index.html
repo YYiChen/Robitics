@@ -50,6 +50,7 @@
     </div>
     <section class="cockpit-strip" aria-label="驾驶态势">
       <article class="cockpit-card"><div class="cockpit-heading"><span>实时流状态</span><strong id="dashboardFlowState">读取中…</strong></div><div class="flow-grid"><div><span>采集 / 发送</span><strong id="dashboardFps">—</strong></div><div><span>帧龄</span><strong id="dashboardFrameAge">—</strong></div><div><span>编码</span><strong id="dashboardEncode">—</strong></div><div><span>发送带宽</span><strong id="dashboardBandwidth">—</strong></div></div><small id="dashboardFlowHint">显示当前低延迟预览链路的关键参数。</small></article>
+      <article class="cockpit-card motor-output-card"><div class="cockpit-heading"><span>Arduino 行驶电机实时输出</span><strong id="motorOutputState">等待 OUT 回包</strong></div><div class="motor-direction-grid" aria-label="M1 M2 行驶电机方向输出"><div class="motor-direction forward"><span>↑ 前进</span><strong id="motorForwardOutput">—</strong></div><div class="motor-direction left"><span>← 左转</span><strong id="motorLeftOutput">—</strong></div><div class="motor-direction stop"><span>● 当前 M1 / M2</span><strong id="motorRawOutput">—</strong></div><div class="motor-direction right"><span>右转 →</span><strong id="motorRightOutput">—</strong></div><div class="motor-direction reverse"><span>↓ 后退</span><strong id="motorReverseOutput">—</strong></div></div><small id="motorOutputHint">显示 Arduino 最近回报并接受的 M1（右轮）/ M2（左轮）有符号 PWM；它不是编码器测得的真实轮速。</small></article>
     </section>
     <p class="workspace-note">左侧为原始控制画面，右侧为同一主进程的路线预判。按 <strong>M</strong> 只切换自动行驶/立即停车，识别画面持续运行；两条流均只保留最新帧，不写入树莓派磁盘。</p>
   </section>

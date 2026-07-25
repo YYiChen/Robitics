@@ -683,6 +683,36 @@ function streamDiagnosis(camera) {
   }
   return ["未发现明显传输瓶颈", `树莓派编码 ${fixed(capture)} FPS、本浏览器收到 ${fixed(browserReceiveFps)} FPS、RTT ${fixed(statusRttMs)} ms；若操作仍卡，重点检查控制请求和浏览器负载。`];
 }
+function motorMotionComponents(rawOutput) {
+  if (!Array.isArray(rawOutput) || rawOutput.length < 2 || !rawOutput.slice(0, 2).every(Number.isFinite)) return null;
+  const [right, left] = rawOutput;
+  // M1 is the right wheel and M2 is the left wheel.  Each component is only
+  // non-zero when both wheel commands agree with that physical motion.
+  return {
+    right,
+    left,
+    forward: Math.max(0, Math.min(right, left)),
+    reverse: Math.max(0, Math.min(-right, -left)),
+    leftTurn: Math.max(0, Math.min(right, -left)),
+    rightTurn: Math.max(0, Math.min(-right, left)),
+  };
+}
+function updateMotorOutputUi(rawOutput, arduinoOnline) {
+  const motion = motorMotionComponents(rawOutput);
+  const fields = ["motorForwardOutput", "motorReverseOutput", "motorLeftOutput", "motorRightOutput"];
+  if (!motion) {
+    fields.forEach((id) => { $("#" + id).textContent = "—"; });
+    $("#motorRawOutput").textContent = "—";
+    $("#motorOutputState").textContent = arduinoOnline ? "等待 OUT 回包" : "Arduino 未在线";
+    return;
+  }
+  $("#motorForwardOutput").textContent = `${motion.forward} PWM`;
+  $("#motorReverseOutput").textContent = `${motion.reverse} PWM`;
+  $("#motorLeftOutput").textContent = `${motion.leftTurn} PWM`;
+  $("#motorRightOutput").textContent = `${motion.rightTurn} PWM`;
+  $("#motorRawOutput").textContent = `M1 ${motion.right >= 0 ? "+" : ""}${motion.right} · M2 ${motion.left >= 0 ? "+" : ""}${motion.left}`;
+  $("#motorOutputState").textContent = arduinoOnline ? "Arduino OUT 回包" : "Arduino 已离线（保留最近值）";
+}
 async function refreshStatus() { try { const statusStartedAt = performance.now(); const response = await fetch("/api/status", {cache:"no-store"}), data = await response.json(), robot = data.robot, system = data.system || {}, oled = data.oled || {}, capabilities = data.capabilities || {}; statusRttMs = performance.now() - statusStartedAt;
     updateAutonomousUi(data.autonomous || {});
     const camera = data.camera || {};
@@ -767,7 +797,7 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     $("#systemUptime").textContent = !systemMetricsSupported ? "后端未更新" : duration(system.uptime_seconds);
     $("#oledState").textContent = oled.online ? `在线 · ${oled.address || "I2C"}` : oled.disabled ? "已关闭" : "不可用";
     $("#oledHint").textContent = oled.online ? `I2C-${oled.i2c_port ?? 1} · 每秒刷新状态` : (oled.error || "检查 I2C、地址和 luma.oled 依赖");
-    $("#controlState").innerHTML = dot(robot.client_online, robot.client_online ? "在线" : "已超时停车"); $("#action").textContent = robot.action; $("#keys").textContent = robot.keys?.join("+") || "—"; $("#lastReply").textContent = robot.reply || "等待 Arduino 回包";
+    $("#controlState").innerHTML = dot(robot.client_online, robot.client_online ? "在线" : "已超时停车"); $("#action").textContent = robot.action; $("#keys").textContent = robot.keys?.join("+") || "—"; $("#lastReply").textContent = robot.reply || "等待 Arduino 回包"; updateMotorOutputUi(robot.motor_output, robot.arduino_online);
     if (!servoBusy && robot.servo_angle != null) { visualServoAngle = Number(robot.servo_angle); $("#servoSlider").value = robot.servo_angle; $("#servoAngleDisplay").textContent = `${robot.servo_angle}°`; }
     if (robot.imu) { $("#roll").textContent = `${robot.imu[0].toFixed(2)}°`; $("#pitch").textContent = `${robot.imu[1].toFixed(2)}°`; $("#yaw").textContent = `${robot.imu[2].toFixed(2)}°`; }
     if (robot.speed) { $("#wheelSpeed").textContent = `${robot.speed[0].toFixed(1)} / ${robot.speed[1].toFixed(1)} pps`; $("#targetWheelSpeed").textContent = `${robot.speed[2].toFixed(1)} / ${robot.speed[3].toFixed(1)} pps`; }
