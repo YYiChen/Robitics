@@ -167,6 +167,8 @@ def main() -> int:
                 "marker_point_px": result.observation.marker_point_px,
                 "marker_branch_count": result.observation.marker_branch_count,
                 "marker_span_px": result.observation.marker_span_px,
+                "marker_confidence": result.observation.marker_confidence,
+                "marker_y_ratio": result.observation.marker_y_ratio,
                 "marker_in_lap": marker_update.marker_in_lap,
                 "lap_count": marker_update.lap_count,
             }
