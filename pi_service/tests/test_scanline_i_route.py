@@ -25,13 +25,19 @@ class ScanlineIRouteTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             tuning_path = Path(directory) / "scanline_web_tuning.json"
             tracker = ScanlineIShapeRouteTracker(None, None, None, _Gate(), ScanlineIRouteConfig(tuning_path=tuning_path))
-            status = tracker.update_tuning({"straight_pwm": 135, "pivot_pwm": 210, "correction_gain": 140})
+            status = tracker.update_tuning({"straight_pwm": 135, "pivot_pwm": 210, "correction_gain": 140, "pivot_min_seconds": 3.5, "pivot_max_seconds": 6.0})
             self.assertEqual(status["tuning"]["straight_pwm"], 135)
             self.assertEqual(status["tuning"]["pivot_pwm"], 210)
             self.assertEqual(json.loads(tuning_path.read_text(encoding="utf-8"))["correction_gain"], 140)
             reloaded = load_scanline_tuning_config(tuning_path)
             self.assertEqual(reloaded.straight_pwm, 135)
             self.assertEqual(reloaded.pivot_pwm, 210)
+            self.assertEqual(reloaded.pivot_min_seconds, 3.5)
+
+    def test_rejects_pivot_minimum_longer_than_safety_timeout(self):
+        tracker = ScanlineIShapeRouteTracker(None, None, None, _Gate())
+        with self.assertRaisesRegex(ValueError, "最短掉头时间"):
+            tracker.update_tuning({"pivot_min_seconds": 6.0, "pivot_max_seconds": 5.0})
 
     def test_straight_following_uses_differential_pwm_for_off_center_line(self):
         evidence = SimpleNamespace(line_center_x=400.0, line_centers=((1, 400.0, 20),) * 3)

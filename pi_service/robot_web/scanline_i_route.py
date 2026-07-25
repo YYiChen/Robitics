@@ -50,6 +50,8 @@ SCANLINE_TUNING_FIELDS = {
     "correction_gain": (float, 0.0, 1000.0),
     "minimum_correction_pwm": (int, 0, 255),
     "maximum_correction_pwm": (int, 0, 255),
+    "pivot_min_seconds": (float, 0.0, 20.0),
+    "pivot_max_seconds": (float, 0.1, 30.0),
 }
 
 
@@ -134,6 +136,8 @@ class ScanlineIShapeRouteTracker:
             updated = replace(self.config, **changes)
             if updated.minimum_correction_pwm > updated.maximum_correction_pwm:
                 raise ValueError("最小直线修正 PWM 不能大于最大直线修正 PWM")
+            if updated.pivot_min_seconds > updated.pivot_max_seconds:
+                raise ValueError("最短掉头时间不能大于最长掉头保险时间")
             if updated.tuning_path:
                 updated.tuning_path.parent.mkdir(parents=True, exist_ok=True)
                 values = {field: getattr(updated, field) for field in SCANLINE_TUNING_FIELDS}
