@@ -37,8 +37,8 @@ async function toggleAutonomousDrive() {
 function updateAutonomousUi(autonomous) {
   const available = autonomous.available === true;
   const enabled = autonomous.enabled === true;
-  const scanlineI = autonomous.mode === "scanline_i" || autonomous.mode === "scanline_i_green_white";
-  const scanlineLabel = autonomous.mode === "scanline_i_green_white" ? "绿地白线 I 型" : "扫描线 I 型";
+  const scanlineI = autonomous.mode === "scanline_i" || autonomous.mode === "scanline_i_green_white" || autonomous.mode === "scanline_i_four_endpoint_green_white";
+  const scanlineLabel = autonomous.mode === "scanline_i_four_endpoint_green_white" ? "工字形四端点验证" : (autonomous.mode === "scanline_i_green_white" ? "绿地白线 I 型" : "扫描线 I 型");
   const button = $("#autonomousToggle"), unavailable = $("#routePreviewUnavailable"), image = $("#routePreview");
   button.disabled = !available;
   button.textContent = available ? (enabled ? "M：暂停并停车" : "M：开启自动行驶") : "路线预判未开启";

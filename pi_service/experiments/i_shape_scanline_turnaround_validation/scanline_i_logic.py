@@ -51,6 +51,9 @@ class ScanlineEvidence:
     junction_detected: bool = False
     junction_y: int | None = None
     junction_arm_count: int = 0
+    red_marker_detected: bool = False
+    red_marker_y: int | None = None
+    red_marker_span: int | None = None
     frame_height: int = 0
 
 
@@ -75,7 +78,7 @@ class TurnaroundConfig:
     line_lost_confirm_frames: int = 3
     reacquire_confirm_frames: int = 3
     minimum_confidence: float = 0.55
-    bar_mark_timeout_seconds: float = 2.0
+    bar_mark_timeout_seconds: float = 4.0
     brake_seconds: float = 0.15
     pivot_min_seconds: float = 2.5
     pivot_max_seconds: float = 5.0
@@ -85,6 +88,11 @@ class TurnaroundConfig:
     early_junction_trigger_y_ratio: float = 0.75
     early_line_lost_confirm_frames: int = 1
     junction_confirm_frames: int = 2
+    # Fixed-course red-marker exit trigger.  Disabled by default so the
+    # original black-tape experiment keeps its existing behaviour.
+    red_exit_enabled: bool = False
+    red_exit_arm_y_ratio: float = 0.84
+    red_exit_confirm_frames: int = 1
 
 
 @dataclass(frozen=True)
@@ -753,27 +761,87 @@ class IShapeTurnaroundPlanner:
         # can disappear while the vehicle is passing under the transverse bar;
         # the fast stem-loss decision must not lose that prior authorization.
         self._latched_junction_y: int | None = None
+        self._latched_endpoint_y: int | None = None
         self._latched_frame_height = 0
+        self._red_marker_bottom_armed = False
+        self._red_marker_missing_frames = 0
+
+    @property
+    def red_exit_armed(self) -> bool:
+        """Whether the confirmed red band has reached the camera near field."""
+        return self._red_marker_bottom_armed
+
+    def diagnostics(self) -> dict[str, object]:
+        """Expose stable, read-only state for runtime telemetry.
+
+        Keeping this projection here avoids having the web adapter reach into
+        private counters and makes log-schema changes independent from the
+        planner's internal attribute names.
+        """
+        return {
+            "endpoint_frames": self._endpoint_frames,
+            "line_lost_frames": self._line_lost_frames,
+            "reacquire_frames": self._reacquire_frames,
+            "junction_frames": self._junction_frames,
+            "latched_junction_y_px": self._latched_junction_y,
+            "latched_endpoint_y_px": self._latched_endpoint_y,
+            "red_exit_armed": self._red_marker_bottom_armed,
+            "red_missing_frames": self._red_marker_missing_frames,
+            "fast_stem_loss_authorized": self._fast_stem_loss_authorized(),
+        }
+
+    def _observe_red_marker(self, evidence: ScanlineEvidence) -> bool:
+        """Arm on a near red marker, then report its confirmed bottom-edge exit.
+
+        This deliberately does not cause a turn by itself.  The caller only
+        consumes it after the independent white transverse bar has put the
+        planner in BAR_MARKED.
+        """
+        if not self.config.red_exit_enabled:
+            return False
+        if (
+            evidence.red_marker_detected
+            and evidence.red_marker_y is not None
+            and evidence.frame_height > 0
+        ):
+            if evidence.red_marker_y >= evidence.frame_height * self.config.red_exit_arm_y_ratio:
+                self._red_marker_bottom_armed = True
+            self._red_marker_missing_frames = 0
+            return False
+        if not self._red_marker_bottom_armed:
+            return False
+        self._red_marker_missing_frames += 1
+        return self._red_marker_missing_frames >= self.config.red_exit_confirm_frames
 
     def _latch_junction(self, evidence: ScanlineEvidence) -> None:
         if evidence.junction_detected and evidence.junction_y is not None and evidence.frame_height > 0:
             self._latched_junction_y = evidence.junction_y
             self._latched_frame_height = evidence.frame_height
 
+    def _latch_endpoint(self, evidence: ScanlineEvidence) -> None:
+        if evidence.endpoint_detected and evidence.endpoint_y is not None and evidence.frame_height > 0:
+            self._latched_endpoint_y = evidence.endpoint_y
+            self._latched_frame_height = evidence.frame_height
+
     def _fast_stem_loss_authorized(self) -> bool:
         return (
-            self._latched_junction_y is not None
+            (self._latched_junction_y is not None or self._latched_endpoint_y is not None)
             and self._latched_frame_height > 0
-            and self._latched_junction_y >= self._latched_frame_height * self.config.early_junction_trigger_y_ratio
+            and max(value for value in (self._latched_junction_y, self._latched_endpoint_y) if value is not None)
+            >= self._latched_frame_height * self.config.early_junction_trigger_y_ratio
         )
 
     def _clear_early_prediction(self) -> None:
         self._junction_frames = 0
         self._latched_junction_y = None
+        self._latched_endpoint_y = None
         self._latched_frame_height = 0
+        self._red_marker_bottom_armed = False
+        self._red_marker_missing_frames = 0
 
     def step(self, evidence: ScanlineEvidence, now: float) -> TurnaroundDecision:
         usable = evidence.valid_line and evidence.confidence >= self.config.minimum_confidence
+        red_marker_exited_bottom = self._observe_red_marker(evidence)
 
         # ================================================================
         # FOLLOW_STRAIGHT
@@ -826,6 +894,7 @@ class IShapeTurnaroundPlanner:
         # ================================================================
         if self.state is TurnaroundState.EARLY_BAR_PREDICTED:
             self._latch_junction(evidence)
+            self._latch_endpoint(evidence)
             # Confirm: if the bar arrives at bar_rows while we're waiting.
             self._endpoint_frames = (
                 self._endpoint_frames + 1
@@ -890,6 +959,18 @@ class IShapeTurnaroundPlanner:
                 self._clear_early_prediction()
                 return TurnaroundDecision(
                     self.state, "bar_mark_timeout_returning_to_follow", 0, 0, 0, None,
+                )
+            # Fixed green-floor course: the white bar independently confirmed
+            # the endpoint, and the red band has travelled through the near
+            # field then left the bottom of the image.  On this calibrated
+            # layout that is the immediate physical stop/pivot moment.
+            if red_marker_exited_bottom:
+                self.state = TurnaroundState.BRAKE_BEFORE_PIVOT
+                self._brake_started_at = now
+                return TurnaroundDecision(
+                    self.state,
+                    "confirmed_white_bar_red_marker_exited_bottom_braking",
+                    self._endpoint_frames, self._line_lost_frames, 0, 0.0,
                 )
             # A missing near longitudinal stem means the car has passed the
             # bar.  Do not require the bar itself to remain visible.
