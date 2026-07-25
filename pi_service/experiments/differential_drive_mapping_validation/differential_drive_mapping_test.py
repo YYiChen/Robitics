@@ -19,7 +19,7 @@ from pi_service.robot_client import RobotClientConfig, RobotWebClient  # noqa: E
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--controller-url", default="http://127.0.0.1:5000")
-    parser.add_argument("--slow-pwm", type=int, default=55, help="PWM of the deliberately slower side.")
+    parser.add_argument("--slow-pwm", type=int, default=0, help="PWM of the deliberately slower side; zero stops it.")
     parser.add_argument("--fast-pwm", type=int, default=180, help="PWM of the deliberately faster side.")
     parser.add_argument("--duration", type=float, default=5.0, help="Seconds for each test phase; capped at 10.0.")
     parser.add_argument("--command-hz", type=float, default=12.0, help="Drive command heartbeat frequency.")
@@ -29,8 +29,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def validate(args: argparse.Namespace) -> None:
-    if not 1 <= args.slow_pwm <= 255 or not 1 <= args.fast_pwm <= 255:
-        raise ValueError("PWM must be in [1, 255]")
+    if not -255 <= args.slow_pwm <= 255 or not 1 <= args.fast_pwm <= 255:
+        raise ValueError("slow-pwm must be in [-255, 255] and fast-pwm in [1, 255]")
     if args.fast_pwm <= args.slow_pwm:
         raise ValueError("fast-pwm must be greater than slow-pwm")
     if not .1 <= args.duration <= 10.0:

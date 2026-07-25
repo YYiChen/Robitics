@@ -10,9 +10,9 @@ Run on the Pi:
 
 The sequence is deliberately short:
 
-1. `right=55`, `left=180` for 5 seconds;
+1. `right=0`, `left=180` for 5 seconds;
 2. stop for one second;
-3. `right=180`, `left=55` for 5 seconds;
+3. `right=180`, `left=0` for 5 seconds;
 4. final stop.
 
 Lift the drive wheels or leave clear space. `Ctrl+C` sends `/api/stop`. The result is logged to `/home/g11/Desktop/pi_service/logs/differential_drive_mapping/latest.log`.
