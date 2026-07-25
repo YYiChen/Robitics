@@ -123,6 +123,7 @@ class AutonomousRouteTracker:
         self._motor_active = False; self._launch_until = 0.0; self._tuning_lock = threading.RLock(); self._tuning_version = 0
         self._motion_reference: tuple[float, tuple[tuple[float, float], ...]] | None = None
         self._motion_boost_pwm: int | None = None; self._motion_confirmed = False; self._motion_text = "WAIT_STRAIGHT"
+        self._startup_reacquire_frames = 0
         self._status = {"available": True, "running": False, "enabled": False, "state": "starting", "detail": "等待路线识别器启动", "frame": 0}
 
     def start(self) -> None:
@@ -283,6 +284,24 @@ class AutonomousRouteTracker:
                 result = detector.detect(frame, frame_index=index, timestamp_ns=time.monotonic_ns())
                 marker = marker_counter.update(result.observation.marker_detected, result.observation.marker_y_ratio)
                 decision = planner.step(result.observation, now); motor_text = "PAUSED"
+                # The web service intentionally begins with motors paused. It
+                # may therefore see no tape during camera/service startup.
+                # Once M has armed driving, three consecutive valid route
+                # frames are enough to safely leave that startup-only lock.
+                visible = (
+                    not result.observation.line_lost
+                    and result.observation.confidence >= .38
+                    and result.observation.lookahead_offset is not None
+                )
+                if decision.reason == "startup_line_missing":
+                    self._startup_reacquire_frames = self._startup_reacquire_frames + 1 if visible else 0
+                    if self.gate.enabled() and self._startup_reacquire_frames >= 3:
+                        planner = ContinuousPathPlanner(ContinuousPathConfig(minimum_confidence=.38, line_lost_stop_frames=config.line_lost_stop_frames, line_lost_prediction_seconds=config.line_lost_prediction_seconds, line_lost_stop_seconds=config.line_lost_stop_seconds))
+                        decision = planner.step(result.observation, now)
+                        self._startup_reacquire_frames = 0
+                        self._set_status(detail="路线稳定重获，已解除启动丢线锁")
+                else:
+                    self._startup_reacquire_frames = 0
                 if self.gate.enabled() and decision.intent is PathIntent.FOLLOW_PATH:
                     if not self._motor_active:
                         self._motor_active = True; self._launch_until = now + motor.launch_duration_seconds
