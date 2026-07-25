@@ -358,13 +358,14 @@ SAFE_STOP
 
 ## 12. 当前优先级
 
-1. 修复普通 `FOLLOW_STRAIGHT` 丢线仍直行；
-2. 拆开 `offset=None`、两行有效和真正居中三种情况；
-3. 确定两段红色的实际贴法和可见性组合；
-4. 实现独立红色 ROI 与 `TURN_WINDOW_ARMED`；
-5. 用脉冲转向 + 停车识别替代连续 2.5 秒盲转；
-6. 增加对应单元测试和离线帧序列测试；
-7. 实车低速标定红色窗口、转向脉冲和停车稳定时间。
+1. 先建立第 15 节的版本化运行日志，使每次失败可追溯；
+2. 修复普通 `FOLLOW_STRAIGHT` 丢线仍直行；
+3. 拆开 `offset=None`、两行有效和真正居中三种情况；
+4. 确定两段红色的实际贴法和可见性组合；
+5. 实现独立红色 ROI 与 `TURN_WINDOW_ARMED`；
+6. 用脉冲转向 + 停车识别替代连续 2.5 秒盲转；
+7. 增加对应单元测试和离线帧序列测试；
+8. 实车低速标定红色窗口、转向脉冲和停车稳定时间。
 
 ## 13. 待讨论项
 
@@ -541,3 +542,192 @@ SAFE_STOP
 - 两行有效时强制双轮同速；
 - 连续 2.5 秒盲转；
 - 转弯结束缺少停车对准确认。
+
+## 15. 运行日志与调试规范
+
+### 15.1 目标
+
+每次电机输出必须能够反向追溯到：
+
+1. 同一帧的 OpenCV 视觉证据；
+2. 状态机状态、计数器和跳转原因；
+3. 当时生效的参数版本；
+4. PWM 计算分支和最终下发值；
+5. 控制器报告的串口及电机输出状态。
+
+日志采用 UTF-8 JSON Lines。每行是一个完整 JSON 对象，禁止依靠解析自由文本来恢复状态。
+
+### 15.2 公共字段
+
+所有记录必须包含：
+
+```text
+schema_version
+event
+run_id
+drive_session_id
+time_utc
+monotonic_seconds
+frame_id
+config_revision
+```
+
+- `time_utc` 用于人工定位；
+- 状态机计时和帧间耗时只使用 `monotonic_seconds`；
+- `run_id` 标识进程内的一次视觉运行；
+- 每次按 M 开始自动行驶生成新的 `drive_session_id`；
+- 网页参数每成功应用一次，`config_revision` 加一。
+
+单位必须进入字段名：
+
+- 像素：`*_px`；
+- 秒：`*_seconds`；
+- 比例：`*_ratio`；
+- PWM：`*_pwm`；
+- 帧计数：`*_frames`。
+
+空值语义固定为：
+
+- `null`：本帧无法计算；
+- `false`：执行了检测且结果为否；
+- `0`：测得或计数确实为零；
+- 字段缺失：当前 schema 没有定义该字段。
+
+### 15.3 事件类型
+
+当前必须支持：
+
+- `session_start`：记录模式、画面尺寸、软件版本和完整参数快照；
+- `session_end`：记录正常停止或异常结束原因；
+- `drive_enabled` / `drive_disabled`：记录 M 门控变化；
+- `frame_observation`：逐帧视觉、planner、控制和控制器状态；
+- `state_transition`：状态变化时额外记录稳定原因码和证据摘要；
+- `tuning_changed`：记录参数旧值、新值、应用帧和新 revision；
+- `error`：记录异常类型、消息、traceback、状态和最后帧号。
+
+暂停预览时可降采样为约每秒一条；自动行驶时每个处理帧都必须记录。状态跳转、调参和错误不得采样丢弃。
+
+### 15.4 当前逐帧字段
+
+`frame_observation` 分成四组：
+
+1. `vision`
+   - `confidence`、`valid_line`、`line_lost`；
+   - `line_center_x_px`、`valid_bands`；
+   - 每个有效扫描行的 `y_px`、`row_ratio`、`center_x_px`、`width_px`；
+   - endpoint、junction、red band 和 lookahead。
+2. `planner`
+   - `state`；
+   - 稳定枚举 `reason_code` 与说明性 `reason_detail`；
+   - endpoint、丢线、重获、junction 帧计数和掉头耗时；
+   - 红色底部授权、红色消失帧数及快速丢线授权状态。
+3. `control`
+   - 控制分支；
+   - 归一化偏差、死区、增益；
+   - 原始和限幅后的修正 PWM；
+   - 基础 PWM、左右轮指令及限幅原因。
+4. `controller`
+   - 串口是否打开、Arduino 是否在线；
+   - 最近接收数据年龄；
+   - Arduino 报告的电机输出和错误。
+
+当前 `ScanlineEvidence` 只保留被接受的扫描行。因此日志可以可靠记录“该行有效及其中心/宽度”，但不能推测被拒绝候选的原因。后续修改视觉数据模型时，应为每个配置扫描行增加：
+
+```text
+detected
+accepted
+candidate bounds
+reject_reason
+```
+
+建议的拒绝原因枚举：
+
+```text
+NO_COMPONENT
+WIDTH_TOO_NARROW
+WIDTH_TOO_WIDE
+TRANSVERSE_BAR_DOMINANT
+DISCONNECTED_FROM_NEAR_ROUTE
+OUTSIDE_ROUTE_CORRIDOR
+LOW_COLOR_CONFIDENCE
+```
+
+### 15.5 稳定原因码
+
+状态跳转使用固定枚举，例如：
+
+```text
+WHITE_BAR_CONFIRMED
+EARLY_BAR_PREDICTED
+RED_EXIT_CONFIRMED
+LINE_LOST_CONFIRMED
+REACQUIRE_CONFIRMED
+BAR_TIMEOUT
+PIVOT_STARTED
+PIVOT_LIMIT_REACHED
+USER_ENABLED
+USER_PAUSED
+UNHANDLED_EXCEPTION
+```
+
+动态坐标和解释放入 `reason_detail`，禁止把坐标拼接进原因码。
+
+### 15.6 双红色窗口的后续日志契约
+
+实现双红色标记时，检测器必须输出候选列表，而不是只输出合并后的最佳红带。每个候选至少记录：
+
+```text
+x_px, y_px, width_px, height_px, area_px
+roi_class
+accepted
+reject_reason
+```
+
+状态机另行记录：
+
+```text
+near_marker_visible
+far_marker_visible
+near_confirm_frames
+far_missing_frames
+turn_window_authorized
+authorization_reason
+```
+
+未实现双红色候选前，不得在运行日志中伪造这些字段。
+
+### 15.7 脉冲掉头的后续日志契约
+
+每次脉冲必须产生一个 `pivot_cycle` 事件，至少包括：
+
+```text
+pulse_index
+phase
+pulse_pwm
+requested_pulse_seconds
+actual_command_seconds
+settle_seconds
+valid_bands
+center_offset
+center_spread_px
+alignment_confirm_frames
+alignment_accepted
+reject_reason
+```
+
+未实现脉冲掉头前，当前连续掉头统一记录为 `control.mode=PIVOT_CONTINUOUS`，不得误称为脉冲控制。
+
+### 15.8 图像证据与人工标记
+
+下一阶段应增加 2～3 秒原始帧环形缓冲，只在以下事件保存前后帧：
+
+- `FOLLOW -> DEGRADED`；
+- 普通丢线；
+- 红色窗口授权；
+- 刹车和每次掉头脉冲；
+- 重获成功或失败；
+- `SAFE_STOP`；
+- 异常；
+- 操作者点击“标记问题”。
+
+同时保存原图和标注图，并用 `run_id + frame_id + event` 命名。该功能只依赖已有相机/OpenCV，不要求新增硬件。
