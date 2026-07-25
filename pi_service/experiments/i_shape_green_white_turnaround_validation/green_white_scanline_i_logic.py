@@ -37,6 +37,10 @@ class GreenWhiteScanlineConfig(HybridScanlineConfig):
     green_field_min_area_ratio: float = 0.025
     green_field_near_anchor_ratio: float = 0.72
     green_field_white_margin_pixels: int = 36
+    # Green course selection is always anchored in the lower camera field.
+    # Only that near field may be bridged across tape/red-marker holes; doing
+    # it in the far/upper image can join the carpet to green-tinted walls.
+    green_bridge_min_y_ratio: float = 0.62
     # Do not make the HSV mask stricter.  Instead, after its permissive
     # candidate stage, require a route backbone to have green floor on both
     # sides of most of its locally measured widths.
@@ -229,6 +233,7 @@ class GreenWhiteHybridScanlineAnalyzer(HybridScanlineAnalyzer):
             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (bridge_radius, bridge_radius)),
         )
         bridge = cv2.bitwise_and(cv2.bitwise_or(white, red_bridge), green_neighbourhood)
+        bridge[:int(round(frame.shape[0] * config.green_bridge_min_y_ratio)), :] = 0
         course_seed = cv2.bitwise_or(green, bridge)
         green_field = self._course_field_mask(course_seed)
         self._latest_green_field = green_field

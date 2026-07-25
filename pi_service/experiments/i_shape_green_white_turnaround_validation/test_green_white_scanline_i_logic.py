@@ -59,6 +59,20 @@ class GreenWhiteScanlineTests(unittest.TestCase):
         self.assertGreater(int(np.count_nonzero(field[300:340, :])), 0)
         self.assertGreater(int(np.count_nonzero(field[450:479, :])), 0)
 
+    def test_upper_green_tinted_background_cannot_join_the_bottom_course(self):
+        image = np.full((480, 640, 3), (210, 210, 210), dtype=np.uint8)
+        # A green-tinted upper background is deliberately separated from the
+        # real lower carpet by a bright boundary.  No far-field white bridge
+        # may make it part of the selected course contour.
+        image[40:205, 40:600] = (55, 150, 45)
+        image[265:, :] = (55, 150, 45)
+        cv2.rectangle(image, (0, 220), (639, 252), (245, 245, 245), -1)
+        self.analyzer.analyze(image)
+        field = self.analyzer.course_field_mask
+        self.assertIsNotNone(field)
+        self.assertEqual(int(np.count_nonzero(field[80:180, :])), 0)
+        self.assertGreater(int(np.count_nonzero(field[360:470, :])), 0)
+
     def test_split_red_band_pre_authorizes_the_white_t_junction(self):
         evidence = self.analyzer.analyze(green_i_frame(transverse=True, red_band=True)).evidence
         self.assertTrue(evidence.red_marker_detected)
