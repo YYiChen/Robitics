@@ -10,7 +10,7 @@ import time
 from typing import Any
 
 
-ALLOWED_EVENTS = frozenset({"SLOW_DOWN", "TURN_WINDOW_ARMED", "BRAKE_NOW", "PIVOT_REQUEST", "CLEAR_ARM"})
+ALLOWED_EVENTS = frozenset({"SLOW_DOWN", "TURN_WINDOW_ARMED", "BRAKE_NOW", "PIVOT_REQUEST", "REVERSE_REQUEST", "CLEAR_ARM"})
 
 
 @dataclass(frozen=True)

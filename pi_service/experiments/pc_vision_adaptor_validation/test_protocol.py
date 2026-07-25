@@ -15,3 +15,7 @@ class ProtocolTests(unittest.TestCase):
             parse_event({"token": "no", "event": "SLOW_DOWN", "frame_seq": 3, "captured_at_ms": 1000}, token="x", now_ms=1100)
         with self.assertRaises(ValueError):
             parse_event({"token": "x", "event": "SLOW_DOWN", "frame_seq": 3, "captured_at_ms": 1000}, token="x", now_ms=1800)
+
+    def test_accepts_restricted_reverse_event_but_no_pwm(self):
+        event = parse_event({"token": "x", "event": "REVERSE_REQUEST", "frame_seq": 4, "captured_at_ms": 1000}, token="x", now_ms=1100)
+        self.assertEqual(event.event, "REVERSE_REQUEST")

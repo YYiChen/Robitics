@@ -6,6 +6,8 @@ The desktop never receives motor authority.  This class owns the only Pi-side
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+import json
 from pathlib import Path
 import os
 import sys
@@ -26,6 +28,10 @@ class PcVisionAdaptorConfig:
     slow_pwm: int = 55
     pivot_pwm: int = 200
     pivot_seconds: float = 2.5
+    brake_hold_seconds: float = .18
+    creep_pwm: int = 35
+    reverse_pwm: int = 55
+    reverse_seconds: float = .45
     remote_event_max_age_ms: int = 750
     remote_armed_timeout_ms: int = 900
     token: str = ""
@@ -41,8 +47,10 @@ class PcVisionAdaptorRouteTracker:
         self._stop, self._thread, self._lock = threading.Event(), None, threading.RLock()
         self._frame_seq, self._frame_jpeg, self._frame_at_ms = 0, None, 0
         self._last_center_x, self._last_event_seq, self._event = None, -1, None
-        self._event_received_ms, self._pivot_until = 0, 0
+        self._event_received_ms, self._action_until = 0, 0.0
+        self._last_event_type, self._motion_phase = None, "FOLLOW"
         self._motor_active = False
+        self._run_log = None
         self._status = {"available": True, "running": False, "enabled": False, "mode": self.route_mode, "state": "starting", "detail": "PC adaptor 启动中", "frame": 0, "confidence": 0.0}
 
     def start(self) -> None:
@@ -56,6 +64,26 @@ class PcVisionAdaptorRouteTracker:
     def _stop_motor(self) -> None:
         if self._motor_active: self.controller.stop_now()
         self._motor_active = False
+
+    def _open_run_log(self) -> None:
+        log_dir = EXPERIMENT / "runtime_logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        self._run_log = (log_dir / f"pc_vision_adaptor_{stamp}.jsonl").open("a", encoding="utf-8")
+
+    def _write_run_log(self, *, frame: int, result, event, state: str, motor: str, commanded: tuple[int, int] | None) -> None:
+        if self._run_log is None:
+            return
+        controller_status = self.controller.status() if hasattr(self.controller, "status") else {}
+        self._run_log.write(json.dumps({
+            "time_utc": datetime.now(timezone.utc).isoformat(), "frame": frame,
+            "confidence": result.confidence, "line_center_x": result.center_x,
+            "line_centers": result.centers, "pc_event": event.event if event else None,
+            "state": state, "motor": motor,
+            "commanded_pwm": None if commanded is None else {"right": commanded[0], "left": commanded[1]},
+            "motor_output": controller_status.get("motor_output"),
+        }, ensure_ascii=False) + "\n")
+        self._run_log.flush()
 
     def toggle_drive(self) -> dict:
         enabled = self.gate.toggle()
@@ -94,6 +122,7 @@ class PcVisionAdaptorRouteTracker:
         import cv2
         import numpy as np
         interval, last, frame = 1.0 / max(5.0, self.config.process_fps), 0.0, 0
+        self._open_run_log()
         self._set_status(running=True, state="ready", detail="Pi 快速跟线已就绪；PC 仅回传视觉事件")
         try:
             while not self._stop.is_set():
@@ -108,22 +137,49 @@ class PcVisionAdaptorRouteTracker:
                     event, event_age = self._event, now_ms - self._event_received_ms if self._event_received_ms else None
                 result = find_fast_line(image, self._last_center_x, FastLineConfig())
                 if result.center_x is not None: self._last_center_x = result.center_x
-                state, motor = "FAST_FOLLOW", "PAUSED"
+                state, motor, commanded = "FAST_FOLLOW", "PAUSED", None
                 stale_armed = event is not None and event.event != "CLEAR_ARM" and event_age is not None and event_age > self.config.remote_armed_timeout_ms
                 if self.gate.enabled():
                     if stale_armed:
                         self._stop_motor(); state, motor = "REMOTE_STALE_STOP", "STOP_REMOTE_EVENT_STALE"
-                    elif event and event.event == "BRAKE_NOW":
-                        self._stop_motor(); state, motor = "BRAKE", "STOP_PC_BRAKE"
-                    elif event and event.event == "PIVOT_REQUEST" and self._pivot_until > now:
-                        self.controller.set_direct_drive(-self.config.pivot_pwm, self.config.pivot_pwm); self._motor_active = True; state, motor = "PIVOT", "PIVOT_RIGHT_PC_AUTHORIZED"
                     else:
-                        if event and event.event == "PIVOT_REQUEST": self._pivot_until = now + self.config.pivot_seconds
-                        pwm = pwm_for_line(result, image.shape[1], self.config.slow_pwm if event and event.event in {"SLOW_DOWN", "TURN_WINDOW_ARMED"} else self.config.straight_pwm)
-                        if pwm is None:
-                            self._stop_motor(); state, motor = "LINE_LOST_STOP", "STOP_NO_NEAR_LINE"
+                        event_type = event.event if event else "CLEAR_ARM"
+                        # Each remote event may arrive on many fresh frames.
+                        # A physical action starts only on a type transition,
+                        # never once per JPEG, so repeated PIVOT requests do
+                        # not cause endless spinning.
+                        if event_type != self._last_event_type:
+                            self._last_event_type = event_type
+                            if event_type == "BRAKE_NOW":
+                                self._motion_phase, self._action_until = "BRAKE_HOLD", now + self.config.brake_hold_seconds
+                            elif event_type == "PIVOT_REQUEST":
+                                self._motion_phase, self._action_until = "PIVOT", now + self.config.pivot_seconds
+                            elif event_type == "REVERSE_REQUEST":
+                                self._motion_phase, self._action_until = "REVERSE", now + self.config.reverse_seconds
+                            elif event_type == "CLEAR_ARM":
+                                self._motion_phase, self._action_until = "FOLLOW", 0.0
+                        if self._motion_phase == "BRAKE_HOLD" and now < self._action_until:
+                            self._stop_motor(); state, motor = "BRAKE", "STOP_PC_BRAKE_PULSE"
+                        elif self._motion_phase == "PIVOT" and now < self._action_until:
+                            commanded = (-self.config.pivot_pwm, self.config.pivot_pwm)
+                            self.controller.set_direct_drive(*commanded); self._motor_active = True; state, motor = "PIVOT", "PIVOT_RIGHT_PC_AUTHORIZED"
+                        elif self._motion_phase == "REVERSE" and now < self._action_until:
+                            commanded = (-self.config.reverse_pwm, -self.config.reverse_pwm)
+                            self.controller.set_direct_drive(*commanded); self._motor_active = True; state, motor = "REVERSE", "REVERSE_PC_OVERSHOOT_RECOVERY"
+                        elif self._motion_phase in {"PIVOT", "REVERSE"}:
+                            self._stop_motor(); state, motor = f"{self._motion_phase}_COMPLETE", "STOP_ACTION_COMPLETE"
                         else:
-                            self.controller.set_direct_drive(*pwm); self._motor_active = True; motor = f"FAST_PWM R={pwm[0]} L={pwm[1]}"
+                            # The mid-frame brake pulse deliberately ends in
+                            # creep, not a permanent stop: this allows the
+                            # calibrated turn band to reach its 84% trigger.
+                            crawl = event_type in {"SLOW_DOWN", "TURN_WINDOW_ARMED", "BRAKE_NOW"} or self._motion_phase == "BRAKE_HOLD"
+                            if self._motion_phase == "BRAKE_HOLD": self._motion_phase = "FOLLOW"
+                            pwm = pwm_for_line(result, image.shape[1], self.config.creep_pwm if crawl else self.config.straight_pwm)
+                            if pwm is None:
+                                self._stop_motor(); state, motor = "LINE_LOST_STOP", "STOP_NO_NEAR_LINE"
+                            else:
+                                commanded = pwm
+                                self.controller.set_direct_drive(*commanded); self._motor_active = True; state, motor = ("CREEP" if crawl else "FAST_FOLLOW"), f"FAST_PWM R={pwm[0]} L={pwm[1]}"
                 else: self._stop_motor(); state = "PAUSED"
                 annotated = image.copy()
                 for y, x, _w in result.centers: cv2.circle(annotated, (int(x), y), 5, (0, 255, 0), -1)
@@ -133,7 +189,16 @@ class PcVisionAdaptorRouteTracker:
                 cv2.putText(annotated, f"STATE: {state}  MOTOR: {motor}  PC never sends PWM", (18,94), cv2.FONT_HERSHEY_SIMPLEX,.46,(0,255,255),1)
                 ok, encoded = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 if ok: self.publisher.publish(encoded.tobytes())
+                # Full evidence is retained for every M-enabled test frame;
+                # while merely previewing a paused camera, write one health
+                # record per second instead of creating an unnecessary log.
+                if self.gate.enabled() or frame % max(1, int(self.config.process_fps)) == 0:
+                    self._write_run_log(frame=frame, result=result, event=event, state=state, motor=motor, commanded=commanded)
                 self._set_status(state=state, detail=motor, frame=frame, confidence=result.confidence, line_center_x=result.center_x, motor=motor)
                 frame += 1
         except Exception as exc: self._set_status(running=False, state="error", detail=str(exc))
-        finally: self._stop_motor(); self._set_status(running=False)
+        finally:
+            self._stop_motor()
+            if self._run_log is not None:
+                self._run_log.close(); self._run_log = None
+            self._set_status(running=False)

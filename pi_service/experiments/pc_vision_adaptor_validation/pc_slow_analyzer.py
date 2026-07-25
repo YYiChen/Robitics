@@ -22,6 +22,7 @@ GREEN_EXPERIMENT = HERE.parents[1] / "i_shape_green_white_turnaround_validation"
 if str(GREEN_EXPERIMENT) not in sys.path:
     sys.path.insert(0, str(GREEN_EXPERIMENT))
 from green_white_scanline_i_logic import GreenWhiteHybridScanlineAnalyzer  # noqa: E402
+from red_band_planner import TwoRedBandPlanner  # noqa: E402
 
 
 def main() -> None:
@@ -31,7 +32,7 @@ def main() -> None:
     parser.add_argument("--log", type=Path, default=Path("runtime_logs/pc_slow_analyzer.jsonl"))
     args = parser.parse_args()
     args.log.parent.mkdir(parents=True, exist_ok=True)
-    analyzer, last_seq = GreenWhiteHybridScanlineAnalyzer(), -1
+    analyzer, planner, last_seq = GreenWhiteHybridScanlineAnalyzer(), TwoRedBandPlanner(), -1
     while True:
         try:
             with urlopen(args.pi_url.rstrip("/") + "/api/vision-adaptor/frame", timeout=2) as response:
@@ -45,13 +46,18 @@ def main() -> None:
             if frame is None:
                 continue
             result = analyzer.analyze(frame).evidence
-            event = "TURN_WINDOW_ARMED" if result.junction_detected or result.endpoint_detected else "CLEAR_ARM"
+            red = planner.update(analyzer.red_band_layers, frame.shape[1], frame.shape[0])
+            # Red bands own the calibrated I-course timing.  Geometry remains
+            # a conservative warning when red tape is temporarily out of view.
+            event = red.event
+            if event == "CLEAR_ARM" and (result.junction_detected or result.endpoint_detected):
+                event = "TURN_WINDOW_ARMED"
             body = json.dumps({"token": args.token, "event": event, "frame_seq": frame_seq, "captured_at_ms": captured_at_ms, "event_at_ms": int(time.time() * 1000)}).encode()
             request = Request(args.pi_url.rstrip("/") + "/api/vision-adaptor/event", data=body, headers={"Content-Type": "application/json"}, method="POST")
             with urlopen(request, timeout=2) as response:
                 accepted = response.read().decode()
             with args.log.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps({"time_ms": int(time.time() * 1000), "frame_seq": frame_seq, "event": event, "confidence": result.confidence, "accepted": accepted}, ensure_ascii=False) + "\n")
+                stream.write(json.dumps({"time_ms": int(time.time() * 1000), "frame_seq": frame_seq, "event": event, "red_phase": red.phase, "red_layers": red.layer_count, "turn_y": red.turn_y, "turn_bottom_y": red.turn_bottom_y, "confidence": result.confidence, "accepted": accepted}, ensure_ascii=False) + "\n")
         except KeyboardInterrupt:
             return
         except Exception as exc:
