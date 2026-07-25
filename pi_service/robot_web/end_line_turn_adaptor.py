@@ -21,9 +21,12 @@ for path in (EXPERIMENT, FAST_EXPERIMENT):
 
 from end_line_logic import EndLineConfig, EndLineStopPlanner, RedEndBandDetector  # noqa: E402
 from gated_fast_line import FastLineConfig, analyse_fast_line, pwm_for_line  # noqa: E402
+from turn_profiles import TurnProfile, load_turn_profile, save_turn_profile  # noqa: E402
 
 
 TUNING_PATH = EXPERIMENT / "end_line_web_tuning.json"
+TURN_90_PATH = EXPERIMENT / "turn_90.json"
+TURN_180_PATH = EXPERIMENT / "turn_180.json"
 TUNING_RULES = {
     "process_fps": (float, 5.0, 60.0),
     "straight_pwm": (int, 0, 255),
@@ -47,8 +50,10 @@ TUNING_RULES = {
     "line_lost_confirm_frames": (int, 1, 20),
     "red_direction_memory_frames": (int, 1, 300),
     "brake_hold_seconds": (float, 0.0, 3.0),
-    "pivot_pwm": (int, 0, 255),
-    "pivot_seconds": (float, .1, 15.0),
+    "turn_90_pwm": (int, 0, 255),
+    "turn_90_seconds": (float, .05, 20.0),
+    "turn_180_pwm": (int, 0, 255),
+    "turn_180_seconds": (float, .05, 20.0),
 }
 
 
@@ -61,10 +66,16 @@ class EndLineTurnAdaptorRouteTracker:
         self._last_center_x, self._motor_active = None, False
         self._tuning_path = tuning_path
         self._process_fps, self._straight_pwm, self._fast_config, self._line_config = self._load_tuning()
+        self._turn_90 = load_turn_profile(TURN_90_PATH, TurnProfile(200, 2.5))
+        self._turn_180 = load_turn_profile(TURN_180_PATH, TurnProfile(200, 5.0))
         self._planner = EndLineStopPlanner(self._line_config)
         self._red_detector = RedEndBandDetector(self._line_config)
         self._last_red_side, self._last_red_seen_frame = None, -10_000
         self._motion_phase, self._action_until, self._pending_turn_side = "FOLLOW", 0.0, None
+        self._manual_degrees, self._manual_profile, self._manual_search_until = None, None, 0.0
+        # This deployment is deliberately keyboard-only: M arms turn commands
+        # but must never make the vehicle start following the white line.
+        self._manual_only = True
         self._run_log = None
         self._status = {"available": True, "running": False, "enabled": False, "mode": self.route_mode, "state": "starting", "detail": "单白线红终点 adaptor 启动中", "frame": 0, "confidence": 0.0}
 
@@ -104,7 +115,25 @@ class EndLineTurnAdaptorRouteTracker:
                 self._planner.reset()
             self._last_red_side, self._last_red_seen_frame = None, -10_000
             self._motion_phase, self._action_until, self._pending_turn_side = "FOLLOW", 0.0, None
-        self._set_status(enabled=enabled, detail="单白线红终点自动行驶已开启" if enabled else "已暂停，电机已停止")
+        self._set_status(enabled=enabled, detail="按键转向已解锁，等待 Q/E/U/I" if enabled else "已暂停，电机已停止")
+        return self.status_dict()
+
+    def request_manual_turn(self, command: str) -> dict:
+        """M-gated, user-triggered 90/180 turn with red-line final alignment."""
+        commands = {"LEFT_90": ("LEFT", 90, self._turn_90), "RIGHT_90": ("RIGHT", 90, self._turn_90), "LEFT_180": ("LEFT", 180, self._turn_180), "RIGHT_180": ("RIGHT", 180, self._turn_180)}
+        try:
+            side, degrees, profile = commands[str(command).upper()]
+        except KeyError as exc:
+            raise ValueError("手动转向只支持 LEFT_90、RIGHT_90、LEFT_180、RIGHT_180") from exc
+        if not self.gate.enabled():
+            raise ValueError("请先按 M 开启自动电机门控，再触发转向")
+        if self._motion_phase not in {"FOLLOW", "MANUAL_COMPLETE", "TURN_COMPLETE"}:
+            raise ValueError("当前已有转向动作，请等待其完成或按 M 停止")
+        self._stop_motor()
+        self._pending_turn_side, self._manual_degrees, self._manual_profile = side, degrees, profile
+        self._motion_phase, self._action_until = "MANUAL_PRESET", time.monotonic() + profile.preset_seconds
+        self._manual_search_until = 0.0
+        self._set_status(state="MANUAL_PRESET", detail=f"{side} {degrees}° preset", manual_turn=f"{side}_{degrees}")
         return self.status_dict()
 
     def _tuning_values(self) -> dict:
@@ -117,6 +146,8 @@ class EndLineTurnAdaptorRouteTracker:
                 "green_saturation_min": self._fast_config.green_saturation_min, "green_dilate_radius_px": self._fast_config.green_dilate_radius_px,
                 "green_support_inner_px": self._fast_config.green_support_inner_px, "green_support_outer_px": self._fast_config.green_support_outer_px,
                 "green_support_min_ratio": self._fast_config.green_support_min_ratio,
+                "turn_90_pwm": self._turn_90.pwm, "turn_90_seconds": self._turn_90.preset_seconds,
+                "turn_180_pwm": self._turn_180.pwm, "turn_180_seconds": self._turn_180.preset_seconds,
                 **asdict(self._line_config),
             }
 
@@ -176,10 +207,15 @@ class EndLineTurnAdaptorRouteTracker:
         temporary = self._tuning_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         temporary.replace(self._tuning_path)
+        turn_90 = TurnProfile(current["turn_90_pwm"], current["turn_90_seconds"])
+        turn_180 = TurnProfile(current["turn_180_pwm"], current["turn_180_seconds"])
+        save_turn_profile(TURN_90_PATH, turn_90)
+        save_turn_profile(TURN_180_PATH, turn_180)
         with self._tuning_lock:
             self._process_fps, self._straight_pwm = process_fps, straight_pwm
             self._fast_config, self._line_config = fast_config, line_config
             self._red_detector, self._planner = RedEndBandDetector(line_config), EndLineStopPlanner(line_config)
+            self._turn_90, self._turn_180 = turn_90, turn_180
         return self.status_dict()
 
     def _open_log(self) -> None:
@@ -210,7 +246,7 @@ class EndLineTurnAdaptorRouteTracker:
 
         last, frame_index = 0.0, 0
         self._open_log()
-        self._set_status(running=True, state="ready", detail="红线只记录方向；白线消失后停车并转 90°；按 M 开始")
+        self._set_status(running=True, state="ready", detail="纯按键转向：M 解锁后按 Q/E/U/I；未按键时始终停车")
         try:
             while not self._stop.is_set():
                 now, jpeg = time.monotonic(), self.camera.latest_jpeg()
@@ -240,16 +276,50 @@ class EndLineTurnAdaptorRouteTracker:
                 state, motor, commanded = decision.state.value, "PAUSED", None
                 if self.gate.enabled():
                     recent_red = self._last_red_side is not None and frame_index - self._last_red_seen_frame <= self._line_config.red_direction_memory_frames
-                    if self._motion_phase == "BRAKE_HOLD" and now < self._action_until:
+                    if self._motion_phase == "MANUAL_PRESET" and now < self._action_until:
+                        profile = self._manual_profile
+                        commanded = (profile.pwm, -profile.pwm) if self._pending_turn_side == "LEFT" else (-profile.pwm, profile.pwm)
+                        self.controller.set_direct_drive(*commanded); self._motor_active = True
+                        state, motor = "MANUAL_PRESET", f"MANUAL_{self._pending_turn_side}_{self._manual_degrees} R={commanded[0]} L={commanded[1]}"
+                    elif self._motion_phase == "MANUAL_PRESET":
+                        self._motion_phase = "MANUAL_SEARCH"
+                        self._manual_search_until = now + (1.5 if self._manual_degrees == 90 else 3.0)
+                    if self._motion_phase == "MANUAL_SEARCH":
+                        # A ground strip parallel to the car's forward axis is
+                        # near vertical in the local camera image.  The wide
+                        # tolerance absorbs fish-eye curvature; require live
+                        # red evidence rather than trusting the preset alone.
+                        aligned = red.detected and red.angle_degrees is not None and red.angle_degrees >= 75.0
+                        if aligned:
+                            self._stop_motor(); self._motion_phase = "MANUAL_COMPLETE"
+                            state, motor = "MANUAL_ALIGN_COMPLETE", "STOP_RED_PARALLEL"
+                        elif now >= self._manual_search_until:
+                            self._stop_motor(); self._motion_phase = "MANUAL_COMPLETE"
+                            state, motor = "MANUAL_ALIGN_TIMEOUT", "STOP_RED_NOT_ALIGNED"
+                        else:
+                            profile = self._manual_profile
+                            search_pwm = max(70, int(round(profile.pwm * .65)))
+                            commanded = (search_pwm, -search_pwm) if self._pending_turn_side == "LEFT" else (-search_pwm, search_pwm)
+                            self.controller.set_direct_drive(*commanded); self._motor_active = True
+                            state, motor = "MANUAL_RED_SEARCH", f"SEARCH angle={red.angle_degrees} R={commanded[0]} L={commanded[1]}"
+                    elif self._motion_phase == "MANUAL_COMPLETE":
+                        self._stop_motor(); state, motor = "MANUAL_COMPLETE", "STOP_MANUAL_TURN_COMPLETE"
+                    elif self._motion_phase == "BRAKE_HOLD" and now < self._action_until:
                         self._stop_motor()
                         state, motor = "BRAKE_BEFORE_90", "STOP_BEFORE_PIVOT"
                     elif self._motion_phase == "BRAKE_HOLD":
-                        self._motion_phase, self._action_until = "PIVOT", now + self._line_config.pivot_seconds
-                    if self._motion_phase == "PIVOT" and now < self._action_until:
+                        self._motion_phase, self._action_until = "PIVOT", now + self._turn_90.preset_seconds
+                    manual_active = self._motion_phase.startswith("MANUAL")
+                    if manual_active:
+                        pass
+                    elif self._manual_only:
+                        self._stop_motor()
+                        state, motor = "MANUAL_READY", "STOP_WAITING_FOR_Q/E/U/I"
+                    elif self._motion_phase == "PIVOT" and now < self._action_until:
                         if self._pending_turn_side == "LEFT":
-                            commanded = (self._line_config.pivot_pwm, -self._line_config.pivot_pwm)
+                            commanded = (self._turn_90.pwm, -self._turn_90.pwm)
                         else:
-                            commanded = (-self._line_config.pivot_pwm, self._line_config.pivot_pwm)
+                            commanded = (-self._turn_90.pwm, self._turn_90.pwm)
                         self.controller.set_direct_drive(*commanded)
                         self._motor_active = True
                         state, motor = f"PIVOT_{self._pending_turn_side}_90", f"PIVOT R={commanded[0]} L={commanded[1]}"
@@ -291,7 +361,7 @@ class EndLineTurnAdaptorRouteTracker:
                     cv2.line(overlay, (0, red.bottom_y), (overlay.shape[1] - 1, red.bottom_y), (0, 80, 255), 1)
                 cv2.rectangle(overlay, (10, 10), (1110, 112), (20, 20, 20), cv2.FILLED)
                 cv2.putText(overlay, f"END-LINE ADAPTOR: {'RUNNING' if self.gate.enabled() else 'PAUSED (press M)'}", (18, 38), cv2.FONT_HERSHEY_SIMPLEX, .65, (0, 220, 0) if self.gate.enabled() else (0, 180, 255), 2)
-                cv2.putText(overlay, f"WHITE: valid={result.valid} centre={result.center_x} conf={result.confidence:.2f}  RED: {red.detected} x={red.center_x} side={self._last_red_side}", (18, 66), cv2.FONT_HERSHEY_SIMPLEX, .43, (255, 255, 255), 1)
+                cv2.putText(overlay, f"WHITE: valid={result.valid} centre={result.center_x} conf={result.confidence:.2f}  RED: {red.detected} x={red.center_x} angle={red.angle_degrees} side={self._last_red_side}", (18, 66), cv2.FONT_HERSHEY_SIMPLEX, .43, (255, 255, 255), 1)
                 cv2.putText(overlay, f"STATE: {state}  {decision.reason}  MOTOR: {motor}", (18, 94), cv2.FONT_HERSHEY_SIMPLEX, .43, (0, 255, 255), 1)
                 ok, encoded = cv2.imencode(".jpg", overlay, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 if ok:

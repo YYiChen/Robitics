@@ -14,8 +14,9 @@ from end_line_turn_adaptor import EndLineTurnAdaptorRouteTracker
 
 
 class _Gate:
-    def enabled(self): return False
-    def toggle(self): return False
+    def __init__(self, enabled=False): self.value = enabled
+    def enabled(self): return self.value
+    def toggle(self): self.value = not self.value; return self.value
 
 
 class EndLineAdaptorTuningTests(unittest.TestCase):
@@ -23,10 +24,10 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "tuning.json"
             tracker = EndLineTurnAdaptorRouteTracker(None, None, None, _Gate(), tuning_path=path)
-            status = tracker.update_tuning({"straight_pwm": 91, "pivot_seconds": 2.8, "correction_gain": 190})
+            status = tracker.update_tuning({"straight_pwm": 91, "turn_90_seconds": 2.8, "correction_gain": 190})
             self.assertEqual(status["tuning"]["straight_pwm"], 91)
             self.assertEqual(status["tuning"]["correction_gain"], 190.0)
-            self.assertEqual(status["tuning"]["pivot_seconds"], 2.8)
+            self.assertEqual(status["tuning"]["turn_90_seconds"], 2.8)
             self.assertTrue(path.exists())
             reloaded = EndLineTurnAdaptorRouteTracker(None, None, None, _Gate(), tuning_path=path)
             self.assertEqual(reloaded.status_dict()["tuning"]["straight_pwm"], 91)
@@ -36,3 +37,12 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
             tracker = EndLineTurnAdaptorRouteTracker(None, None, None, _Gate(), tuning_path=Path(directory) / "tuning.json")
             with self.assertRaises(ValueError):
                 tracker.update_tuning({"minimum_correction_pwm": 200, "maximum_correction_pwm": 100})
+
+    def test_manual_turn_is_m_gated_and_uses_90_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tuning.json"
+            tracker = EndLineTurnAdaptorRouteTracker(None, None, None, _Gate(True), tuning_path=path)
+            status = tracker.request_manual_turn("LEFT_90")
+            self.assertEqual(status["state"], "MANUAL_PRESET")
+            self.assertEqual(tracker._pending_turn_side, "LEFT")
+            self.assertEqual(tracker._manual_degrees, 90)

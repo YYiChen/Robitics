@@ -23,6 +23,8 @@ class EndLineLogicTests(unittest.TestCase):
         observation = detector.detect(image)
         self.assertTrue(observation.detected)
         self.assertGreater(observation.span or 0, 450)
+        self.assertIsNotNone(observation.angle_degrees)
+        self.assertLess(float(observation.angle_degrees), 15)
 
     def test_red_band_never_stops_a_valid_white_line(self):
         detector = RedEndBandDetector()

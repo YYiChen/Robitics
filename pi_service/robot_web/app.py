@@ -83,6 +83,14 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
             return jsonify(ok=True, autonomous=route_tracker.update_tuning(request.get_json(silent=True) or {}))
         except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
+    @app.post("/api/autonomous/manual-turn")
+    def autonomous_manual_turn():
+        if not isinstance(route_tracker, EndLineTurnAdaptorRouteTracker):
+            return jsonify(ok=False, error="当前路线模式不支持 Q/E/U/I 视觉转向"), 409
+        try:
+            return jsonify(ok=True, autonomous=route_tracker.request_manual_turn((request.get_json(silent=True) or {}).get("command", "")))
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
     @app.get("/api/camera/highres/latest")
     def latest_highres_image():
         unavailable = highres_available()

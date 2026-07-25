@@ -24,8 +24,6 @@ class EndLineConfig:
     line_lost_confirm_frames: int = 3
     red_direction_memory_frames: int = 30
     brake_hold_seconds: float = .18
-    pivot_pwm: int = 200
-    pivot_seconds: float = 2.5
 
 
 @dataclass(frozen=True)
@@ -36,6 +34,7 @@ class RedEndBandObservation:
     bottom_y: int | None = None
     span: int | None = None
     area: int = 0
+    angle_degrees: float | None = None  # long axis: 0 horizontal, 90 vertical
 
 
 class EndLineState(str, Enum):
@@ -79,11 +78,16 @@ class RedEndBandDetector:
             x, y, component_width, component_height, area = map(int, stats[label])
             if area < self.config.red_min_component_area or component_width < width * self.config.red_min_span_ratio:
                 continue
-            candidates.append((area, x, y, component_width, component_height, centroids[label]))
+            candidates.append((area, x, y, component_width, component_height, centroids[label], label))
         if not candidates:
             return RedEndBandObservation(False)
-        area, x, y, component_width, component_height, centroid = max(candidates, key=lambda item: item[0])
-        return RedEndBandObservation(True, int(round(centroid[0])), int(round(centroid[1])), y + component_height - 1, component_width, area)
+        area, x, y, component_width, component_height, centroid, label = max(candidates, key=lambda item: item[0])
+        points = np.column_stack(np.where(_labels == label))[:, ::-1].astype(np.float32)
+        (_centre, (rect_width, rect_height), angle) = cv2.minAreaRect(points)
+        long_angle = float(angle + (90.0 if rect_height > rect_width else 0.0)) % 180.0
+        if long_angle > 90.0:
+            long_angle = 180.0 - long_angle
+        return RedEndBandObservation(True, int(round(centroid[0])), int(round(centroid[1])), y + component_height - 1, component_width, area, long_angle)
 
 
 class EndLineStopPlanner:
