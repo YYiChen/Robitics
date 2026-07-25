@@ -6,7 +6,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="$(cd "${HERE}/../../.." && pwd)"
 # Dedicated route geometry: look farther through a visible bend without
 # changing the detector settings used by the older straight/rectangle tests.
-TRACK_CONFIG="${WORKSPACE}/third_party/DeskMate-Advance/src/track_line/config.continuous_path.json"
+# Default is the original dark-tape configuration. A dedicated launcher may
+# override TRACK_CONFIG before starting this same motor-control program.
+TRACK_CONFIG="${TRACK_CONFIG:-${WORKSPACE}/third_party/DeskMate-Advance/src/track_line/config.continuous_path.json}"
 ROBOT_WEB_DIR="${WORKSPACE}/pi_service/robot_web"
 WEB_PORT=5000
 CONTROLLER_URL="http://127.0.0.1:5000"
