@@ -32,6 +32,9 @@ class ContinuousMotorConfig:
     # the tiny P correction used for ordinary centre-line micro-adjustments.
     sharp_turn_error: float = 0.08
     sharp_turn_correction_pwm: int = 55
+    # At a sharp turn, use this signed PWM for the inside wheel. Zero is a
+    # controlled stop; a negative value creates a pivot-like turn.
+    sharp_turn_inner_pwm: int = 0
 
 
 def steering_error(observation: PathObservation, config: ContinuousMotorConfig) -> float | None:
@@ -58,13 +61,18 @@ def path_drive_details(
         config.minimum_correction_pwm,
         min(config.maximum_correction_pwm, math.ceil(abs(error) * config.lookahead_gain)),
     )
-    if abs(error) >= config.sharp_turn_error:
+    sharp_turn = abs(error) >= config.sharp_turn_error
+    if sharp_turn:
         correction = max(correction, config.sharp_turn_correction_pwm)
         correction = min(correction, config.maximum_correction_pwm)
     # Never command a nearly-zero inner wheel during a continuous turn: with
     # this loaded four-wheel chassis that can produce driver current noise but
     # insufficient torque to overcome static friction.
-    inner = max(config.minimum_wheel_pwm, base_pwm - correction)
+    inner = (
+        max(-255, min(255, config.sharp_turn_inner_pwm))
+        if sharp_turn
+        else max(config.minimum_wheel_pwm, base_pwm - correction)
+    )
     outer = min(255, base_pwm + correction)
     # Positive error means the target is right of image centre: slow the right
     # wheel and speed up the left wheel to arc right. The same rule works for

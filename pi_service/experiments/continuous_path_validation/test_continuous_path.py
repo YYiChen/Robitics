@@ -19,9 +19,9 @@ class ContinuousPathTests(unittest.TestCase):
         right, left = path_drive_pwm(Observation(lookahead_offset=.25), ContinuousMotorConfig("http://example"))
         self.assertLess(right, left)
 
-    def test_turn_never_drops_inner_wheel_below_running_threshold(self):
+    def test_ordinary_turn_keeps_inner_wheel_above_running_threshold(self):
         right, left = path_drive_pwm(
-            Observation(lookahead_offset=.9),
+            Observation(lookahead_offset=.06),
             ContinuousMotorConfig("http://example", straight_pwm=90, maximum_correction_pwm=70, minimum_wheel_pwm=55),
         )
         self.assertGreaterEqual(right, 55)
@@ -32,7 +32,14 @@ class ContinuousPathTests(unittest.TestCase):
             Observation(lookahead_offset=.09, heading=.0),
             ContinuousMotorConfig("http://example", straight_pwm=95, sharp_turn_error=.08, sharp_turn_correction_pwm=55),
         )
-        self.assertEqual((right, left), (55, 150))
+        self.assertEqual((right, left), (0, 150))
+
+    def test_sharp_turn_can_reverse_inside_wheel_when_configured(self):
+        right, left = path_drive_pwm(
+            Observation(lookahead_offset=.25),
+            ContinuousMotorConfig("http://example", sharp_turn_inner_pwm=-60),
+        )
+        self.assertEqual((right, left), (-60, 130))
 
     def test_small_green_course_error_is_not_discarded_by_old_deadband(self):
         right, left = path_drive_pwm(

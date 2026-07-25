@@ -68,6 +68,9 @@ MINIMUM_WHEEL_PWM = 55
 # 这只依赖路线在画面中的偏差，不假设矩形、八边形或固定左右转。
 SHARP_TURN_ERROR = 0.08
 SHARP_TURN_CORRECTION_PWM = 55
+# 锐弯时内侧轮的 PWM。0 表示停止内侧轮，能显著缩小转弯半径；
+# 若场地仍不足以转弯，可谨慎改为 -40 到 -70，使内侧轮缓慢反转。
+SHARP_TURN_INNER_PWM = 0
 
 # ========== 显示 ==========
 
