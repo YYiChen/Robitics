@@ -6,6 +6,7 @@
 - `poker_dealer.io.camera.OpenCVCamera` 读取 Windows DroidCam 虚拟摄像头；
 - `OpenCvFaceIdentityAdapter` 使用 YuNet 检测和 SFace 特征模型；
 - 本实验只发布人脸框、中心偏移和置信度，不保存画面或人脸特征；
+- 5059 同时提供带框 MJPEG 预览，JPEG 编码限频并在独立线程中运行；
 - 本实验不导入机器人控制器，也不直接发送电机指令。
 
 ## 数据链路
@@ -73,7 +74,15 @@ py -3 .\pi_service\experiments\deskmate_face_position_bridge\deskmate_face_posit
 
 ```text
 http://127.0.0.1:5059/api/face/latest
+http://127.0.0.1:5059/preview_feed
 ```
+
+端口 5000 的正式控制台会从当前操作电脑的 `127.0.0.1:5059` 加载独立的
+“电脑端人脸检测”卡片。绿色框是当前用于控制判断的主脸，黄色竖线是
+`face_turn_web_bridge.py` 的中心门禁（默认 `offset_x_normalized ±0.20`），
+蓝色竖线是画面中心。状态栏同时显示 YuNet 原始检测数、可用框数和主脸偏移。
+如果用另一台电脑或手机打开 5000 页面，它的 `127.0.0.1` 不会指向运行模型的
+电脑，因此该卡片会显示离线，但不会影响树莓派相机、路线识别或电机安全逻辑。
 
 电脑终端二：
 

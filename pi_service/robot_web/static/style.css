@@ -7,5 +7,7 @@
 .single-feed-grid{grid-template-columns:minmax(0,1fr)}
 .topbar-actions{display:flex;align-items:center;gap:10px}.language-toggle{min-width:52px;background:#243b5a;font-weight:700;letter-spacing:.04em}.language-toggle:focus-visible{outline:2px solid #8ebdff;outline-offset:2px}@media(max-width:760px){.topbar-actions{width:100%;align-items:flex-start;justify-content:space-between}.language-toggle{flex:0 0 auto}}
 @media(min-width:1201px){.visual-workspace{display:grid;grid-template-rows:minmax(0,1fr) 220px auto}.feed-grid{height:100%;min-height:0;overflow:hidden}.feed-card{height:100%;align-self:stretch;grid-template-rows:auto minmax(0,1fr) auto}.feed-stage{min-height:0;aspect-ratio:auto}.cockpit-strip{height:220px;min-height:0}}
+@media(min-width:1201px){.feed-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.face-preview-card .feed-stage{background:linear-gradient(145deg,#08111c,#06090e)}
 /* Preserve every source pixel in both MJPEG and WebRTC. Empty space is letterboxed, never cropped. */
 .feed-stage>img,.feed-stage>video{display:block!important;width:auto!important;height:auto!important;max-width:100%;max-height:100%;object-fit:contain!important;object-position:center center!important}

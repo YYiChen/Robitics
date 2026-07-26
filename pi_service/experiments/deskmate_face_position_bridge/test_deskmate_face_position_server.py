@@ -5,9 +5,11 @@ import unittest
 import numpy as np
 
 from deskmate_face_position_server import (
+    DEFAULT_CENTER_DEADBAND_NORMALIZED,
     DESKMATE_FACE_CONFIG,
     DEFAULT_LOCAL_BACKEND,
     DEFAULT_SOURCE,
+    annotate_face_preview,
     camera_config,
     face_payload,
     select_primary_feature,
@@ -107,6 +109,32 @@ class DeskMateFacePositionServerTests(unittest.TestCase):
         self.assertFalse(payload["detected"])
         self.assertEqual(payload["score"], 0.0)
         self.assertIsNone(payload["offset_x_normalized"])
+
+    def test_preview_draws_face_box_and_exact_center_gate(self) -> None:
+        primary = feature((140, 70, 80, 100), 0.94, 0)
+        evidence = FaceFrameEvidence(
+            observed_at_ns=10,
+            detected_face_count=1,
+            low_quality_face_count=0,
+            features=(primary,),
+            inference_latency_ms=4.0,
+        )
+        payload = face_payload(
+            evidence,
+            frame_index=2,
+            frame_width=400,
+            frame_height=240,
+            source=DEFAULT_SOURCE,
+        )
+        image = np.zeros((240, 400, 3), dtype=np.uint8)
+        annotated = annotate_face_preview(image, evidence, payload)
+
+        self.assertEqual(annotated.shape, image.shape)
+        self.assertFalse(np.shares_memory(annotated, image))
+        self.assertGreater(np.count_nonzero(annotated), 0)
+        gate_half_width = int(400 * DEFAULT_CENTER_DEADBAND_NORMALIZED / 2)
+        self.assertGreater(np.count_nonzero(annotated[:, 200 - gate_half_width]), 0)
+        self.assertGreater(np.count_nonzero(annotated[:, 200 + gate_half_width]), 0)
 
     def test_camera_config_uses_deskmate_network_adapter_for_pi_stream(self) -> None:
         network_source = "http://100.80.46.54:5000/video_feed"

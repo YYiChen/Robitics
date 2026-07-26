@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Robitics 控制台</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=20260726-face-preview-v1">
 </head>
 <body>
 <header class="topbar">
@@ -38,6 +38,14 @@
         </div>
         <div class="feed-footer"><span id="autonomousState">视觉识别：等待中</span><button class="compact-button primary" id="autonomousToggle" type="button">M：开启自动行驶</button></div>
       </article>
+      <article class="feed-card face-preview-card" id="facePreviewCard">
+        <div class="feed-heading"><div><span class="eyebrow">电脑端 DeskMate YuNet · 只读观测</span><h2>人脸检测</h2></div><span class="feed-badge" id="facePreviewMeta">连接 5059…</span></div>
+        <div class="feed-stage">
+          <img id="facePreview" alt="电脑端人脸检测带框画面">
+          <div class="feed-unavailable" id="facePreviewUnavailable">请在打开本页的电脑启动 DeskMate 5059 人脸服务。</div>
+        </div>
+        <div class="feed-footer"><span id="faceDetectionState">人脸识别：等待中</span><span id="faceGateState">中心门禁 ±20%</span></div>
+      </article>
       <article class="feed-card hidden" id="highresCard">
         <div class="feed-heading"><div><span class="eyebrow">2 FPS · JPEG 75</span><h2>高清图片预览</h2></div><span class="feed-badge" id="highresFeedMeta">预览关闭</span><button class="compact-button primary" id="highresPreviewToggle" type="button">开启预览</button></div>
         <div class="feed-stage">
@@ -52,7 +60,7 @@
       <article class="cockpit-card"><div class="cockpit-heading"><span>实时流状态</span><strong id="dashboardFlowState">读取中…</strong></div><div class="flow-grid"><div><span>采集 / 发送</span><strong id="dashboardFps">—</strong></div><div><span>帧龄</span><strong id="dashboardFrameAge">—</strong></div><div><span>编码</span><strong id="dashboardEncode">—</strong></div><div><span>发送带宽</span><strong id="dashboardBandwidth">—</strong></div></div><small id="dashboardFlowHint">显示当前低延迟预览链路的关键参数。</small></article>
       <article class="cockpit-card motor-output-card"><div class="cockpit-heading"><span>Arduino 行驶电机实时输出</span><strong id="motorOutputState">等待 OUT 回包</strong></div><div class="motor-direction-grid" aria-label="M1 M2 行驶电机方向输出"><div class="motor-direction forward"><span>↑ 前进</span><strong id="motorForwardOutput">—</strong></div><div class="motor-direction left"><span>← 左转</span><strong id="motorLeftOutput">—</strong></div><div class="motor-direction stop"><span>● 当前 M1 / M2</span><strong id="motorRawOutput">—</strong></div><div class="motor-direction right"><span>右转 →</span><strong id="motorRightOutput">—</strong></div><div class="motor-direction reverse"><span>↓ 后退</span><strong id="motorReverseOutput">—</strong></div></div><small id="motorOutputHint">显示 Arduino 最近回报并接受的 M1（右轮）/ M2（左轮）有符号 PWM；它不是编码器测得的真实轮速。</small></article>
     </section>
-    <p class="workspace-note">左侧为原始控制画面，右侧为同一主进程的路线预判。按 <strong>M</strong> 只切换自动行驶/立即停车，识别画面持续运行；两条流均只保留最新帧，不写入树莓派磁盘。</p>
+    <p class="workspace-note">树莓派原始画面和路线预判来自 5000 主进程；人脸卡片来自当前电脑的 127.0.0.1:5059，避免把 DroidCam 人脸框错误叠到 CSI 画面。按 <strong>M</strong> 只切换自动行驶/立即停车，各识别画面持续运行且不写入磁盘。</p>
   </section>
 
   <aside class="control-rail">
@@ -123,6 +131,6 @@
   </aside>
 </main>
 <script src="/static/i18n.js"></script>
-<script src="/static/app.js?v=20260726-drive-owner-v1"></script>
+<script src="/static/app.js?v=20260726-face-preview-v1"></script>
 </body>
 </html>

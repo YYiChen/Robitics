@@ -16,6 +16,10 @@ import sys
 import threading
 import time
 from typing import Any
+from urllib.parse import urlparse
+
+import cv2
+import numpy as np
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -50,6 +54,9 @@ from poker_dealer.perception.identity import (  # noqa: E402
 # Busy"; OpenCV must read the registered local virtual camera instead.
 DEFAULT_SOURCE = "1"
 DEFAULT_LOCAL_BACKEND = "msmf"
+DEFAULT_PREVIEW_FPS = 10.0
+DEFAULT_PREVIEW_JPEG_QUALITY = 78
+DEFAULT_CENTER_DEADBAND_NORMALIZED = 0.20
 
 
 def select_primary_feature(
@@ -121,6 +128,87 @@ def face_payload(
     }
 
 
+def annotate_face_preview(
+    image: np.ndarray,
+    evidence: FaceFrameEvidence,
+    payload: dict[str, Any],
+    *,
+    deadband_normalized: float = DEFAULT_CENTER_DEADBAND_NORMALIZED,
+) -> np.ndarray:
+    """Draw usable face boxes and the exact PC bridge centre gate."""
+
+    annotated = np.asarray(image).copy()
+    height, width = annotated.shape[:2]
+    center_x = width // 2
+    gate_half_width = int(round(width * deadband_normalized / 2))
+    gate_left = max(0, center_x - gate_half_width)
+    gate_right = min(width - 1, center_x + gate_half_width)
+
+    cv2.line(annotated, (center_x, 0), (center_x, height - 1), (255, 220, 70), 2)
+    cv2.line(
+        annotated, (gate_left, 0), (gate_left, height - 1), (60, 200, 255), 2
+    )
+    cv2.line(
+        annotated, (gate_right, 0), (gate_right, height - 1), (60, 200, 255), 2
+    )
+
+    primary = select_primary_feature(evidence)
+    for feature in evidence.features:
+        x, y, box_width, box_height = feature.bbox_xywh
+        is_primary = feature is primary
+        colour = (70, 230, 90) if is_primary else (80, 180, 255)
+        thickness = 3 if is_primary else 2
+        cv2.rectangle(
+            annotated,
+            (x, y),
+            (min(width - 1, x + box_width), min(height - 1, y + box_height)),
+            colour,
+            thickness,
+        )
+        cv2.putText(
+            annotated,
+            f"{feature.detection_score:.2f}",
+            (x, max(22, y - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            colour,
+            2,
+            cv2.LINE_AA,
+        )
+
+    detected = bool(payload.get("detected"))
+    offset = payload.get("offset_x_normalized")
+    centred = (
+        detected
+        and offset is not None
+        and abs(float(offset)) <= deadband_normalized
+    )
+    state = "CENTERED" if centred else ("FACE" if detected else "NO FACE")
+    state_colour = (
+        (70, 230, 90)
+        if centred
+        else ((60, 200, 255) if detected else (70, 70, 240))
+    )
+    status = (
+        f"{state}  raw={evidence.detected_face_count} "
+        f"usable={len(evidence.features)}"
+    )
+    if offset is not None:
+        status += f"  offset={float(offset):+.3f}"
+    cv2.rectangle(annotated, (0, 0), (width - 1, 42), (12, 18, 26), -1)
+    cv2.putText(
+        annotated,
+        status,
+        (12, 29),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.65,
+        state_colour,
+        2,
+        cv2.LINE_AA,
+    )
+    return annotated
+
+
 def camera_config(
     source: str,
     *,
@@ -160,10 +248,12 @@ class DeskMateFacePositionPublisher:
         source: str,
         *,
         local_backend: str = DEFAULT_LOCAL_BACKEND,
+        preview_fps: float = DEFAULT_PREVIEW_FPS,
     ) -> None:
         self.source = source
         self.local_backend = local_backend
-        self._lock = threading.Lock()
+        self.preview_fps = preview_fps
+        self._condition = threading.Condition()
         self._latest: dict[str, Any] = {
             "time": datetime.now(timezone.utc).isoformat(),
             "source": source,
@@ -171,12 +261,40 @@ class DeskMateFacePositionPublisher:
             "detected": False,
             "error": "starting",
         }
+        self._preview_input: tuple[np.ndarray, FaceFrameEvidence, dict[str, Any]] | None = None
+        self._preview_jpeg: bytes | None = None
+        self._preview_sequence = 0
+        self._preview_started = False
 
     def snapshot(self) -> dict[str, Any]:
-        with self._lock:
+        with self._condition:
             return dict(self._latest)
 
+    def latest_preview(self) -> tuple[bytes | None, int]:
+        with self._condition:
+            return self._preview_jpeg, self._preview_sequence
+
+    def wait_for_preview(
+        self,
+        sequence: int,
+        *,
+        timeout: float = 1.0,
+    ) -> tuple[bytes | None, int]:
+        with self._condition:
+            self._condition.wait_for(
+                lambda: self._preview_sequence != sequence,
+                timeout=timeout,
+            )
+            return self._preview_jpeg, self._preview_sequence
+
     def start(self) -> None:
+        if not self._preview_started:
+            self._preview_started = True
+            threading.Thread(
+                target=self._preview_encoder,
+                daemon=True,
+                name="deskmate-face-preview-encoder",
+            ).start()
         threading.Thread(
             target=self.run,
             daemon=True,
@@ -184,7 +302,7 @@ class DeskMateFacePositionPublisher:
         ).start()
 
     def _set_error(self, error: str) -> None:
-        with self._lock:
+        with self._condition:
             self._latest = {
                 "time": datetime.now(timezone.utc).isoformat(),
                 "source": self.source,
@@ -194,10 +312,43 @@ class DeskMateFacePositionPublisher:
                 "error": error,
             }
 
+    def _queue_preview(
+        self,
+        image: np.ndarray,
+        evidence: FaceFrameEvidence,
+        payload: dict[str, Any],
+    ) -> None:
+        with self._condition:
+            self._preview_input = (image.copy(), evidence, dict(payload))
+            self._condition.notify_all()
+
+    def _preview_encoder(self) -> None:
+        while True:
+            with self._condition:
+                self._condition.wait_for(lambda: self._preview_input is not None)
+                queued = self._preview_input
+                self._preview_input = None
+            if queued is None:
+                continue
+            image, evidence, payload = queued
+            annotated = annotate_face_preview(image, evidence, payload)
+            ok, encoded = cv2.imencode(
+                ".jpg",
+                annotated,
+                [cv2.IMWRITE_JPEG_QUALITY, DEFAULT_PREVIEW_JPEG_QUALITY],
+            )
+            if not ok:
+                continue
+            with self._condition:
+                self._preview_jpeg = encoded.tobytes()
+                self._preview_sequence += 1
+                self._condition.notify_all()
+
     def run(self, *, max_frames: int | None = None) -> dict[str, Any]:
         """Run continuously, or process a bounded number of successful frames."""
 
         successful_frames = 0
+        next_preview_at = 0.0
         try:
             config = FaceIdentityConfig.from_json(DESKMATE_FACE_CONFIG)
             model = OpenCvFaceIdentityAdapter(config)
@@ -228,8 +379,22 @@ class DeskMateFacePositionPublisher:
                         source=self.source,
                         camera_reconnects=camera.network_reconnects,
                     )
-                    with self._lock:
+                    payload["detector_score_threshold"] = float(
+                        config.detector_options["score_threshold"]
+                    )
+                    payload["minimum_face_size_px"] = int(
+                        config.detector_options["minimum_face_size_px"]
+                    )
+                    with self._condition:
                         self._latest = payload
+                    now = time.monotonic()
+                    if (
+                        self._preview_started
+                        and self.preview_fps > 0
+                        and now >= next_preview_at
+                    ):
+                        self._queue_preview(frame.image, evidence, payload)
+                        next_preview_at = now + 1.0 / self.preview_fps
         except Exception as exc:
             self._set_error(f"publisher_error:{type(exc).__name__}:{exc}")
         return self.snapshot()
@@ -238,7 +403,43 @@ class DeskMateFacePositionPublisher:
 def make_handler(publisher: DeskMateFacePositionPublisher):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
-            if self.path not in {"/health", "/api/face/latest"}:
+            path = urlparse(self.path).path
+            if path == "/preview_feed":
+                self.send_response(200)
+                self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+                self.send_header(
+                    "Content-Type", "multipart/x-mixed-replace; boundary=frame"
+                )
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                sequence = 0
+                try:
+                    while True:
+                        jpeg, sequence = publisher.wait_for_preview(sequence)
+                        if jpeg is None:
+                            continue
+                        self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n")
+                        self.wfile.write(
+                            f"Content-Length: {len(jpeg)}\r\n\r\n".encode("ascii")
+                        )
+                        self.wfile.write(jpeg)
+                        self.wfile.write(b"\r\n")
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+            if path == "/preview.jpg":
+                jpeg, _sequence = publisher.latest_preview()
+                if jpeg is None:
+                    self.send_error(503, "preview frame is not ready")
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(jpeg)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(jpeg)
+                return
+            if path not in {"/health", "/api/face/latest"}:
                 self.send_error(404)
                 return
             body = json.dumps(
@@ -271,6 +472,12 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5059)
     parser.add_argument(
+        "--preview-fps",
+        type=float,
+        default=DEFAULT_PREVIEW_FPS,
+        help="maximum annotated preview FPS; inference remains unthrottled",
+    )
+    parser.add_argument(
         "--probe-frames",
         type=int,
         default=0,
@@ -279,10 +486,13 @@ def main() -> None:
     args = parser.parse_args()
     if args.probe_frames < 0:
         parser.error("--probe-frames must be non-negative")
+    if not 0 < args.preview_fps <= 30:
+        parser.error("--preview-fps must be in (0, 30]")
 
     publisher = DeskMateFacePositionPublisher(
         args.source,
         local_backend=args.backend,
+        preview_fps=args.preview_fps,
     )
     if args.probe_frames:
         result = publisher.run(max_frames=args.probe_frames)
@@ -291,8 +501,10 @@ def main() -> None:
 
     publisher.start()
     server = ThreadingHTTPServer((args.host, args.port), make_handler(publisher))
+    server.daemon_threads = True
     print(
         f"DeskMate face JSON: http://{args.host}:{args.port}/api/face/latest\n"
+        f"Annotated preview: http://{args.host}:{args.port}/preview_feed\n"
         f"source={args.source}\n"
         "PC inference only; no robot, motor, Arduino, or route-control imports."
     )

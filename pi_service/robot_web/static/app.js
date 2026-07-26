@@ -1,5 +1,7 @@
 const $ = selector => document.querySelector(selector);
 const video = $("#video"), webrtcVideo = $("#webrtcVideo"), highresVideo = $("#highresVideo"), save = $("#save");
+const facePreview = $("#facePreview");
+const FACE_PREVIEW_BASE = "http://127.0.0.1:5059";
 const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:false});
 let folder, aborter, count = 0, profiles = {}, configLoaded = false, keysSending = false, keysQueued = false, stopQueued = false;
 let faceTurnSending = false, faceTurnInFlightCommand = null, queuedFaceTurnCommand = null;
@@ -18,6 +20,7 @@ const keyboardKeys = {w:"w", a:"a", s:"s", d:"d", x:"x", c:"c", ArrowUp:"w", Arr
 const heldKeys = new Set();
 const heldSteeringKeys = new Set();
 let autonomousToggleBusy = false;
+let facePreviewRetryTimer = null;
 
 async function toggleAutonomousDrive() {
   if (autonomousToggleBusy) return;
@@ -263,6 +266,49 @@ highresVideo.addEventListener("error", () => {
 highresVideo.addEventListener("load", () => {
   $("#highresCard").classList.remove("feed-error");
 });
+function connectFacePreview() {
+  clearTimeout(facePreviewRetryTimer);
+  facePreview.src = `${FACE_PREVIEW_BASE}/preview_feed?ts=${Date.now()}`;
+}
+facePreview.addEventListener("load", () => {
+  $("#facePreviewCard").classList.remove("feed-error");
+  $("#facePreviewUnavailable").classList.add("hidden");
+});
+facePreview.addEventListener("error", () => {
+  $("#facePreviewCard").classList.add("feed-error");
+  $("#facePreviewUnavailable").classList.remove("hidden");
+  facePreviewRetryTimer = setTimeout(connectFacePreview, 1500);
+});
+async function refreshFaceDetectionStatus() {
+  try {
+    const response = await requestJson(
+      `${FACE_PREVIEW_BASE}/api/face/latest?ts=${Date.now()}`,
+      {cache:"no-store", mode:"cors"},
+      700,
+    );
+    if (!response.ok) throw Error(`HTTP ${response.status}`);
+    const face = await response.json();
+    if (face.error) throw Error(face.error);
+    const capturedAt = Date.parse(face.time), ageMs = Number.isFinite(capturedAt) ? Date.now() - capturedAt : null;
+    const fresh = ageMs != null && ageMs >= 0 && ageMs <= 450;
+    const offset = Number(face.offset_x_normalized);
+    const centred = face.detected === true && Number.isFinite(offset) && Math.abs(offset) <= .20;
+    const rawCount = Number(face.detected_face_count) || 0;
+    const usableCount = Number(face.usable_face_count) || 0;
+    $("#facePreviewMeta").textContent = `${face.model ? "DeskMate YuNet" : "旧检测器"} · ${fresh ? "实时" : `${fixed(ageMs)} ms 前`}`;
+    $("#faceDetectionState").textContent = face.detected
+      ? `已识别 · 置信度 ${fixed(face.score, 2)} · 原始 ${rawCount} / 可用 ${usableCount}`
+      : `未识别 · 原始 ${rawCount} / 可用 ${usableCount} · 阈值 ${fixed(face.detector_score_threshold, 2)}`;
+    $("#faceGateState").textContent = face.detected && Number.isFinite(offset)
+      ? `${centred ? "已进入" : "未进入"}中心门禁 · 偏移 ${offset >= 0 ? "+" : ""}${fixed(offset, 3)}`
+      : "中心门禁 ±20%";
+  } catch (error) {
+    $("#facePreviewMeta").textContent = "电脑 5059 离线";
+    $("#faceDetectionState").textContent = `人脸识别不可用：${error.message}`;
+    $("#faceGateState").textContent = "不影响 CSI 与路线识别";
+    $("#facePreviewUnavailable").classList.remove("hidden");
+  }
+}
 for (const tab of document.querySelectorAll(".section-tab")) {
   tab.addEventListener("click", () => {
     const panelId = tab.dataset.panel;
@@ -947,4 +993,6 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
 }
 addEventListener("beforeunload", stopWebrtc);
 requestAnimationFrame(animateServoIndicator);
+connectFacePreview();
+refreshFaceDetectionStatus(); setInterval(refreshFaceDetectionStatus, 500);
 refreshStatus(); setInterval(refreshStatus, 200);
