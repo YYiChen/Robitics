@@ -48,10 +48,10 @@ def main() -> None:
     parser.add_argument("--pi-url", default="http://100.80.46.54:5000")
     parser.add_argument("--heartbeat-seconds", type=float, default=.18)
     parser.add_argument("--minimum-score", type=float, default=.5)
-    # Keep the visual stop zone narrow.  At 640 px, ±4% is about ±13 px;
-    # ±8% was wide enough to classify a visibly off-centre face as aligned
-    # and cancel a newly started J/L turn after its first motor update.
-    parser.add_argument("--deadband-normalized", type=float, default=.04)
+    # Stop once the face centre is within ±10% of the half-frame width.
+    # This is about ±64 px for the current 1280 px DroidCam stream and avoids
+    # stepping straight across the centre between consecutive detections.
+    parser.add_argument("--deadband-normalized", type=float, default=.10)
     parser.add_argument("--max-age-ms", type=int, default=450)
     args = parser.parse_args()
     log_dir = Path(__file__).with_name("runtime_logs"); log_dir.mkdir(exist_ok=True)
