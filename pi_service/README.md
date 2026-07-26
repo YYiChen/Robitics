@@ -24,6 +24,22 @@ vision paused; the operator uses the port-5000 console to arm or stop motor
 control. Source support, passing tests, and successful HTTP/serial replies must
 not be reported as successful physical motion without a real-car check.
 
+The end-line route also supports checkpointed return:
+
+1. press `M`, then `N` to start forward white-line following and recording;
+2. every Arduino `DEAL:DONE` reply closes a route segment and creates a
+   checkpoint;
+3. press `R` to stop, perform a pulsed 180-degree turn, reacquire the white
+   line, and traverse the recorded segments in reverse;
+4. return motion remains vision-primary. Reversed wheel history contributes at
+   most 50% (25% by default), and consecutive white-line loss stops the car.
+
+Only M1/M2 samples, timing, line confidence, and integrated wheel-speed
+estimates are recorded. M3/M4 commands are never replayed. Runtime evidence is
+written to ignored `logs/end_line_return_route.json`. The file is diagnostic
+evidence, not a localization guarantee; physical-car validation is required
+before relying on return behavior.
+
 Normal Pi startup:
 
 ```bash
@@ -70,7 +86,7 @@ The formal service is split into independently debuggable packages:
 | `media/` | Camera profiles, settings persistence, colour correction, and transport metrics |
 | `webrtc_stream.py` | WebRTC transport integration |
 | `routes/common.py` | Shared motor run gate and latest-frame preview publisher |
-| `routes/end_line/` | Current white-line/end-line perception, profiles, and tracker |
+| `routes/end_line/` | Current white-line/end-line perception, profiles, checkpoint recorder, and tracker |
 | `routes/scanline/` | Scanline models, config, control, perception, planning, logging, and variants |
 | `routes/pc_adaptor/` | PC event protocol plus Pi-local fast perception and motor tracker |
 | `routes/generic/` | Generic continuous-path planner, control, marker count, and tracker |
@@ -97,6 +113,7 @@ Use the smallest module matching the symptom:
 | HTTP request/response | matching file in `api/` | `test_api_structure.py` |
 | Current terminal detection | `routes/end_line/perception.py` | end-line experiment tests |
 | Current turn state/thread loop | `routes/end_line/tracker.py` | adaptor tuning tests |
+| Checkpointed return recording/replay | `routes/end_line/return_route.py` | `test_return_route.py` |
 | Scanline thresholds | `routes/scanline/config.py` | `test_scanline_modules.py` |
 | Scanline wheel correction | `routes/scanline/control.py` | `test_scanline_modules.py` |
 | Scanline evidence/state types | `routes/scanline/models.py` | scanline route tests |

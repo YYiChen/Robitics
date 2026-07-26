@@ -236,6 +236,34 @@ class ControllerPersistenceTests(unittest.TestCase):
             self.assertEqual(commands, ["SV,42", "SVF,90"])
             with self.assertRaises(ValueError): controller.set_servo_angle(181)
 
+    def test_empty_browser_heartbeat_does_not_cancel_autonomous_drive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = RobotController("unused", Path(directory) / "drive_config.json")
+            controller.set_direct_drive(80, 90)
+
+            action = controller.update_keys({"keys": [], "steering": 0})
+
+            self.assertEqual(action, "PID")
+            self.assertEqual(controller.direct_drive, (80, 90))
+            self.assertEqual(controller.direct_drive_owner, "autonomous")
+            controller.update_keys({"keys": ["w"], "steering": 0})
+            self.assertIsNone(controller.direct_drive)
+            self.assertIsNone(controller.direct_drive_owner)
+            self.assertEqual(controller.action, "F")
+
+    def test_deal_done_notifies_checkpoint_listeners(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = RobotController("unused", Path(directory) / "drive_config.json")
+            events: list[str] = []
+            listener = events.append
+            controller.add_card_event_listener(listener)
+
+            controller._parse("OK:DEAL,200,1000")
+            controller._parse("DEAL:DONE")
+
+            self.assertEqual(events, ["DEAL:DONE"])
+            controller.remove_card_event_listener(listener)
+
 
 if __name__ == "__main__":
     unittest.main()

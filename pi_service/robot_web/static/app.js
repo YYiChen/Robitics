@@ -41,7 +41,10 @@ function updateAutonomousUi(autonomous) {
   const endLine = autonomous.mode === "end_line_turn_adaptor";
   const scanlineLabel = autonomous.mode === "scanline_i_four_endpoint_green_white" ? "工字形四端点验证" : (autonomous.mode === "scanline_i_green_white" ? "绿地白线 I 型" : "扫描线 I 型");
   const button = $("#autonomousToggle"), unavailable = $("#routePreviewUnavailable"), image = $("#routePreview");
+  const returnButton = $("#returnRouteButton");
   button.disabled = !available;
+  returnButton.classList.toggle("hidden", !endLine);
+  returnButton.disabled = !available || !endLine;
   button.textContent = available ? (enabled ? "M：暂停并停车" : "M：开启自动行驶") : "路线预判未开启";
   $("#autonomousState").textContent = available ? `${scanlineI ? scanlineLabel : "视觉"}：${autonomous.state || "等待"} · ${autonomous.detail || "—"}` : "视觉识别：本次服务未开启";
   $("#routePreviewMeta").textContent = available ? `${enabled ? "行驶中" : "已暂停"} · ${autonomous.confidence == null ? "—" : `置信度 ${fixed(autonomous.confidence)}`}` : "未开启";
@@ -68,6 +71,7 @@ function updateAutonomousUi(autonomous) {
   $("#applyRouteTuning").textContent = scanlineI ? "实时应用并保存 I 型参数" : (endLine ? "实时应用并保存单白线参数" : "实时应用并保存路线参数");
 }
 $("#autonomousToggle").onclick = toggleAutonomousDrive;
+$("#returnRouteButton").onclick = returnAlongRecordedRoute;
 $("#applyRouteTuning").onclick = async () => {
   const payload = {};
   const scanlineI = $("#scanlineRouteTuning").classList.contains("hidden") === false;
@@ -492,6 +496,16 @@ async function followToEnd() {
     note("N 已触发：沿白线行驶至尽头，到达后自动回到手动模式等待 Q/E 转向。");
   } catch (error) { note(error.message); }
 }
+async function returnAlongRecordedRoute() {
+  releaseKeys();
+  try {
+    const response = await requestJson("/api/autonomous/return", {method:"POST"}, 1200);
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw Error(data.error || "R 分段视觉返程失败");
+    updateAutonomousUi(data.autonomous || {});
+    note("R 已触发：车辆先掉头并重新捕获白线，再以摄像头为主、记录 PWM 为辅助逆序返程。");
+  } catch (error) { note(error.message); }
+}
 function timedMotorSettings(prefix) {
   const power = Number($(`#${prefix}Pwm`).value);
   const direction = Number($(`#${prefix}Direction`).value);
@@ -584,6 +598,7 @@ addEventListener("keydown", event => { if (event.repeat) return;
   if (event.code === "Space") { event.preventDefault(); releaseKeys(); return; }
   if (event.key?.toLowerCase() === "z") { event.preventDefault(); centerServo(); return; }
   if (!editing(event) && (event.code === "KeyN" || event.key?.toLowerCase() === "n")) { event.preventDefault(); followToEnd(); return; }
+  if (!editing(event) && (event.code === "KeyR" || event.key?.toLowerCase() === "r")) { event.preventDefault(); returnAlongRecordedRoute(); return; }
   if (!editing(event) && (event.code === "KeyJ" || event.key?.toLowerCase() === "j")) { event.preventDefault(); faceVisionTurn("START_LEFT"); return; }
   if (!editing(event) && (event.code === "KeyL" || event.key?.toLowerCase() === "l")) { event.preventDefault(); faceVisionTurn("START_RIGHT"); return; }
   const turnKey = event.key?.toLowerCase();

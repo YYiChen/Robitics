@@ -23,7 +23,7 @@ class ApiStructureTests(unittest.TestCase):
             "/api/vision-adaptor/event", "/api/vision-adaptor/preview",
             "/api/autonomous/toggle", "/api/autonomous/tuning",
             "/api/autonomous/manual-turn", "/api/autonomous/face-turn",
-            "/api/autonomous/follow-to-end",
+            "/api/autonomous/follow-to-end", "/api/autonomous/return",
         }
         self.assertEqual(set(found), expected)
         self.assertEqual(len(found), len(set(found)))

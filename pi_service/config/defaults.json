@@ -73,7 +73,10 @@
       "red_alignment_min_angle": 75.0,
       "red_alignment_confirm_frames": 2,
       "turn_90_max_steps": 4,
-      "turn_180_max_steps": 8
+      "turn_180_max_steps": 8,
+      "return_replay_weight": 0.25,
+      "return_line_lost_confirm_frames": 3,
+      "return_turn_pause_seconds": 0.2
     }
   }
 }
