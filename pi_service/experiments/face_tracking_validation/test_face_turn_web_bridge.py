@@ -1,10 +1,13 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from face_turn_web_bridge import is_fresh_and_centred
+from face_turn_web_bridge import DEFAULT_FACE_DEADBAND_NORMALIZED, is_fresh_and_centred
 
 
 class FaceTurnWebBridgeTests(unittest.TestCase):
+    def test_default_stop_zone_is_twenty_percent(self):
+        self.assertEqual(DEFAULT_FACE_DEADBAND_NORMALIZED, .20)
+
     def test_only_fresh_confident_centred_face_stops_turn(self):
         now = datetime.now(timezone.utc).isoformat()
         face = {"detected": True, "score": .9, "offset_x_normalized": .06, "time": now}

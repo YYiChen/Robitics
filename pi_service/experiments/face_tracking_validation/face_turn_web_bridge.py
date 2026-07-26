@@ -13,6 +13,8 @@ from pathlib import Path
 import time
 from urllib.request import Request, urlopen
 
+DEFAULT_FACE_DEADBAND_NORMALIZED = .20
+
 
 def fetch_json(url: str, timeout: float = .4) -> dict:
     with urlopen(url, timeout=timeout) as response:
@@ -48,10 +50,10 @@ def main() -> None:
     parser.add_argument("--pi-url", default="http://100.80.46.54:5000")
     parser.add_argument("--heartbeat-seconds", type=float, default=.18)
     parser.add_argument("--minimum-score", type=float, default=.5)
-    # Stop once the face centre is within ±10% of the half-frame width.
-    # This is about ±64 px for the current 1280 px DroidCam stream and avoids
-    # stepping straight across the centre between consecutive detections.
-    parser.add_argument("--deadband-normalized", type=float, default=.10)
+    # Stop once the face centre is within ±20% of the half-frame width.
+    # This is about ±128 px for the current 1280 px DroidCam stream and covers
+    # the observed near-centre position before the next pulse overshoots it.
+    parser.add_argument("--deadband-normalized", type=float, default=DEFAULT_FACE_DEADBAND_NORMALIZED)
     parser.add_argument("--max-age-ms", type=int, default=450)
     args = parser.parse_args()
     log_dir = Path(__file__).with_name("runtime_logs"); log_dir.mkdir(exist_ok=True)
