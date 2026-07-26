@@ -44,8 +44,9 @@ TUNING_RULES = {
     "line_lost_confirm_frames": (int, 1, 20),
     "red_direction_memory_frames": (int, 1, 300),
     "brake_hold_seconds": (float, 0.0, 3.0),
-    "turn_pulse_pwm": (int, 0, 255),
+    "turn_90_pwm": (int, 0, 255),
     "turn_90_step_seconds": (float, .05, 20.0),
+    "turn_180_pwm": (int, 0, 255),
     "turn_180_step_seconds": (float, .05, 20.0),
     "turn_interstep_pause_seconds": (float, 0.0, 10.0),
     "red_alignment_min_angle": (float, 45.0, 90.0),
@@ -65,7 +66,7 @@ FACE_TURN_HEARTBEAT_SECONDS = 3.0
 # J/L is an operator-triggered, camera-stopped pivot.  It needs enough torque
 # to overcome the vehicle's static wheel friction, independently of the short
 # duration used by the Q/E preset turn.
-TURN_PULSE_PWM_DEFAULT = 255
+FACE_TURN_PWM = 255
 FACE_TURN_PULSE_SECONDS = .20
 FACE_TURN_COOLDOWN_SECONDS = 2.0
 FACE_TURN_MAX_SECONDS = 15.0
@@ -101,17 +102,14 @@ class EndLineTurnAdaptorRouteTracker:
          self._line_turn_center_deadband_normalized,
          self._return_replay_weight,
          self._return_line_lost_confirm_frames,
-         self._return_turn_pause_seconds,
-         self._turn_pulse_pwm) = self._load_tuning()
+         self._return_turn_pause_seconds) = self._load_tuning()
         if self.config_store is not None:
             stored = self._read_tuning_data()
-            self._turn_90 = TurnProfile(self._turn_pulse_pwm, float(stored.get("turn_90_step_seconds", 1.25)))
-            self._turn_180 = TurnProfile(self._turn_pulse_pwm, float(stored.get("turn_180_step_seconds", 1.25)))
+            self._turn_90 = TurnProfile(int(stored.get("turn_90_pwm", 200)), float(stored.get("turn_90_step_seconds", 1.25)))
+            self._turn_180 = TurnProfile(int(stored.get("turn_180_pwm", 200)), float(stored.get("turn_180_step_seconds", 1.25)))
         else:
-            legacy_90 = load_turn_profile(TURN_90_PATH, TurnProfile(self._turn_pulse_pwm, 1.25), steps=2)
-            legacy_180 = load_turn_profile(TURN_180_PATH, TurnProfile(self._turn_pulse_pwm, 1.25), steps=4)
-            self._turn_90 = TurnProfile(self._turn_pulse_pwm, legacy_90.step_seconds)
-            self._turn_180 = TurnProfile(self._turn_pulse_pwm, legacy_180.step_seconds)
+            self._turn_90 = load_turn_profile(TURN_90_PATH, TurnProfile(200, 1.25), steps=2)
+            self._turn_180 = load_turn_profile(TURN_180_PATH, TurnProfile(200, 1.25), steps=4)
         self._planner = EndLineStopPlanner(self._line_config)
         self._red_detector = RedEndBandDetector(self._line_config)
         self._last_red_side, self._last_red_seen_frame = None, -10_000
@@ -283,16 +281,11 @@ class EndLineTurnAdaptorRouteTracker:
         with self._tuning_lock:
             if self.config_store is not None:
                 stored = self._read_tuning_data()
-                self._turn_pulse_pwm = int(stored.get("turn_pulse_pwm", self._turn_pulse_pwm))
-                self._turn_90 = TurnProfile(self._turn_pulse_pwm, float(stored.get("turn_90_step_seconds", self._turn_90.step_seconds)))
-                self._turn_180 = TurnProfile(self._turn_pulse_pwm, float(stored.get("turn_180_step_seconds", self._turn_180.step_seconds)))
+                self._turn_90 = TurnProfile(int(stored.get("turn_90_pwm", self._turn_90.pwm)), float(stored.get("turn_90_step_seconds", self._turn_90.step_seconds)))
+                self._turn_180 = TurnProfile(int(stored.get("turn_180_pwm", self._turn_180.pwm)), float(stored.get("turn_180_step_seconds", self._turn_180.step_seconds)))
             else:
-                stored = self._read_tuning_data()
-                self._turn_pulse_pwm = int(stored.get("turn_pulse_pwm", self._turn_pulse_pwm))
-                legacy_90 = load_turn_profile(TURN_90_PATH, self._turn_90, steps=2)
-                legacy_180 = load_turn_profile(TURN_180_PATH, self._turn_180, steps=4)
-                self._turn_90 = TurnProfile(self._turn_pulse_pwm, legacy_90.step_seconds)
-                self._turn_180 = TurnProfile(self._turn_pulse_pwm, legacy_180.step_seconds)
+                self._turn_90 = load_turn_profile(TURN_90_PATH, self._turn_90, steps=2)
+                self._turn_180 = load_turn_profile(TURN_180_PATH, self._turn_180, steps=4)
             commands = {"LEFT_90": ("LEFT", 90, self._turn_90, self._turn_90_max_steps), "RIGHT_90": ("RIGHT", 90, self._turn_90, self._turn_90_max_steps), "LEFT_180": ("LEFT", 180, self._turn_180, self._turn_180_max_steps), "RIGHT_180": ("RIGHT", 180, self._turn_180, self._turn_180_max_steps)}
         try:
             side, degrees, profile, steps = commands[str(command).upper()]
@@ -524,10 +517,9 @@ class EndLineTurnAdaptorRouteTracker:
                 "green_saturation_min": self._fast_config.green_saturation_min, "green_dilate_radius_px": self._fast_config.green_dilate_radius_px,
                 "green_support_inner_px": self._fast_config.green_support_inner_px, "green_support_outer_px": self._fast_config.green_support_outer_px,
                 "green_support_min_ratio": self._fast_config.green_support_min_ratio,
-                "turn_pulse_pwm": self._turn_pulse_pwm,
-                "turn_90_step_seconds": self._turn_90.step_seconds,
-                "turn_180_step_seconds": self._turn_180.step_seconds,
-                "face_turn_pwm": self._turn_pulse_pwm, "face_turn_pulse_seconds": self._vision_turn_pulse_seconds,
+                "turn_90_pwm": self._turn_90.pwm, "turn_90_step_seconds": self._turn_90.step_seconds,
+                "turn_180_pwm": self._turn_180.pwm, "turn_180_step_seconds": self._turn_180.step_seconds,
+                "face_turn_pwm": FACE_TURN_PWM, "face_turn_pulse_seconds": self._vision_turn_pulse_seconds,
                 "face_turn_cooldown_seconds": self._vision_turn_cooldown_seconds,
                 "face_turn_heartbeat_seconds": FACE_TURN_HEARTBEAT_SECONDS,
                 "face_turn_max_seconds": self._vision_turn_max_seconds,
@@ -596,7 +588,6 @@ class EndLineTurnAdaptorRouteTracker:
             "turn_interstep_pause_seconds": 2.0,
             "red_alignment_min_angle": 75.0, "red_alignment_confirm_frames": 2,
             "turn_90_max_steps": 4, "turn_180_max_steps": 8,
-            "turn_pulse_pwm": TURN_PULSE_PWM_DEFAULT,
             "face_turn_pulse_seconds": FACE_TURN_PULSE_SECONDS,
             "face_turn_cooldown_seconds": FACE_TURN_COOLDOWN_SECONDS,
             "face_turn_max_seconds": FACE_TURN_MAX_SECONDS,
@@ -628,8 +619,7 @@ class EndLineTurnAdaptorRouteTracker:
                 values["face_turn_line_center_deadband_normalized"],
                 values["return_replay_weight"],
                 values["return_line_lost_confirm_frames"],
-                values["return_turn_pause_seconds"],
-                values["turn_pulse_pwm"])
+                values["return_turn_pause_seconds"])
 
     def _read_tuning_data(self) -> dict:
         if self.config_store is not None:
@@ -667,8 +657,8 @@ class EndLineTurnAdaptorRouteTracker:
         if current["green_support_inner_px"] >= current["green_support_outer_px"]:
             raise ValueError("绿布双侧内侧距离必须小于外侧距离")
         process_fps, straight_pwm, fast_config, line_config = self._configs_from_values(current)
-        turn_90 = TurnProfile(current["turn_pulse_pwm"], current["turn_90_step_seconds"])
-        turn_180 = TurnProfile(current["turn_pulse_pwm"], current["turn_180_step_seconds"])
+        turn_90 = TurnProfile(current["turn_90_pwm"], current["turn_90_step_seconds"])
+        turn_180 = TurnProfile(current["turn_180_pwm"], current["turn_180_step_seconds"])
         if self.config_store is not None:
             self.config_store.write_section("routes.end_line", current)
         else:
@@ -692,7 +682,6 @@ class EndLineTurnAdaptorRouteTracker:
             self._vision_turn_max_seconds = current["face_turn_max_seconds"]
             self._line_turn_center_confirm_frames = current["face_turn_line_center_confirm_frames"]
             self._line_turn_center_deadband_normalized = current["face_turn_line_center_deadband_normalized"]
-            self._turn_pulse_pwm = current["turn_pulse_pwm"]
             self._return_replay_weight = current["return_replay_weight"]
             self._return_line_lost_confirm_frames = current["return_line_lost_confirm_frames"]
             self._return_turn_pause_seconds = current["return_turn_pause_seconds"]
@@ -862,7 +851,7 @@ class EndLineTurnAdaptorRouteTracker:
                             duration = self._vision_turn_pulse_seconds if self._face_turn_pulse_active else self._vision_turn_cooldown_seconds
                             self._face_turn_phase_until = now + duration
                         if self._face_turn_pulse_active:
-                            face_pwm = self._turn_pulse_pwm
+                            face_pwm = FACE_TURN_PWM
                             commanded = (face_pwm, -face_pwm) if self._face_turn_side == "LEFT" else (-face_pwm, face_pwm)
                             self.controller.set_direct_drive(*commanded); self._motor_active = True
                             target_name = "FACE" if face_turn_active else "LINE"

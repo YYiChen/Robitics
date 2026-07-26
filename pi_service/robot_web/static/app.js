@@ -62,6 +62,7 @@ function updateAutonomousUi(autonomous) {
   $("#scanlineRouteTuning").classList.toggle("hidden", !scanlineI);
   $("#endLineRouteTuning").classList.toggle("hidden", !endLine);
   $("#endLineTurnProfiles").classList.toggle("hidden", !endLine);
+  $("#endLineSeparatePwm").classList.toggle("hidden", !endLine);
   $("#endLineGreenGate").classList.toggle("hidden", !endLine);
   $("#genericRouteTuning").classList.toggle("hidden", scanlineI || endLine);
   $("#genericRouteTuningNote").classList.toggle("hidden", scanlineI || endLine);

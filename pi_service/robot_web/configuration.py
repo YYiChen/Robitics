@@ -144,14 +144,15 @@ def migrate_formal_legacy_config(store: UnifiedConfigStore) -> None:
     turn_90 = read_legacy_json(experiment / "turn_90.json")
     turn_180 = read_legacy_json(experiment / "turn_180.json")
     if turn_90:
-        route["turn_90_step_seconds"] = turn_90.get("step_seconds")
+        route.update({
+            "turn_90_pwm": turn_90.get("pwm"),
+            "turn_90_step_seconds": turn_90.get("step_seconds"),
+        })
     if turn_180:
-        route["turn_180_step_seconds"] = turn_180.get("step_seconds")
-    legacy_turn_pwm = turn_90.get("pwm") if turn_90 else None
-    if legacy_turn_pwm is None and turn_180:
-        legacy_turn_pwm = turn_180.get("pwm")
-    if legacy_turn_pwm is not None:
-        route.setdefault("turn_pulse_pwm", legacy_turn_pwm)
+        route.update({
+            "turn_180_pwm": turn_180.get("pwm"),
+            "turn_180_step_seconds": turn_180.get("step_seconds"),
+        })
     store.migrate_section(
         "routes.end_line",
         {key: value for key, value in route.items() if value is not None},
