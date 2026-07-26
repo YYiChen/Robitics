@@ -4,12 +4,13 @@ from __future__ import annotations
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import json
+import numpy as np
 from pathlib import Path
 import threading
 import time
 
 from .line_following import FastLineConfig, analyse_fast_line, pwm_for_line
-from .perception import EndLineConfig, EndLineStopPlanner, RedEndBandDetector
+from .perception import EndLineConfig, EndLineStopPlanner
 from .roundtrip import LandmarkTarget, RoundtripPhase, TwoFaceRoundtripPlanner
 from .turn_profiles import TurnProfile, load_turn_profile, save_turn_profile
 
@@ -103,12 +104,13 @@ class EndLineTurnAdaptorRouteTracker:
             self._turn_90 = load_turn_profile(TURN_90_PATH, TurnProfile(200, 1.25), steps=2)
             self._turn_180 = load_turn_profile(TURN_180_PATH, TurnProfile(200, 1.25), steps=4)
         self._planner = EndLineStopPlanner(self._line_config)
-        self._red_detector = RedEndBandDetector(self._line_config)
-        self._last_red_side, self._last_red_seen_frame = None, -10_000
         self._motion_phase, self._action_until, self._pending_turn_side = "FOLLOW", 0.0, None
         self._manual_degrees, self._manual_profile = None, None
         self._manual_max_steps, self._manual_steps_started = 0, 0
-        self._red_alignment_streak = 0
+        # Green mask cache: recompute every N frames, reuse for the rest
+        self._cached_green_mask: np.ndarray | None = None
+        self._cached_course_mask: np.ndarray | None = None
+        self._green_mask_frame_interval: int = 4
         self._face_turn_side, self._face_turn_deadline = None, 0.0
         self._face_turn_started = self._face_turn_phase_until = 0.0
         self._face_turn_pulse_active = False
@@ -164,9 +166,8 @@ class EndLineTurnAdaptorRouteTracker:
             self._stop_motor()
             with self._tuning_lock:
                 self._planner.reset()
-            self._last_red_side, self._last_red_seen_frame = None, -10_000
             self._motion_phase, self._action_until, self._pending_turn_side = "FOLLOW", 0.0, None
-            self._manual_max_steps, self._manual_steps_started, self._red_alignment_streak = 0, 0, 0
+            self._manual_max_steps, self._manual_steps_started = 0, 0
             self._face_turn_side, self._face_turn_deadline = None, 0.0
             self._face_turn_started = self._face_turn_phase_until = 0.0
             self._face_turn_pulse_active = False
@@ -193,7 +194,6 @@ class EndLineTurnAdaptorRouteTracker:
             raise ValueError("当前已有转向动作，请等待其完成或按 M 停止")
         self._manual_only = False
         self._planner.reset()
-        self._last_red_side, self._last_red_seen_frame = None, -10_000
         self._motion_phase, self._action_until, self._pending_turn_side = "FOLLOW", 0.0, None
         self._set_status(state="FOLLOWING_TO_END", detail="N 已触发，沿白线行驶至尽头")
         return self.status_dict()
@@ -483,7 +483,7 @@ class EndLineTurnAdaptorRouteTracker:
 
     def _load_tuning(self) -> tuple:
         values = {
-            "process_fps": 20.0, "straight_pwm": 85,
+            "process_fps": 10.0, "straight_pwm": 85,
             "correction_deadband": FastLineConfig().deadband, "correction_gain": FastLineConfig().correction_gain,
             "minimum_correction_pwm": FastLineConfig().min_correction_pwm, "maximum_correction_pwm": FastLineConfig().max_correction_pwm,
             "green_hue_min": FastLineConfig().green_hue_min, "green_hue_max": FastLineConfig().green_hue_max,
@@ -628,22 +628,24 @@ class EndLineTurnAdaptorRouteTracker:
                 if image is None:
                     continue
                 with self._tuning_lock:
-                    fast_config, detector, planner, straight_pwm = self._fast_config, self._red_detector, self._planner, self._straight_pwm
-                    line_analysis = analyse_fast_line(image, self._last_center_x, fast_config)
+                    fast_config, planner, straight_pwm = self._fast_config, self._planner, self._straight_pwm
+                    # Green mask caching: recompute only every N frames
+                    use_cache = (self._cached_green_mask is not None
+                                 and self._cached_course_mask is not None
+                                 and frame_index % self._green_mask_frame_interval != 0)
+                    line_analysis = analyse_fast_line(
+                        image, self._last_center_x, fast_config,
+                        cached_course_mask=self._cached_course_mask if use_cache else None,
+                    )
+                    if not use_cache:
+                        self._cached_green_mask = line_analysis.green_mask.copy()
+                        self._cached_course_mask = line_analysis.course_mask.copy()
                     result = line_analysis.result
-                    red = detector.detect(image)
-                    decision = planner.step(line_valid=result.valid, red_detected=red.detected)
+                    decision = planner.step(line_valid=result.valid)
                 if result.center_x is not None:
                     self._last_center_x = result.center_x
-                # Red does not cause braking or turning.  It only records the
-                # lateral side of its centroid relative to the white stem.
-                reference_x = result.center_x if result.center_x is not None else self._last_center_x
-                if red.detected and red.center_x is not None and reference_x is not None:
-                    self._last_red_side = "LEFT" if red.center_x < reference_x else "RIGHT"
-                    self._last_red_seen_frame = frame_index
                 state, motor, commanded, detail = decision.state.value, "PAUSED", None, decision.reason
                 if self.gate.enabled():
-                    recent_red = self._last_red_side is not None and frame_index - self._last_red_seen_frame <= self._line_config.red_direction_memory_frames
                     roundtrip_hold_active = self._motion_phase == "ROUNDTRIP_HOLD"
                     if roundtrip_hold_active and now >= self._roundtrip_hold_until:
                         instruction = self._roundtrip_pending_turn
@@ -781,25 +783,9 @@ class EndLineTurnAdaptorRouteTracker:
                         state, motor = "TURN_COMPLETE", "STOP_90_COMPLETE"
                     elif decision.stop:
                         self._stop_motor()
-                        if self._roundtrip.phase in {RoundtripPhase.FOLLOW_OUTBOUND, RoundtripPhase.FOLLOW_RETURN}:
-                            returning = self._roundtrip.phase == RoundtripPhase.FOLLOW_RETURN
-                            self._roundtrip.endpoint_reached()
-                            if returning:
-                                self._manual_only = True
-                                self._motion_phase = "MANUAL_COMPLETE"
-                                state, motor, detail = "ROUNDTRIP_COMPLETE", "STOP_RETURN_ENDPOINT", "返程已到达另一端，完整序列结束"
-                            else:
-                                self._schedule_roundtrip_turn(now)
-                                state, motor, detail = "ROUNDTRIP_ENDPOINT_HOLD", "STOP_OUTBOUND_ENDPOINT", "已到出发端点，停车稳定后寻找第一张人脸"
-                        elif recent_red:
-                            self._manual_only = True
-                            self._pending_turn_side = self._last_red_side
-                            state, motor = "END_REACHED", f"STOP_END_OF_LINE_RED_{self._pending_turn_side}"
-                            detail = f"到达端点，红线方向={self._pending_turn_side}，已回到手动模式等待 Q/E 转向"
-                        else:
-                            self._manual_only = True
-                            state, motor = "END_REACHED_NO_RED", "STOP_END_OF_LINE"
-                            detail = "到达端点，无红线方向记录，已回到手动模式"
+                        self._manual_only = True
+                        state, motor = "END_REACHED", "STOP_END_OF_LINE"
+                        detail = "到达白线端点，已回到手动模式"
                     else:
                         precision = red.detected
                         active_fast_config = replace(fast_config, correction_gain=260.0, deadband=.015) if precision else fast_config
