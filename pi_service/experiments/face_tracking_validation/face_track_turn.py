@@ -223,31 +223,36 @@ def main() -> None:
             break
 
         if centering_direction is not None and pi:
-            # Face temporarily lost during rotation? Keep trying.
-            if not face.detected:
-                cv2.putText(frame, f"CENTERING {centering_direction} — waiting for face...", (12, 48),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 220, 255), 2)
-            elif face.offset_x is not None and abs(face.offset_x) <= args.deadband_px:
+            face_centered = face.detected and face.offset_x is not None and abs(face.offset_x) <= args.deadband_px
+            cooldown_ok = now - last_turn_at > args.cooldown_seconds
+
+            # Diagnostic: print state every 30 frames
+            if frame_idx % 30 == 0:
+                print(f"  [frame {frame_idx}] dir={centering_direction} "
+                      f"face={face.detected} offX={face.offset_x} "
+                      f"centered={face_centered} cooldown={cooldown_ok} "
+                      f"since_last={now - last_turn_at:.1f}s armed={pi_armed}")
+
+            if face_centered:
                 centering_direction = None
                 print(f"  [frame {frame_idx}] CENTERED (offX={face.offset_x:.0f})")
-            elif now - last_turn_at > args.cooldown_seconds:
+            elif cooldown_ok:
                 if not pi_armed:
                     pi_armed = pi.toggle_m()
+                    print(f"  [frame {frame_idx}] M gate toggle: armed={pi_armed}")
                 if pi_armed:
                     ok = pi.send_turn(centering_direction)
-                    if ok:
-                        last_turn_at = now
-                        print(f"  [frame {frame_idx}] {centering_direction} pulse (offX={face.offset_x:.0f})")
-                    else:
-                        last_turn_at = now
+                    last_turn_at = now
+                    status = "OK" if ok else "REJECTED"
+                    print(f"  [frame {frame_idx}] {centering_direction} pulse → {status} (offX={face.offset_x})")
 
         # Status overlay
         cv2.putText(frame, "J=center-left  L=center-right  ESC=quit", (12, frame.shape[0] - 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
         if centering_direction:
             color = (0, 255, 0) if centering_direction == "LEFT_90" else (255, 0, 255)
-            prefix = "WAITING" if not face.detected else "CENTERING"
-            cv2.putText(frame, f"{prefix}: {centering_direction}  offX={face.offset_x:.0f}" if face.offset_x else f"{prefix}: {centering_direction}",
+            detail = f"offX={face.offset_x:.0f}" if face.detected and face.offset_x else "searching..."
+            cv2.putText(frame, f"CENTERING: {centering_direction} {detail}",
                         (12, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
 
         cv2.imshow("Face -> Pi Turn (J/L center, ESC quit)", frame)
