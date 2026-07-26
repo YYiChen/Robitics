@@ -251,6 +251,32 @@ class ControllerPersistenceTests(unittest.TestCase):
             self.assertIsNone(controller.direct_drive_owner)
             self.assertEqual(controller.action, "F")
 
+    def test_explicit_browser_stop_cancels_autonomous_drive_immediately(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = RobotController("unused", Path(directory) / "drive_config.json")
+            commands: list[str] = []
+            controller._write = commands.append
+            controller.set_direct_drive(80, 90)
+
+            self.assertEqual(controller.update_keys({"keys": [], "stop": True}), "STOP")
+            self.assertIsNone(controller.direct_drive)
+            self.assertIsNone(controller.direct_drive_owner)
+            self.assertEqual(commands, ["STOP"])
+
+    def test_autonomous_drive_expires_without_tracker_renewal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = RobotController("unused", Path(directory) / "drive_config.json")
+            controller._write = lambda command: True
+            controller.start()
+            try:
+                controller.set_direct_drive(80, 90, lease_seconds=.01)
+                time.sleep(.15)
+                self.assertIsNone(controller.direct_drive)
+                self.assertIsNone(controller.direct_drive_owner)
+                self.assertEqual(controller.action, "STOP")
+            finally:
+                controller.stop()
+
     def test_deal_done_notifies_checkpoint_listeners(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             controller = RobotController("unused", Path(directory) / "drive_config.json")
