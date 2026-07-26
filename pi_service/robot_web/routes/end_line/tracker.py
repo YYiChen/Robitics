@@ -166,6 +166,18 @@ class EndLineTurnAdaptorRouteTracker:
 
     def toggle_drive(self) -> dict:
         enabled = self.gate.toggle()
+        return self._apply_drive_enabled(enabled)
+
+    def set_drive_enabled(self, enabled: bool) -> dict:
+        """Set the M-equivalent motor gate without toggle retry ambiguity."""
+
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled 必须是布尔值")
+        if self.gate.enabled() == enabled:
+            return self.status_dict()
+        return self._apply_drive_enabled(self.gate.set_enabled(enabled))
+
+    def _apply_drive_enabled(self, enabled: bool) -> dict:
         if not enabled:
             self._stop_motor()
             with self._tuning_lock:

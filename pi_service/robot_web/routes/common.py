@@ -17,6 +17,15 @@ class AutonomousRunGate:
             self._enabled = not self._enabled
             return self._enabled
 
+    def set_enabled(self, enabled: bool) -> bool:
+        """Set motor permission idempotently and return the resulting value."""
+
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled must be a boolean")
+        with self._lock:
+            self._enabled = enabled
+            return self._enabled
+
     def enabled(self) -> bool:
         with self._lock:
             return self._enabled

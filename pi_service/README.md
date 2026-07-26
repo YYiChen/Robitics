@@ -225,6 +225,42 @@ Never put credentials in either configuration file. Preserve
 `config/local.json` during code synchronization; copying tracked source files
 must not replace a tuned vehicle.
 
+## DeskMate Robotics API
+
+The versioned `/api/robotics/v1/*` facade is the supported server-to-server
+boundary for DeskMate.  It wraps, but does not replace, the existing browser
+endpoints:
+
+- `GET capabilities`, `GET status` and `GET config` are read-only;
+- `POST gate` sets the motor gate explicitly with `{"enabled": true|false}`;
+- `POST actions` accepts idempotent semantic requests for line following,
+  face-turn start/heartbeat/stop, white-line recentering, one-card mechanism
+  requests and stop;
+- `POST config` updates only the grouped line-follow and visual-turn settings
+  already owned by `routes.end_line`.
+
+Every action requires a caller-generated `request_id`.  Reusing an ID with a
+different payload is rejected.  An HTTP retry for one event reuses its ID;
+successive face-heartbeat events need distinct IDs so the Pi dead-man timer is
+refreshed.  `dispense_one` reuses the controller's tokenized workflow so
+polling/retry only reads the current result and cannot issue another motor
+request.  Its completion evidence is explicitly `arduino_command_ack_only`;
+current hardware
+does not provide the deck-present, exit-pulse, interlock or E-stop evidence
+required to report a successful DeskMate `DealerAck`.
+
+If an action response is lost or the client times out, do not submit a new
+action ID. Query `GET /api/robotics/v1/requests/<request_id>` first. A known ID
+returns the original accepted result without restarting the motion; an unknown
+ID returns HTTP 404. The bounded idempotency/result cache belongs to the current
+service process, so callers must treat a Pi service restart as a new control
+epoch and reconcile through `GET /api/robotics/v1/status`.
+
+The browser telemetry loops are single-flight: a slow status or face request
+must finish or time out before its successor is scheduled. Control heartbeats
+also permit at most one in-flight request. This prevents a temporary network
+delay from becoming a backlog that starves later STOP or manual-control calls.
+
 Runtime logs are useful evidence but are not source code. Move selected evidence
 into a deliberately named artifact or report only when a target explicitly
 requires durable evidence.

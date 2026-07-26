@@ -126,6 +126,21 @@ class CardControlMixin:
             ).start()
             return self._last_deal_request_result
 
+    def deal_request_status(self, token: object) -> dict | None:
+        """Return a prior key-deal result without issuing another motor command."""
+
+        normalized = str(token or "").strip()
+        if not normalized:
+            raise ValueError("出牌事件缺少 token")
+        with self._deal_request_lock:
+            if normalized != self._last_deal_request_token:
+                return None
+            return (
+                dict(self._last_deal_request_result)
+                if self._last_deal_request_result is not None
+                else None
+            )
+
     def _complete_deal_request(
         self, token: str, feed_pwm: int, feed_duration_ms: int,
         deal_pwm: int, deal_duration_ms: int,

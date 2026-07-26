@@ -12,6 +12,7 @@ from api import (
     register_camera_api,
     register_control_api,
     register_route_api,
+    register_robotics_api,
     register_status_api,
 )
 from routes.generic.tracker import (
@@ -51,6 +52,7 @@ def create_app(
     register_camera_api(app, camera)
     register_control_api(app, controller)
     register_route_api(app, route_preview, route_tracker)
+    register_robotics_api(app, controller, route_tracker)
     register_status_api(app, controller, camera, metrics, oled, route_tracker)
     return app
 
