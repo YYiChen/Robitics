@@ -78,7 +78,10 @@
       "face_turn_cooldown_seconds": 2.0,
       "face_turn_max_seconds": 15.0,
       "face_turn_line_center_confirm_frames": 3,
-      "face_turn_line_center_deadband_normalized": 0.1
+      "face_turn_line_center_deadband_normalized": 0.1,
+      "return_replay_weight": 0.25,
+      "return_line_lost_confirm_frames": 3,
+      "return_turn_pause_seconds": 0.2
     }
   }
 }

@@ -123,3 +123,12 @@ def register_route_api(app, route_preview, route_tracker) -> None:
             return jsonify(ok=True, autonomous=route_tracker.request_follow_to_end())
         except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
+
+    @app.post("/api/autonomous/return")
+    def autonomous_return():
+        if not isinstance(route_tracker, EndLineTurnAdaptorRouteTracker):
+            return jsonify(ok=False, error="当前路线模式不支持分段视觉返程"), 409
+        try:
+            return jsonify(ok=True, autonomous=route_tracker.request_return())
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400

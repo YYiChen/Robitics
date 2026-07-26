@@ -27,7 +27,7 @@ class ApiStructureTests(unittest.TestCase):
             "/api/autonomous/roundtrip/start",
             "/api/autonomous/roundtrip/return",
             "/api/autonomous/roundtrip/stop",
-            "/api/autonomous/follow-to-end",
+            "/api/autonomous/follow-to-end", "/api/autonomous/return",
         }
         self.assertEqual(set(found), expected)
         self.assertEqual(len(found), len(set(found)))

@@ -61,6 +61,7 @@ class RobotController(CardControlMixin, ServoControlMixin):
         self.serial_lock = threading.RLock()
         self.serial = None; self.action = "STOP"; self.held_keys: set[str] = set(); self.last_client_seen = 0.0
         self.direct_drive: tuple[int, int] | None = None
+        self.direct_drive_owner: str | None = None
         self.steering_direction = 0; self.last_steering_seen = 0.0
         self._last_sent_steering_direction: int | None = None
         self._last_steering_sent_at = 0.0
@@ -72,6 +73,7 @@ class RobotController(CardControlMixin, ServoControlMixin):
         self._deal_request_lock = threading.Lock()
         self._last_deal_request_token = ""
         self._last_deal_request_result: dict | None = None
+        self._card_event_listeners: list = []
         self.reply = self.error = ""; self.last_rx = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -153,6 +155,7 @@ class RobotController(CardControlMixin, ServoControlMixin):
         with self.lock:
             self.held_keys.clear()
             self.direct_drive = None
+            self.direct_drive_owner = None
             self.action = "STOP"; self.steering_direction = 0
             snapshot = asdict(self.config)
         try:
@@ -194,11 +197,17 @@ class RobotController(CardControlMixin, ServoControlMixin):
         with self.lock:
             # Compatibility endpoint for terminal/curl diagnostics.  The web
             # interface itself uses update_keys so releasing a key stops now.
-            self.held_keys.clear(); self.direct_drive = None
+            self.held_keys.clear(); self.direct_drive = None; self.direct_drive_owner = None
             self.action, self.last_client_seen = action, time.monotonic()
         return action
 
-    def set_direct_drive(self, right_pwm: object, left_pwm: object) -> tuple[int, int]:
+    def set_direct_drive(
+        self,
+        right_pwm: object,
+        left_pwm: object,
+        *,
+        owner: str = "autonomous",
+    ) -> tuple[int, int]:
         """Apply bounded M1/M2 PWM without changing persisted profiles.
 
         This is intended for short-lived closed-loop clients such as visual
@@ -214,6 +223,7 @@ class RobotController(CardControlMixin, ServoControlMixin):
         with self.lock:
             self.held_keys.clear()
             self.direct_drive = (right, left)
+            self.direct_drive_owner = str(owner)
             self.action, self.last_client_seen = "PID", time.monotonic()
         return right, left
     @staticmethod
@@ -234,8 +244,15 @@ class RobotController(CardControlMixin, ServoControlMixin):
         steering = max(-1, min(1, steering))
         with self.lock:
             now = time.monotonic()
-            self.direct_drive = None
+            # An empty browser heartbeat keeps the manual dead-man connection
+            # alive but must not erase a route tracker's M1/M2 command.  A real
+            # WASD key press still explicitly takes ownership from autonomy.
+            if keys or self.direct_drive_owner != "autonomous":
+                self.direct_drive = None
+                self.direct_drive_owner = None
             self.held_keys, self.action, self.last_client_seen = keys, self._action_from_keys(keys), now
+            if self.direct_drive is not None:
+                self.action = "PID"
             self.steering_direction, self.last_steering_seen = steering, now
             return self.action
     def heartbeat(self) -> None:
@@ -258,7 +275,7 @@ class RobotController(CardControlMixin, ServoControlMixin):
         return result
     def stop_now(self) -> None:
         with self.lock:
-            self.held_keys.clear(); self.direct_drive = None
+            self.held_keys.clear(); self.direct_drive = None; self.direct_drive_owner = None
             self.action = "STOP"; self.steering_direction = 0
         self._write("STOP")
 
@@ -269,7 +286,7 @@ class RobotController(CardControlMixin, ServoControlMixin):
         puts the controller in STOP and waits in _connect for boot to finish.
         """
         with self.lock:
-            self.held_keys.clear(); self.direct_drive = None
+            self.held_keys.clear(); self.direct_drive = None; self.direct_drive_owner = None
             self.action, self.last_client_seen = "STOP", 0.0; self.steering_direction = 0
             self.last_rx = 0.0; self.error = ""
         self._close_serial(send_stop=True)
@@ -297,6 +314,25 @@ class RobotController(CardControlMixin, ServoControlMixin):
                 self._card_reply_condition.notify_all()
         for name, value in parse_protocol_line(text, self.motor_output).items():
             setattr(self, name, value)
+        if text in {"FEED:DONE", "DEAL:DONE"}:
+            with self.lock:
+                listeners = tuple(self._card_event_listeners)
+            for listener in listeners:
+                try:
+                    listener(text)
+                except Exception:
+                    # Telemetry/checkpoint listeners must never break serial RX.
+                    pass
+
+    def add_card_event_listener(self, listener) -> None:
+        with self.lock:
+            if listener not in self._card_event_listeners:
+                self._card_event_listeners.append(listener)
+
+    def remove_card_event_listener(self, listener) -> None:
+        with self.lock:
+            if listener in self._card_event_listeners:
+                self._card_event_listeners.remove(listener)
     def _run(self) -> None:
         next_motor, next_query, next_servo_query = 0.0, 0.0, 0.0
         while not self._stop.wait(SERVO_TICK_SECONDS):
@@ -338,4 +374,4 @@ class RobotController(CardControlMixin, ServoControlMixin):
     def status(self) -> dict:
         with self.lock: cfg, action, seen, feed_state, deal_state, card_protocol, card_reply = asdict(self.config), self.action, self.last_client_seen, self.card_feed_state, self.card_deal_state, self.card_motor_protocol, self.card_command_reply
         serial_open = bool(self.serial and self.serial.is_open); age = time.monotonic() - self.last_rx if self.last_rx else None
-        return {"serial":serial_open,"arduino_online":serial_open and age is not None and age <= 1.5,"last_rx_age":age,"error":self.error,"reply":self.reply,"config":cfg,"config_path":str(self.config_path),"config_source":self.config_source,"config_error":self.config_error,"action":action,"keys":sorted(self.held_keys),"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"steering_direction":self.steering_direction,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic,"servo_angle":self.servo_angle,"motor_output":self.motor_output,"card_feed_state":feed_state,"card_deal_state":deal_state,"card_motor_protocol":card_protocol,"card_command_reply":card_reply}
+        return {"serial":serial_open,"arduino_online":serial_open and age is not None and age <= 1.5,"last_rx_age":age,"error":self.error,"reply":self.reply,"config":cfg,"config_path":str(self.config_path),"config_source":self.config_source,"config_error":self.config_error,"action":action,"keys":sorted(self.held_keys),"client_online":time.monotonic()-seen<=CLIENT_TIMEOUT_SECONDS,"drive_owner":self.direct_drive_owner,"steering_direction":self.steering_direction,"imu":self.imu,"speed":self.speed,"ultrasonic":self.ultrasonic,"servo_angle":self.servo_angle,"motor_output":self.motor_output,"card_feed_state":feed_state,"card_deal_state":deal_state,"card_motor_protocol":card_protocol,"card_command_reply":card_reply}
