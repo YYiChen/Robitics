@@ -2,6 +2,9 @@
 
 Each camera keeps its own pixel coordinate system.  The fused result chooses a
 primary observation; it deliberately does not average incompatible offsets.
+
+When enabled, face-offset drives in-place LEFT_90 / RIGHT_90 turns via the Pi
+API.  No forward drive commands are ever sent.
 """
 from __future__ import annotations
 
@@ -11,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import threading
 import time
+import urllib.request
 
 import cv2
 
@@ -44,11 +48,17 @@ def choose_primary(sources: dict[str, dict]) -> dict:
 
 
 class MultiCameraPublisher:
-    def __init__(self, sources: dict[str, str]) -> None:
+    def __init__(self, sources: dict[str, str], pi_url: str = "http://100.80.46.54:5000",
+                 turn_deadband_px: int = 80, turn_cooldown_seconds: float = 3.0) -> None:
         self.sources = sources
+        self.pi_url = pi_url.rstrip("/")
+        self.turn_deadband_px = turn_deadband_px
+        self.turn_cooldown_seconds = turn_cooldown_seconds
         self._lock = threading.Lock()
         self._latest = {name: {"detected": False, "source": url, "error": "starting"} for name, url in sources.items()}
         self._latest_jpeg: dict[str, bytes | None] = {name: None for name in sources}
+        self._pi_armed = False
+        self._last_turn_at = 0.0
 
     def start(self) -> None:
         for name, url in self.sources.items():
@@ -72,6 +82,47 @@ class MultiCameraPublisher:
     def _update(self, name: str, payload: dict) -> None:
         with self._lock:
             self._latest[name] = payload
+
+    def _pi_post(self, path: str, body: dict | None = None) -> bool:
+        try:
+            req = urllib.request.Request(
+                f"{self.pi_url}{path}",
+                data=json.dumps(body).encode() if body else None,
+                headers={"Content-Type": "application/json"} if body else {},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                return resp.status == 200
+        except Exception:
+            return False
+
+    def _ensure_pi_armed(self) -> None:
+        if self._pi_armed:
+            return
+        # Check if M is already enabled
+        try:
+            with urllib.request.urlopen(f"{self.pi_url}/api/status", timeout=2) as resp:
+                status = json.loads(resp.read())
+                if status.get("autonomous", {}).get("enabled"):
+                    self._pi_armed = True
+                    print("Pi motor gate already enabled")
+                    return
+        except Exception:
+            pass
+        # Toggle M on
+        if self._pi_post("/api/autonomous/toggle"):
+            self._pi_armed = True
+            print("Pi motor gate toggled ON")
+        else:
+            print("WARNING: could not arm Pi motor gate")
+
+    def _send_manual_turn(self, direction: str) -> bool:
+        result = self._pi_post("/api/autonomous/manual-turn", {"command": direction})
+        if result:
+            print(f"Pi turn: {direction}")
+        else:
+            print(f"Pi turn FAILED: {direction}")
+        return result
 
     def _run_source(self, name: str, url: str) -> None:
         detector = FaceDetector()
@@ -100,6 +151,16 @@ class MultiCameraPublisher:
                 frame_index += 1
                 payload = face_payload(result, frame=frame_index, processing_ms=processing_ms,
                                        source_fps=source_fps, source=url)
+                # ---- Face-offset turn trigger (in-place pivots only) ----
+                if result.detected and result.offset_x is not None:
+                    now_turn = time.monotonic()
+                    if abs(result.offset_x) > self.turn_deadband_px and \
+                       now_turn - self._last_turn_at > self.turn_cooldown_seconds:
+                        self._ensure_pi_armed()
+                        direction = "LEFT_90" if result.offset_x < 0 else "RIGHT_90"
+                        if self._send_manual_turn(direction):
+                            self._last_turn_at = now_turn
+                # --------------------------------------------------------
                 if result.detected:
                     x = round(result.center_x - result.box_width / 2)
                     y = round(result.center_y - result.box_height / 2)
@@ -171,14 +232,31 @@ def make_handler(publisher: MultiCameraPublisher):
 def main() -> None:
     parser = argparse.ArgumentParser(description="Computer-side concurrent Pi + phone face analysis")
     parser.add_argument("--pi-source", default="http://100.80.46.54:5000/video_feed")
-    parser.add_argument("--phone-source", required=True, help="for example: http://10.50.77.86:8080/video")
+    parser.add_argument("--phone-source", help="for example: http://10.50.77.86:8080/video (omit for Pi only)")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=5060)
+    parser.add_argument("--pi-url", default="http://100.80.46.54:5000")
+    parser.add_argument("--turn-deadband-px", type=int, default=80, help="face must be this many px off centre to trigger a turn")
+    parser.add_argument("--turn-cooldown-seconds", type=float, default=3.0, help="minimum seconds between turns")
+    parser.add_argument("--no-motor", action="store_true", help="disable Pi motor control (observation only)")
     args = parser.parse_args()
-    publisher = MultiCameraPublisher({"pi": args.pi_source, "phone": args.phone_source})
+    sources = {"pi": args.pi_source}
+    if args.phone_source:
+        sources["phone"] = args.phone_source
+    publisher = MultiCameraPublisher(
+        sources,
+        pi_url=args.pi_url if not args.no_motor else "",
+        turn_deadband_px=args.turn_deadband_px,
+        turn_cooldown_seconds=args.turn_cooldown_seconds,
+    )
     publisher.start()
-    print(f"Concurrent face JSON: http://{args.host}:{args.port}/api/faces/latest")
-    print("Computer inference only; no robot, motor, Arduino, or route-control imports.")
+    print(f"Face + turn server: http://{args.host}:{args.port}")
+    print(f"Face JSON: http://{args.host}:{args.port}/api/faces/latest")
+    if args.no_motor:
+        print("Motor control DISABLED (--no-motor)")
+    else:
+        print(f"Pi motor control ENABLED — pi={args.pi_url} deadband={args.turn_deadband_px}px cooldown={args.turn_cooldown_seconds}s")
+        print("Face offset > deadband → auto LEFT_90 / RIGHT_90 pivot")
     ThreadingHTTPServer((args.host, args.port), make_handler(publisher)).serve_forever()
 
 
