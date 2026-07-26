@@ -3,83 +3,37 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict
 import json
 import os
 from pathlib import Path
 
 import serial
 
+from control.card_control import CARD_COMMAND_ACK_TIMEOUT_SECONDS, CardControlMixin
+from control.drive_config import (
+    Config,
+    default_profiles,
+    legacy_scalar_profiles,
+    normalize_profiles,
+)
+from control.motor_commands import raw_motor_output, speed_targets
+from control.protocol import parse_protocol_line
+from control.servo_control import ServoControlMixin
+
 HEARTBEAT_SECONDS = 0.20
 DIRECT_DRIVE_SECONDS = 0.05
 SERVO_TICK_SECONDS = 0.05
 CLIENT_TIMEOUT_SECONDS = 0.80
-CARD_COMMAND_ACK_TIMEOUT_SECONDS = 1.20
 ACTIONS = {"STOP", "F", "SF", "B", "PL", "PR", "SPL", "SPR", "FL", "FR", "BL", "BR"}
 # Q/E are steering-servo controls rather than motor profiles.
 KEY_ACTIONS = {"w": "F", "slow": "SF", "a": "PL", "d": "PR", "s": "B", "x": "SPL", "c": "SPR"}
-PROFILE_ACTIONS = ("F", "SF", "B", "PL", "PR", "SPL", "SPR", "FL", "FR", "BL", "BR")
-WHEELS = ("rf", "lf", "lr", "rr")
-
-def default_profiles() -> dict[str, dict[str, int]]:
-    return {
-        "F": {"rf": 255, "lf": 255, "lr": 255, "rr": 255}, "SF": {"rf": 100, "lf": 100, "lr": 100, "rr": 100}, "B": {"rf": -255, "lf": -255, "lr": -255, "rr": -255},
-        "PL": {"rf": 180, "lf": -180, "lr": -180, "rr": 180}, "PR": {"rf": -180, "lf": 180, "lr": 180, "rr": -180},
-        "SPL": {"rf": 120, "lf": -120, "lr": -120, "rr": 120}, "SPR": {"rf": -120, "lf": 120, "lr": 120, "rr": -120},
-        "FL": {"rf": 255, "lf": 60, "lr": 60, "rr": 255}, "FR": {"rf": 60, "lf": 255, "lr": 255, "rr": 60},
-        "BL": {"rf": -255, "lf": -60, "lr": -60, "rr": -255}, "BR": {"rf": -60, "lf": -255, "lr": -255, "rr": -60},
-    }
-
-def normalize_profiles(raw: object) -> dict[str, dict[str, int]]:
-    profiles = default_profiles()
-    if not isinstance(raw, dict): return profiles
-    for action in PROFILE_ACTIONS:
-        values = raw.get(action)
-        if not isinstance(values, dict): continue
-        for wheel in WHEELS:
-            try: profiles[action][wheel] = max(-255, min(255, int(values.get(wheel, profiles[action][wheel]))))
-            except (TypeError, ValueError): pass
-    return profiles
-
-@dataclass
-class Config:
-    speed_mode: bool = False
-    target_speed: float = 30.0
-    kp: float = 2.0
-    ki: float = 0.8
-    kd: float = 0.05
-    straight_pwm: int = 80
-    pivot_pwm: int = 150
-    curve_outer_pwm: int = 160
-    curve_inner_pwm: int = 60
-    servo_center_angle: int = 90
-    servo_speed_dps: float = 45.0
-    servo_acceleration_dps2: float = 120.0
-    servo_qe_reversed: bool = True
-    profiles: dict[str, dict[str, int]] = field(default_factory=default_profiles)
-
-
-def legacy_scalar_profiles(config: Config) -> dict[str, dict[str, int]]:
-    """Translate pre-profile PWM settings into the current action profiles."""
-    straight = max(0, min(255, int(config.straight_pwm)))
-    pivot = max(0, min(255, int(config.pivot_pwm)))
-    outer = max(0, min(255, int(config.curve_outer_pwm)))
-    inner = max(0, min(255, int(config.curve_inner_pwm)))
-    profiles = default_profiles()
-    profiles.update({
-        "F": {wheel: straight for wheel in WHEELS},
-        "B": {wheel: -straight for wheel in WHEELS},
-        "PL": {"rf": pivot, "lf": -pivot, "lr": -pivot, "rr": pivot},
-        "PR": {"rf": -pivot, "lf": pivot, "lr": pivot, "rr": -pivot},
-        "FL": {"rf": outer, "lf": inner, "lr": inner, "rr": outer},
-        "FR": {"rf": inner, "lf": outer, "lr": outer, "rr": inner},
-        "BL": {"rf": -inner, "lf": -outer, "lr": -outer, "rr": -inner},
-        "BR": {"rf": -outer, "lf": -inner, "lr": -inner, "rr": -outer},
-    })
-    return profiles
-
-
-class RobotController:
+class RobotController(CardControlMixin, ServoControlMixin):
+    heartbeat_seconds = HEARTBEAT_SECONDS
+    client_timeout_seconds = CLIENT_TIMEOUT_SECONDS
+    # Compatibility names retained for existing diagnostics.
+    _raw = staticmethod(raw_motor_output)
+    _speed = staticmethod(speed_targets)
     def __init__(
         self,
         port: str,
@@ -307,164 +261,7 @@ class RobotController:
             self.held_keys.clear(); self.direct_drive = None
             self.action = "STOP"; self.steering_direction = 0
         self._write("STOP")
-    @staticmethod
-    def _timed_motor_parameters(raw_pwm: object, raw_duration_ms: object) -> tuple[int, int]:
-        try:
-            pwm = int(raw_pwm)
-            duration_ms = int(raw_duration_ms)
-        except (TypeError, ValueError):
-            raise ValueError("电机功率和运行时间必须是整数") from None
-        if pwm == 0 or not -255 <= pwm <= 255:
-            raise ValueError("电机 PWM 必须在 -255 到 255 之间，正负号控制方向；0 不会驱动电机")
-        if not 100 <= duration_ms <= 60000:
-            raise ValueError("电机运行时间必须在 100 到 60000 毫秒之间")
-        return pwm, duration_ms
-    def _send_card_command_and_wait(self, motor: str, command: str) -> str:
-        with self._card_command_lock:
-            with self._card_reply_condition:
-                before = self._card_reply_sequence
-                self._card_reply_waiting_for = motor
-            if not self._write(command):
-                with self._card_reply_condition:
-                    self._card_reply_waiting_for = None
-                raise RuntimeError(f"串口写入失败：{self.error or 'Arduino 串口未打开'}")
-            deadline = time.monotonic() + CARD_COMMAND_ACK_TIMEOUT_SECONDS
-            with self._card_reply_condition:
-                while self._card_reply_sequence == before:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        self._card_reply_waiting_for = None
-                        raise TimeoutError(f"Arduino 未确认 {command}")
-                    self._card_reply_condition.wait(remaining)
-                self._card_reply_waiting_for = None
-                return self.card_command_reply
-    @staticmethod
-    def _card_result_state(reply: str) -> str:
-        if reply.startswith("OK:"): return "running"
-        if reply.startswith("BUSY:"): return "busy"
-        raise RuntimeError(f"Arduino 拒绝卡牌电机命令：{reply}")
-    def deal_card(self, raw_pwm: object = 255, raw_duration_ms: object = 1000) -> str:
-        """Request one M4 cycle and wait for Arduino acknowledgement."""
-        pwm, duration_ms = self._timed_motor_parameters(raw_pwm, raw_duration_ms)
-        with self.lock:
-            self.card_deal_state = "requested"
-            protocol = self.card_motor_protocol
-        command = "DEAL" if protocol == "legacy" else f"DEAL,{pwm},{duration_ms}"
-        try:
-            reply = self._send_card_command_and_wait("DEAL", command)
-            state = self._card_result_state(reply)
-        except (TimeoutError, RuntimeError) as first_error:
-            if protocol != "unknown":
-                with self.lock:
-                    self.card_deal_state = "error"
-                raise RuntimeError(f"发送出牌命令失败：{first_error}") from first_error
-            # A firmware variant whose READY line was missed may only support
-            # the old exact DEAL command. Probe it once before reporting fail.
-            try:
-                reply = self._send_card_command_and_wait("DEAL", "DEAL")
-                state = self._card_result_state(reply)
-                with self.lock:
-                    if reply == "OK:DEAL":
-                        self.card_motor_protocol = "legacy"
-                    elif reply.startswith("OK:DEAL,"):
-                        self.card_motor_protocol = "adjustable"
-                    protocol = self.card_motor_protocol
-            except (TimeoutError, RuntimeError) as fallback_error:
-                with self.lock:
-                    self.card_deal_state = "error"
-                raise RuntimeError(f"新版和旧版出牌命令均未被 Arduino 接受：{fallback_error}") from fallback_error
-        with self.lock:
-            self.card_deal_state = "running" if state in {"running", "busy"} else state
-        return "legacy" if protocol == "legacy" and state == "running" else state
-    def feed_cards(self, raw_pwm: object = -255, raw_duration_ms: object = 5000) -> str:
-        """Request one adjustable Arduino-timed M3 feed cycle."""
-        pwm, duration_ms = self._timed_motor_parameters(raw_pwm, raw_duration_ms)
-        with self.lock:
-            protocol = self.card_motor_protocol
-        if protocol == "legacy":
-            raise RuntimeError("Arduino 固件过旧，不支持网页触发 M3；请重新烧录新版 motor_bridge 固件")
-        with self.lock:
-            self.card_feed_state = "requested"
-        try:
-            reply = self._send_card_command_and_wait("FEED", f"FEED,{pwm},{duration_ms}")
-            state = self._card_result_state(reply)
-        except (TimeoutError, RuntimeError) as exc:
-            with self.lock:
-                self.card_feed_state = "error"
-            raise RuntimeError(f"发送送牌命令失败：{exc}") from exc
-        with self.lock:
-            self.card_feed_state = "running" if state in {"running", "busy"} else state
-        return state
-    def deal_from_key_request(self, request: object) -> dict | None:
-        if not isinstance(request, dict):
-            return None
-        token = str(request.get("token", "")).strip()
-        if not token:
-            raise ValueError("出牌事件缺少 token")
-        feed_pwm, feed_duration_ms = self._timed_motor_parameters(
-            request.get("feed_pwm", -255),
-            request.get("feed_duration_ms", 5000),
-        )
-        deal_pwm, deal_duration_ms = self._timed_motor_parameters(
-            request.get("deal_pwm", request.get("pwm", 255)),
-            request.get("deal_duration_ms", request.get("duration_ms", 1000)),
-        )
-        with self._deal_request_lock:
-            if token == self._last_deal_request_token:
-                return self._last_deal_request_result
-            self._last_deal_request_token = token
-            self._last_deal_request_result = {"token": token, "state": "pending", "reply": ""}
-            threading.Thread(
-                target=self._complete_deal_request,
-                args=(token, feed_pwm, feed_duration_ms, deal_pwm, deal_duration_ms),
-                daemon=True,
-                name="card-deal-request",
-            ).start()
-            return self._last_deal_request_result
-    def _complete_deal_request(
-        self,
-        token: str,
-        feed_pwm: int,
-        feed_duration_ms: int,
-        deal_pwm: int,
-        deal_duration_ms: int,
-    ) -> None:
-        feed_result: dict
-        deal_result: dict
-        try:
-            feed_state = self.feed_cards(feed_pwm, feed_duration_ms)
-            feed_result = {"state": feed_state, "reply": self.card_command_reply}
-        except (RuntimeError, ValueError) as exc:
-            feed_result = {"state": "error", "reply": self.card_command_reply, "error": str(exc)}
-        try:
-            deal_state = self.deal_card(deal_pwm, deal_duration_ms)
-            deal_result = {"state": deal_state, "reply": self.card_command_reply}
-        except (RuntimeError, ValueError) as exc:
-            deal_result = {"state": "error", "reply": self.card_command_reply, "error": str(exc)}
-        failed = sum(item["state"] == "error" for item in (feed_result, deal_result))
-        result = {
-            "token": token,
-            "state": "error" if failed == 2 else "partial" if failed == 1 else "running",
-            "feed": feed_result,
-            "deal": deal_result,
-        }
-        with self._deal_request_lock:
-            if token == self._last_deal_request_token:
-                self._last_deal_request_result = result
-    def set_servo_angle(self, raw_angle: object, *, fast: bool = False, track_target: bool = True) -> int:
-        """Set a smooth target or request a mechanical-speed SG90 return."""
-        try: angle = int(raw_angle)
-        except (TypeError, ValueError): raise ValueError("舵机角度必须是 0 到 180 的整数") from None
-        if not 0 <= angle <= 180: raise ValueError("舵机角度必须在 0 到 180 之间")
-        self._write(f"SVF,{angle}" if fast else f"SV,{angle}")
-        if self.error: raise RuntimeError(f"发送舵机命令失败：{self.error}")
-        # Keep the web slider at the requested position immediately. The
-        # Arduino's later OK:SV reply confirms the same value, but this is
-        # intentionally not saved in drive_config.json.
-        with self.lock:
-            self.servo_angle = angle
-            if track_target: self._servo_target_angle = float(angle)
-        return angle
+
     def reconnect(self) -> dict:
         """Drop the current USB serial session and open it again.
 
@@ -482,41 +279,6 @@ class RobotController:
             if self.last_rx: break
             time.sleep(.05)
         return self.status()
-    @staticmethod
-    def _raw(action: str, cfg: Config) -> tuple[int, int, int, int]:
-        if action == "STOP": return (0, 0, 0, 0)
-        profile = cfg.profiles.get(action, default_profiles()[action])
-        # M1 is right drive and M2 is left drive. M3/M4 are card motors and
-        # are controlled exclusively by Arduino's adjustable timed commands.
-        return (profile["rf"], profile["lf"], 0, 0)
-    @staticmethod
-    def _speed(action: str, cfg: Config) -> tuple[float, float, int, int]:
-        t, h = cfg.target_speed, cfg.target_speed * .5
-        return {"F":(t,t,0,0),"SF":(t*.5,t*.5,0,0),"B":(-t,-t,0,0),"PL":(-t,t,-cfg.pivot_pwm,cfg.pivot_pwm),"PR":(t,-t,cfg.pivot_pwm,-cfg.pivot_pwm),"SPL":(-h,h,-cfg.pivot_pwm,cfg.pivot_pwm),"SPR":(h,-h,cfg.pivot_pwm,-cfg.pivot_pwm),"FL":(h,t,cfg.curve_inner_pwm,cfg.curve_outer_pwm),"FR":(t,h,cfg.curve_outer_pwm,cfg.curve_inner_pwm),"BL":(-t,-h,-cfg.curve_inner_pwm,-cfg.curve_outer_pwm),"BR":(-h,-t,-cfg.curve_outer_pwm,-cfg.curve_inner_pwm),"STOP":(0,0,0,0)}[action]
-
-    def _sync_steering(self, now: float, cfg: Config) -> None:
-        """Keep Arduino's local smooth steering state in sync with the browser."""
-        with self.lock:
-            direction = self.steering_direction if now - self.last_steering_seen <= CLIENT_TIMEOUT_SECONDS else 0
-            if cfg.servo_qe_reversed:
-                direction = -direction
-            limits = (cfg.servo_speed_dps, cfg.servo_acceleration_dps2)
-            send_limits = limits != self._last_sent_servo_limits
-            send_direction = (
-                direction != self._last_sent_steering_direction
-                or (direction != 0 and now - self._last_steering_sent_at >= HEARTBEAT_SECONDS)
-            )
-            if send_limits:
-                self._last_sent_servo_limits = limits
-            if send_direction:
-                self._last_sent_steering_direction = direction
-                self._last_steering_sent_at = now
-        if send_limits:
-            self._write(f"SVC,{limits[0]:.1f},{limits[1]:.1f}")
-        if send_direction:
-            # Refresh a held direction at the browser heartbeat rate. Arduino
-            # stops it smoothly if this heartbeat disappears.
-            self._write(f"SVD,{direction}")
     def _parse(self, text: str) -> None:
         self.reply, self.last_rx = text, time.monotonic()
         with self._card_reply_condition:
@@ -533,35 +295,8 @@ class RobotController:
                 self.card_command_reply = text
                 self._card_reply_sequence += 1
                 self._card_reply_condition.notify_all()
-        try:
-            parts = text.split(",")
-            if text.startswith("READY:MOTOR_BRIDGE"):
-                if "DEAL_ADJUSTABLE" in text:
-                    self.card_motor_protocol = "adjustable"
-                elif "DEAL_1000MS" in text:
-                    self.card_motor_protocol = "legacy"
-            elif text.startswith("IMU,") and len(parts) == 4: self.imu = [float(x) for x in parts[1:]]
-            elif text.startswith("SPD,") and len(parts) == 7: self.speed = [float(x) for x in parts[1:]]
-            elif (text.startswith("OK:M,") or text.startswith("OUT,")) and len(parts) == 5: self.motor_output = [int(x) for x in parts[1:]]
-            elif text.startswith("US,") and len(parts) == 2:
-                self.ultrasonic = float(parts[1])
-            elif text.startswith("OK:SV,"):
-                self.servo_angle = int(text.split(",", 1)[1])
-            elif text.startswith("SVP,"):
-                self.servo_angle = int(text.split(",", 1)[1])
-            elif text.startswith("OK:DEAL") or text == "BUSY:DEAL":
-                self.card_deal_state = "running"
-            elif text == "DEAL:DONE":
-                self.card_deal_state = "idle"
-            elif text.startswith("OK:FEED") or text == "BUSY:FEED":
-                self.card_feed_state = "running"
-            elif text == "FEED:DONE":
-                self.card_feed_state = "idle"
-            elif text in {"OK:STOP", "STATUS:STOPPED", "STATUS:DRIVE_STOPPED", "TIMEOUT:STOP"} or text.startswith("BLOCK:"):
-                outputs = list(self.motor_output or [0, 0, 0, 0])
-                outputs[0] = outputs[1] = 0
-                self.motor_output = outputs
-        except ValueError: pass
+        for name, value in parse_protocol_line(text, self.motor_output).items():
+            setattr(self, name, value)
     def _run(self) -> None:
         next_motor, next_query, next_servo_query = 0.0, 0.0, 0.0
         while not self._stop.wait(SERVO_TICK_SECONDS):
@@ -583,13 +318,13 @@ class RobotController:
                 # It is intentionally separate from Arduino wheel-speed PID.
                 self._write("M," + ",".join(map(str, (*direct_drive, 0, 0))))
             elif cfg.speed_mode:
-                left, right, front_left, front_right = self._speed(action, cfg)
+                left, right, front_left, front_right = speed_targets(action, cfg)
                 self._write(f"V,{left:.1f},{right:.1f}")
                 # The Arduino applies right/left PID to M1/M2 and ignores the
                 # M3/M4 fields because those belong to the card mechanism.
                 self._write("M,0,0,0,0")
             else:
-                self._write("M," + ",".join(map(str, self._raw(action, cfg))))
+                self._write("M," + ",".join(map(str, raw_motor_output(action, cfg))))
             next_motor = now + (DIRECT_DRIVE_SECONDS if direct_drive is not None else HEARTBEAT_SECONDS)
             with self.serial_lock:
                 port = self.serial
