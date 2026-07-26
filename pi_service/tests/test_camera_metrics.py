@@ -234,7 +234,7 @@ class CameraMetricsTests(unittest.TestCase):
         self.assertTrue(body["capabilities"]["card_deal"])
 
     @unittest.skipUnless(importlib.util.find_spec("flask"), "Flask is installed on the Raspberry Pi deployment target")
-    def test_card_motor_endpoints_forward_live_power_and_duration(self) -> None:
+    def test_card_motor_endpoints_enforce_frozen_web_presets(self) -> None:
         from app import create_app
 
         class Controller:
@@ -258,8 +258,8 @@ class CameraMetricsTests(unittest.TestCase):
                 return {
                     "token": request["token"],
                     "state": "running",
-                    "feed": {"state": "running", "reply": "OK:FEED,180,2500"},
-                    "deal": {"state": "running", "reply": "OK:DEAL,200,750"},
+                    "feed": {"state": "running", "reply": "OK:FEED,-150,1500"},
+                    "deal": {"state": "running", "reply": "OK:DEAL,150,400"},
                 }
 
         controller = Controller()
@@ -274,13 +274,13 @@ class CameraMetricsTests(unittest.TestCase):
             "deal_duration_ms": 750,
         }})
         self.assertEqual(key_response.status_code, 200)
-        self.assertEqual(key_response.get_json()["deal"]["feed"]["reply"], "OK:FEED,180,2500")
-        self.assertEqual(key_response.get_json()["deal"]["deal"]["reply"], "OK:DEAL,200,750")
+        self.assertEqual(key_response.get_json()["deal"]["feed"]["reply"], "OK:FEED,-150,1500")
+        self.assertEqual(key_response.get_json()["deal"]["deal"]["reply"], "OK:DEAL,150,400")
         self.assertEqual(controller.commands, [
-            ("FEED", 180, 2500),
-            ("DEAL", 200, 750),
+            ("FEED", -150, 1500),
+            ("DEAL", 150, 400),
             ("KEYS", ["w"]),
-            ("KEY_BOTH", 180, 2500, 200, 750),
+            ("KEY_BOTH", -150, 1500, 150, 400),
         ])
 
 

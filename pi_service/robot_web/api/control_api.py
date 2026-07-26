@@ -4,6 +4,24 @@ from __future__ import annotations
 from flask import jsonify, request
 
 
+FROZEN_CARD_FEED_PWM = -150
+FROZEN_CARD_FEED_DURATION_MS = 1500
+FROZEN_CARD_DEAL_PWM = 150
+FROZEN_CARD_DEAL_DURATION_MS = 400
+
+
+def _frozen_deal_request(raw_request):
+    if raw_request is None or not isinstance(raw_request, dict):
+        return raw_request
+    return {
+        "token": raw_request.get("token"),
+        "feed_pwm": FROZEN_CARD_FEED_PWM,
+        "feed_duration_ms": FROZEN_CARD_FEED_DURATION_MS,
+        "deal_pwm": FROZEN_CARD_DEAL_PWM,
+        "deal_duration_ms": FROZEN_CARD_DEAL_DURATION_MS,
+    }
+
+
 def register_control_api(app, controller) -> None:
     @app.post("/api/action")
     def action():
@@ -28,7 +46,9 @@ def register_control_api(app, controller) -> None:
             return jsonify(
                 ok=True,
                 action=controller.update_keys(payload),
-                deal=controller.deal_from_key_request(payload.get("deal_request")),
+                deal=controller.deal_from_key_request(
+                    _frozen_deal_request(payload.get("deal_request"))
+                ),
             )
         except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
@@ -47,9 +67,13 @@ def register_control_api(app, controller) -> None:
 
     @app.post("/api/deal")
     def deal():
-        payload = request.get_json(silent=True) or {}
         try:
-            return jsonify(ok=True, state=controller.deal_card(payload.get("pwm", 255), payload.get("duration_ms", 1000)))
+            return jsonify(
+                ok=True,
+                state=controller.deal_card(
+                    FROZEN_CARD_DEAL_PWM, FROZEN_CARD_DEAL_DURATION_MS
+                ),
+            )
         except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
         except RuntimeError as exc:
@@ -57,9 +81,13 @@ def register_control_api(app, controller) -> None:
 
     @app.post("/api/feed")
     def feed():
-        payload = request.get_json(silent=True) or {}
         try:
-            return jsonify(ok=True, state=controller.feed_cards(payload.get("pwm", -255), payload.get("duration_ms", 5000)))
+            return jsonify(
+                ok=True,
+                state=controller.feed_cards(
+                    FROZEN_CARD_FEED_PWM, FROZEN_CARD_FEED_DURATION_MS
+                ),
+            )
         except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
         except RuntimeError as exc:

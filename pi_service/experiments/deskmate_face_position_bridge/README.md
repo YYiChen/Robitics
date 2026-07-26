@@ -39,7 +39,7 @@ DeskMate 模型。本实验和桥接器必须分别在电脑上运行。
 本实验不改 DeskMate submodule 的身份验证配置，而在入口层使用更适合远距离车控的
 YuNet 参数：检测阈值 `0.75`、最小人脸边长 `40 px`。可分别通过
 `--detector-score-threshold` 和 `--minimum-face-size-px` 覆盖。中心停车门禁仍由
-桥接器负责，默认 `offset_x_normalized ±0.20`。
+桥接器负责，默认 `offset_x_normalized ±0.30`。
 
 ## 首次准备
 
@@ -92,7 +92,7 @@ http://127.0.0.1:5059/preview_feed
 
 端口 5000 的正式控制台会从当前操作电脑的 `127.0.0.1:5059` 加载独立的
 “电脑端人脸检测”卡片。绿色框是当前用于控制判断的主脸，黄色竖线是
-`face_turn_web_bridge.py` 的中心门禁（默认 `offset_x_normalized ±0.20`），
+`face_turn_web_bridge.py` 的中心门禁（默认 `offset_x_normalized ±0.30`），
 蓝色竖线是画面中心。状态栏同时显示 YuNet 原始检测数、可用框数和主脸偏移。
 如果用另一台电脑或手机打开 5000 页面，它的 `127.0.0.1` 不会指向运行模型的
 电脑，因此该卡片会显示离线，但不会影响树莓派相机、路线识别或电机安全逻辑。

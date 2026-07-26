@@ -51,6 +51,9 @@ def feature(
 
 
 class DeskMateFacePositionServerTests(unittest.TestCase):
+    def test_preview_center_gate_matches_pc_bridge_default(self) -> None:
+        self.assertEqual(DEFAULT_CENTER_DEADBAND_NORMALIZED, 0.30)
+
     def test_single_instance_match_is_limited_to_same_script_and_port(self) -> None:
         script = (
             "pi_service/experiments/deskmate_face_position_bridge/"

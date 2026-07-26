@@ -405,7 +405,7 @@ async function refreshFaceDetectionStatus() {
     const capturedAt = Date.parse(face.time), ageMs = Number.isFinite(capturedAt) ? Date.now() - capturedAt : null;
     const fresh = ageMs != null && ageMs >= 0 && ageMs <= 450;
     const offset = Number(face.offset_x_normalized);
-    const centred = face.detected === true && Number.isFinite(offset) && Math.abs(offset) <= .20;
+    const centred = face.detected === true && Number.isFinite(offset) && Math.abs(offset) <= .30;
     const rawCount = Number(face.detected_face_count) || 0;
     const usableCount = Number(face.usable_face_count) || 0;
     $("#facePreviewMeta").textContent = `${face.model ? "DeskMate YuNet" : "旧检测器"} · ${fresh ? "实时" : `${fixed(ageMs)} ms 前`}`;
@@ -414,7 +414,7 @@ async function refreshFaceDetectionStatus() {
       : `未识别 · 原始 ${rawCount} / 可用 ${usableCount} · 阈值 ${fixed(face.detector_score_threshold, 2)}`;
     $("#faceGateState").textContent = face.detected && Number.isFinite(offset)
       ? `${centred ? "已进入" : "未进入"}中心门禁 · 偏移 ${offset >= 0 ? "+" : ""}${fixed(offset, 3)}`
-      : "中心门禁 ±20%";
+      : "中心门禁 ±30%";
   } catch (error) {
     $("#facePreviewMeta").textContent = "电脑 5059 离线";
     $("#faceDetectionState").textContent = `人脸识别不可用：${error.message}`;
@@ -734,13 +734,14 @@ async function followToEnd() {
     note("N 已触发：沿白线行驶至尽头，到达后自动回到手动模式等待 Q/E 转向。");
   } catch (error) { note(error.message); }
 }
+const frozenCardMotorSettings = Object.freeze({
+  feed: Object.freeze({power:150, direction:-1, seconds:1.5}),
+  deal: Object.freeze({power:150, direction:1, seconds:.4}),
+});
 function timedMotorSettings(prefix) {
-  const power = Number($(`#${prefix}Pwm`).value);
-  const direction = Number($(`#${prefix}Direction`).value);
-  const seconds = Number($(`#${prefix}Seconds`).value);
-  if (!Number.isInteger(power) || power < 1 || power > 255) throw Error("PWM 必须是 1 到 255 的整数；0 不会驱动电机");
-  if (direction !== 1 && direction !== -1) throw Error("电机方向必须选择正转或反转");
-  if (!Number.isFinite(seconds) || seconds < .1 || seconds > 60) throw Error("运行时间必须在 0.1 到 60 秒之间");
+  const fixed = frozenCardMotorSettings[prefix];
+  if (!fixed) throw Error(`未知卡牌电机：${prefix}`);
+  const {power, direction, seconds} = fixed;
   return {pwm: power * direction, power, direction, directionLabel: direction > 0 ? "正转" : "反转", duration_ms: Math.round(seconds * 1000), seconds};
 }
 async function feedCards() {

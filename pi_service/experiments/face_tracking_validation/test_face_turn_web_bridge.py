@@ -37,8 +37,8 @@ class FaceTurnWebBridgeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             decode_json_object(b"[]")
 
-    def test_default_stop_zone_is_twenty_percent(self):
-        self.assertEqual(DEFAULT_FACE_DEADBAND_NORMALIZED, .20)
+    def test_default_stop_zone_is_thirty_percent(self):
+        self.assertEqual(DEFAULT_FACE_DEADBAND_NORMALIZED, .30)
 
     def test_initially_centred_face_must_depart_before_it_can_stop_return(self):
         armer = FaceStopArmer()

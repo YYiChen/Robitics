@@ -14,7 +14,7 @@ import time
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
-DEFAULT_FACE_DEADBAND_NORMALIZED = .20
+DEFAULT_FACE_DEADBAND_NORMALIZED = .30
 FACE_COMMAND_ACTIONS = {
     "HEARTBEAT": "face_turn_heartbeat",
     "STOP": "face_turn_stop",
@@ -102,8 +102,8 @@ def main() -> None:
     parser.add_argument("--pi-url", default="http://100.80.46.54:5000")
     parser.add_argument("--heartbeat-seconds", type=float, default=.18)
     parser.add_argument("--minimum-score", type=float, default=.5)
-    # Stop once the face centre is within ±20% of the half-frame width.
-    # This is about ±128 px for the current 1280 px DroidCam stream and covers
+    # Stop once the face centre is within ±30% of the half-frame width.
+    # This is about ±192 px for the current 1280 px DroidCam stream and covers
     # the observed near-centre position before the next pulse overshoots it.
     parser.add_argument("--deadband-normalized", type=float, default=DEFAULT_FACE_DEADBAND_NORMALIZED)
     parser.add_argument("--max-age-ms", type=int, default=450)
