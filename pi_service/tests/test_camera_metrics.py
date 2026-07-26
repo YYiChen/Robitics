@@ -33,6 +33,18 @@ class CameraMetricsTests(unittest.TestCase):
         keydown = script.split('addEventListener("keydown"', 1)[1].split('addEventListener("keyup"', 1)[0]
         self.assertLess(keydown.index('event.code === "KeyP"'), keydown.index("editing(event)"))
 
+    def test_m_keeps_manual_gate_and_n_owns_full_auto_mission(self) -> None:
+        web_root = Path(__file__).parents[1] / "robot_web"
+        script = (web_root / "static" / "app.js").read_text(encoding="utf-8")
+        template = (web_root / "templates" / "index.html").read_text(encoding="utf-8")
+        keydown = script.split('addEventListener("keydown"', 1)[1].split('addEventListener("keyup"', 1)[0]
+        self.assertIn('event.code === "KeyM"', keydown)
+        self.assertIn("toggleAutonomousDrive()", keydown)
+        self.assertIn('event.code === "KeyN"', keydown)
+        self.assertIn("toggleAutoLeftMission()", keydown)
+        self.assertIn('id="autoLeftToggle"', template)
+        self.assertIn("/api/autonomous/auto-left", script)
+
     def test_inflight_wasd_timeout_cannot_clear_a_new_queued_p_event(self) -> None:
         script = (Path(__file__).parents[1] / "robot_web" / "static" / "app.js").read_text(encoding="utf-8")
         send_keys = script.split("async function sendKeys()", 1)[1].split("function setKey(", 1)[0]

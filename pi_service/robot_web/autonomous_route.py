@@ -21,6 +21,12 @@ class AutonomousRunGate:
             self._enabled = not self._enabled
             return self._enabled
 
+    def set_enabled(self, enabled: bool) -> bool:
+        """Set motor permission deterministically for one-shot missions."""
+        with self._lock:
+            self._enabled = bool(enabled)
+            return self._enabled
+
     def enabled(self) -> bool:
         with self._lock:
             return self._enabled

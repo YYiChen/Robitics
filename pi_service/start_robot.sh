@@ -4,11 +4,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROUTE_ENABLED="${ROBOT_ENABLE_AUTONOMOUS_ROUTE:-1}"
 ROUTE_CONFIG="${ROBOT_ROUTE_CONFIG:-${HERE}/../third_party/DeskMate-Advance/src/track_line/config.dark_line.json}"
 ROUTE_FPS="${ROBOT_ROUTE_PROCESS_FPS:-20}"
-ROUTE_MODE="${ROBOT_ROUTE_MODE:-scanline_i}"
+ROUTE_MODE="${ROBOT_ROUTE_MODE:-end_line_turn_adaptor}"
 
-# The main console owns the camera, Arduino, live route preview, and M-key
-# motor gate.  Vision always starts paused; pressing M in the port-5000 page
-# alone enables or stops automatic M1/M2 control.
+# The main console owns the camera, Arduino, and live route preview.  Vision
+# always starts with the motors stopped.  M keeps the semi-automatic Q/E/U/I
+# diagnostic gate; N runs the one-shot white-line/left-90 mission.
 route_args=()
 if [[ "${ROUTE_ENABLED}" == "1" ]]; then
   route_args=(--enable-autonomous-route --route-mode "${ROUTE_MODE}" --route-config "${ROUTE_CONFIG}" --route-process-fps "${ROUTE_FPS}")
