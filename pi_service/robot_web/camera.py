@@ -5,57 +5,22 @@ import threading
 import time
 from collections import deque
 from collections.abc import Iterator
-import json
 from pathlib import Path
 
-
-CAMERA_MODES = {
-    "fast_1640": {
-        "label": "1640×1232",
-        "width": 1640,
-        "height": 1232,
-        "sensor_fps": 30.0,
-        "stream_fps": 30.0,
-    },
-    "full_3280": {
-        "label": "3280×2464",
-        "width": 3280,
-        "height": 2464,
-        "sensor_fps": 30.0,
-        "stream_fps": 30.0,
-    },
-}
-DEFAULT_CAMERA_MODE = "fast_1640"
-DEFAULT_EXPOSURE = {"auto": True, "ev": 0.0, "shutter_denominator": 200}
-LOW_LATENCY_SIZE = (640, 480)
-STREAM_PROFILES = {
-    # Keep the camera running at the selected sensor mode, but constrain the
-    # image which leaves the Pi.  MJPEG browsers always receive the newest
-    # encoded frame, so no extra buffering is introduced by these profiles.
-    "low_latency": {"label": "低延迟 · 640×480 · JPEG 60", "max_width": 640, "size": LOW_LATENCY_SIZE, "quality": 60},
-    "balanced": {"label": "平衡 · 最宽 1230 px · JPEG 70", "max_width": 1230, "quality": 70},
-    "source": {"label": "原始尺寸 · JPEG 70", "max_width": None, "quality": 70},
-}
-DEFAULT_STREAM_PROFILE = "low_latency"
-DEFAULT_HIGHRES_FPS = 2.0
-MIN_HIGHRES_FPS = 1.0
-MAX_HIGHRES_FPS = 30.0
-HIGHRES_JPEG_QUALITY = 75
-HIGHRES_CACHE_MAX_AGE = 0.45
-HIGHRES_PROFILES = {
-    "source": {"label": "原始尺寸 · JPEG 75", "max_width": None},
-    "medium_1640": {"label": "高清平衡 · 最宽 1640 px · JPEG 75", "max_width": 1640},
-    "compact_1280": {"label": "高清轻量 · 最宽 1280 px · JPEG 75", "max_width": 1280},
-}
-DEFAULT_HIGHRES_PROFILE = "source"
-# The CSI module's outer image area is visibly magenta in the supplied flat
-# wall reference.  RGB888 arrays arrive in OpenCV BGR order, hence B/G/R.
-DEFAULT_COLOR_CORRECTION = {"enabled": True, "strength": 1.0}
-EDGE_BGR_GAINS = (0.92, 1.06, 0.78)
-# The supplied flat-wall reference needs most correction before reaching the
-# rim.  r² left the half-radius area at only 25% correction; r^0.55 reaches
-# about 68% while preserving the calibrated 100% correction at the edge.
-RADIAL_FALLOFF_EXPONENT = 0.55
+from media.color_correction import build_radial_gain_map
+from media.metrics import window_stats
+from media.profiles import (
+    CAMERA_MODES,
+    DEFAULT_CAMERA_MODE,
+    EDGE_BGR_GAINS,
+    HIGHRES_CACHE_MAX_AGE,
+    HIGHRES_JPEG_QUALITY,
+    HIGHRES_PROFILES,
+    MAX_HIGHRES_FPS,
+    MIN_HIGHRES_FPS,
+    STREAM_PROFILES,
+)
+from media.settings import CameraSettingsRepository
 
 
 class CameraStreamer:
@@ -73,6 +38,9 @@ class CameraStreamer:
     ) -> None:
         self.config_path = Path(config_path or Path(__file__).with_name("camera_config.json")).expanduser()
         self.config_store = config_store if config_path is None else None
+        self.settings_repository = CameraSettingsRepository(
+            self.config_path, self.config_store
+        )
         saved = self._load_saved_settings()
         saved_mode = saved["mode"]
         self.mode_key = mode_key if mode_key in CAMERA_MODES else saved_mode
@@ -123,40 +91,7 @@ class CameraStreamer:
         self._highres_active_clients = 0
 
     def _load_saved_settings(self) -> dict:
-        defaults = {
-            "mode": DEFAULT_CAMERA_MODE,
-            "exposure": dict(DEFAULT_EXPOSURE),
-            "stream_profile": DEFAULT_STREAM_PROFILE,
-            "highres_profile": DEFAULT_HIGHRES_PROFILE,
-            "highres_fps": DEFAULT_HIGHRES_FPS,
-            "color_correction": dict(DEFAULT_COLOR_CORRECTION),
-        }
-        try:
-            data = (
-                self.config_store.read_section("camera")
-                if self.config_store is not None
-                else json.loads(self.config_path.read_text(encoding="utf-8"))
-            )
-            if not isinstance(data, dict): return defaults
-            mode = data.get("mode")
-            if mode in CAMERA_MODES: defaults["mode"] = mode
-            stream_profile = data.get("stream_profile")
-            if stream_profile in STREAM_PROFILES: defaults["stream_profile"] = stream_profile
-            highres_profile = data.get("highres_profile")
-            if highres_profile in HIGHRES_PROFILES: defaults["highres_profile"] = highres_profile
-            defaults["highres_fps"] = max(MIN_HIGHRES_FPS, min(MAX_HIGHRES_FPS, float(data.get("highres_fps", defaults["highres_fps"]))))
-            exposure = data.get("exposure", {})
-            if isinstance(exposure, dict):
-                defaults["exposure"]["auto"] = bool(exposure.get("auto", defaults["exposure"]["auto"]))
-                defaults["exposure"]["ev"] = max(-8.0, min(8.0, float(exposure.get("ev", defaults["exposure"]["ev"]))))
-                defaults["exposure"]["shutter_denominator"] = max(1, int(exposure.get("shutter_denominator", defaults["exposure"]["shutter_denominator"])))
-            correction = data.get("color_correction", {})
-            if isinstance(correction, dict):
-                defaults["color_correction"]["enabled"] = bool(correction.get("enabled", defaults["color_correction"]["enabled"]))
-                defaults["color_correction"]["strength"] = max(0.0, min(1.5, float(correction.get("strength", defaults["color_correction"]["strength"]))))
-        except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError, ValueError):
-            pass
-        return defaults
+        return self.settings_repository.load()
 
     def _save_settings(self) -> None:
         payload = {
@@ -174,13 +109,7 @@ class CameraStreamer:
                 "shutter_denominator": self.shutter_denominator,
             },
         }
-        if self.config_store is not None:
-            self.config_store.write_section("camera", payload)
-            return
-        self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.config_path.with_name(f".{self.config_path.name}.tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        temporary.replace(self.config_path)
+        self.settings_repository.save(payload)
 
     def _stream_dimensions(self) -> tuple[int, int]:
         profile = STREAM_PROFILES[self.stream_profile_key]
@@ -259,15 +188,7 @@ class CameraStreamer:
             self._highres_jpeg = None
             self._highres_sequence = 0
 
-    @staticmethod
-    def _window_stats(events: deque, now: float) -> tuple[int, int, float]:
-        """Return (event count, byte total, elapsed window) for the last second."""
-        cutoff = now - 1.0
-        while events and events[0][0] < cutoff:
-            events.popleft()
-        if not events:
-            return 0, 0, 1.0
-        return len(events), sum(item[1] for item in events), 1.0
+    _window_stats = staticmethod(window_stats)
 
     def _record_encoded(self, size: int, encode_ms: float) -> None:
         now = time.monotonic()
@@ -422,18 +343,13 @@ class CameraStreamer:
 
     def _radial_color_gain_map(self, width: int, height: int):
         """Return a cached BGR gain map whose centre is exactly unchanged."""
-        import numpy as np
         key = (int(width), int(height), round(self.color_correction_strength, 3))
         cached = self._color_gain_maps.get(key)
         if cached is not None:
             return cached
-        x = np.linspace(-1.0, 1.0, int(width), dtype=np.float32)
-        y = np.linspace(-1.0, 1.0, int(height), dtype=np.float32)
-        radius = np.minimum(1.0, np.sqrt(y[:, None] ** 2 + x[None, :] ** 2) / np.sqrt(2.0))
-        falloff = radius ** RADIAL_FALLOFF_EXPONENT
-        edge = np.asarray(EDGE_BGR_GAINS, dtype=np.float32).reshape(1, 1, 3)
-        gain = 1.0 + (edge - 1.0) * (falloff[..., None] * self.color_correction_strength)
-        self._color_gain_maps[key] = gain.astype(np.float32)
+        self._color_gain_maps[key] = build_radial_gain_map(
+            width, height, self.color_correction_strength
+        )
         return self._color_gain_maps[key]
 
     def _correct_edge_color(self, frame):

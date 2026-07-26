@@ -1,7 +1,6 @@
 """One CSI camera, with low-latency WebRTC video and high-resolution JPEG frames."""
 from __future__ import annotations
 
-import json
 import threading
 import time
 from collections import deque
@@ -11,19 +10,16 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
-
-DEFAULT_HIGHRES_FPS = 2.0
-MIN_HIGHRES_FPS = 1.0
-MAX_HIGHRES_FPS = 30.0
-HIGHRES_JPEG_QUALITY = 75
-# When no browser is watching the high-resolution feed, do not spend CPU on
-# JPEG encoding.  A latest-image API call can still request one on demand.
-HIGHRES_CACHE_MAX_AGE = 0.45
-HIGHRES_PROFILES = {
-    "source": {"label": "原始尺寸 · JPEG 75", "max_width": None},
-    "medium_1640": {"label": "高清平衡 · 最大 1640 px · JPEG 75", "max_width": 1640},
-    "compact_1280": {"label": "高清轻量 · 最大 1280 px · JPEG 75", "max_width": 1280},
-}
+from media.metrics import compact_window_stats
+from media.profiles import (
+    DEFAULT_HIGHRES_FPS,
+    HIGHRES_CACHE_MAX_AGE,
+    HIGHRES_JPEG_QUALITY,
+    HIGHRES_PROFILES,
+    MAX_HIGHRES_FPS,
+    MIN_HIGHRES_FPS,
+)
+from media.settings import CameraSettingsRepository
 
 
 class DualStreamCamera:
@@ -59,6 +55,9 @@ class DualStreamCamera:
         self.udp_output = str(udp_output)
         self.config_path = Path(config_path or Path(__file__).with_name("camera_config.json"))
         self.config_store = config_store if config_path is None else None
+        self.settings_repository = CameraSettingsRepository(
+            self.config_path, self.config_store
+        )
         self.highres_profile_key, self.highres_fps = self._load_highres_settings()
         self.status, self.error = "未启动", ""
         self._picam2 = self._cv2 = self._encoder = self._output = None
@@ -85,42 +84,16 @@ class DualStreamCamera:
         return f"http://127.0.0.1:{self.port}/{self.path}/"
 
     def _load_highres_settings(self) -> tuple[str, float]:
-        profile_key, highres_fps = "medium_1640", DEFAULT_HIGHRES_FPS
-        try:
-            saved = (
-                self.config_store.read_section("camera")
-                if self.config_store is not None
-                else json.loads(self.config_path.read_text(encoding="utf-8"))
-            )
-            profile = saved.get("highres_profile")
-            if profile in HIGHRES_PROFILES:
-                profile_key = profile
-            highres_fps = max(MIN_HIGHRES_FPS, min(MAX_HIGHRES_FPS, float(saved.get("highres_fps", highres_fps))))
-        except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError, TypeError, ValueError):
-            pass
-        return profile_key, highres_fps
+        raw = self.settings_repository.read_raw()
+        saved = self.settings_repository.load()
+        profile = saved["highres_profile"] if "highres_profile" in raw else "medium_1640"
+        return profile, saved["highres_fps"]
 
     def _save_highres_settings(self) -> None:
-        payload: dict = {}
-        try:
-            saved = (
-                self.config_store.read_section("camera")
-                if self.config_store is not None
-                else json.loads(self.config_path.read_text(encoding="utf-8"))
-            )
-            if isinstance(saved, dict):
-                payload = saved
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            pass
+        payload = self.settings_repository.read_raw()
         payload["highres_profile"] = self.highres_profile_key
         payload["highres_fps"] = self.highres_fps
-        if self.config_store is not None:
-            self.config_store.write_section("camera", payload)
-            return
-        self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.config_path.with_name(f".{self.config_path.name}.tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        temporary.replace(self.config_path)
+        self.settings_repository.save(payload)
 
     def _media_server_online(self) -> bool:
         try:
@@ -144,11 +117,7 @@ class DualStreamCamera:
         profile = HIGHRES_PROFILES[self.highres_profile_key]
         return {"key": self.highres_profile_key, "label": profile["label"], "max_width": profile["max_width"], "quality": HIGHRES_JPEG_QUALITY, "width": width, "height": height, "resolution": f"{width}x{height}", "target_fps": self.highres_fps}
 
-    @staticmethod
-    def _window_stats(events: deque[tuple[float, int]], now: float) -> tuple[int, int]:
-        while events and events[0][0] < now - 1.0:
-            events.popleft()
-        return len(events), sum(item[1] for item in events)
+    _window_stats = staticmethod(compact_window_stats)
 
     def _record_frame(self, size: int, encode_ms: float) -> None:
         now = time.monotonic()
