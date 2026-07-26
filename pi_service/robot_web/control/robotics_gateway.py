@@ -60,6 +60,8 @@ class RoboticsGateway:
         self.route_tracker = route_tracker
         self._lock = threading.RLock()
         self._remembered: OrderedDict[str, tuple[str, dict[str, Any]]] = OrderedDict()
+        self._active_route_request_id: str | None = None
+        self._active_dispense_request_id: str | None = None
 
     def capabilities(self) -> dict[str, Any]:
         route_available = self.route_tracker is not None and all(
@@ -99,6 +101,13 @@ class RoboticsGateway:
             ],
             "motor_gate": "explicit_boolean",
             "request_idempotency": True,
+            "request_terminal_status": True,
+            "request_status_values": [
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled",
+            ],
             "dispense_completion_evidence": "arduino_command_ack_only",
             "physical_card_exit_verified": False,
         }
@@ -114,6 +123,9 @@ class RoboticsGateway:
             if self.controller is not None and hasattr(self.controller, "status")
             else {"serial": False, "arduino_online": False}
         )
+        with self._lock:
+            self._refresh_active_route_request(route)
+            self._refresh_active_dispense_request()
         return {
             "api_version": ROBOTICS_API_VERSION,
             "available": self.capabilities()["available"],
@@ -193,16 +205,24 @@ class RoboticsGateway:
                 if old_fingerprint != fingerprint:
                     raise ValueError("request_id was already used with a different payload")
                 if action == "dispense_one":
-                    current = self.controller.deal_request_status(request_id)
-                    if current is not None:
-                        response = self._action_response(
-                            action, request_id, current
-                        )
-                        self._remember(request_id, fingerprint, response)
+                    response = self._refresh_request(
+                        request_id, old_fingerprint, response
+                    )
                 return dict(response)
 
             response = self._dispatch(action, request_id, payload)
+            self._settle_superseded_request(action, request_id)
             self._remember(request_id, fingerprint, response)
+            if response["request_status"] == "running":
+                if action == "dispense_one":
+                    self._active_dispense_request_id = request_id
+                elif action in {
+                    "follow_line_to_end",
+                    "face_turn_start",
+                    "line_recenter_start",
+                    "preset_turn",
+                }:
+                    self._active_route_request_id = request_id
             return response
 
     def request_result(self, request_id: object) -> dict[str, Any] | None:
@@ -214,16 +234,7 @@ class RoboticsGateway:
             if remembered is None:
                 return None
             fingerprint, response = remembered
-            if response.get("action") == "dispense_one":
-                current = self.controller.deal_request_status(normalized)
-                if current is not None:
-                    response = self._action_response(
-                        "dispense_one",
-                        normalized,
-                        current,
-                        accepted_at=response.get("accepted_at"),
-                    )
-                    self._remember(normalized, fingerprint, response)
+            response = self._refresh_request(normalized, fingerprint, response)
             return dict(response)
 
     def _dispatch(
@@ -297,6 +308,15 @@ class RoboticsGateway:
             ),
             "detail": detail,
         }
+        request_status = self._classify_request_status(action, detail)
+        response["request_status"] = request_status
+        response["terminal"] = request_status in {
+            "succeeded",
+            "failed",
+            "cancelled",
+        }
+        if response["terminal"]:
+            response["completed_at"] = now
         if action == "dispense_one":
             response.update(
                 {
@@ -305,6 +325,155 @@ class RoboticsGateway:
                 }
             )
         return response
+
+    def _refresh_request(
+        self,
+        request_id: str,
+        fingerprint: str,
+        response: dict[str, Any],
+    ) -> dict[str, Any]:
+        if response.get("terminal") is True:
+            return response
+        action = str(response.get("action", ""))
+        detail: Any = None
+        if action == "dispense_one":
+            detail = self.controller.deal_request_status(request_id)
+        elif request_id == self._active_route_request_id:
+            detail = self.route_tracker.status_dict()
+        if detail is None:
+            return response
+        refreshed = self._action_response(
+            action,
+            request_id,
+            detail,
+            accepted_at=response.get("accepted_at"),
+        )
+        self._remember(request_id, fingerprint, refreshed)
+        if refreshed["terminal"]:
+            if request_id == self._active_route_request_id:
+                self._active_route_request_id = None
+            if request_id == self._active_dispense_request_id:
+                self._active_dispense_request_id = None
+        return refreshed
+
+    def _refresh_active_route_request(self, route: Mapping[str, Any]) -> None:
+        request_id = self._active_route_request_id
+        if request_id is None:
+            return
+        remembered = self._remembered.get(request_id)
+        if remembered is None:
+            self._active_route_request_id = None
+            return
+        fingerprint, response = remembered
+        refreshed = self._action_response(
+            str(response["action"]),
+            request_id,
+            route,
+            accepted_at=response.get("accepted_at"),
+        )
+        self._remember(request_id, fingerprint, refreshed)
+        if refreshed["terminal"]:
+            self._active_route_request_id = None
+
+    def _refresh_active_dispense_request(self) -> None:
+        request_id = self._active_dispense_request_id
+        if request_id is None:
+            return
+        remembered = self._remembered.get(request_id)
+        if remembered is None:
+            self._active_dispense_request_id = None
+            return
+        fingerprint, response = remembered
+        self._refresh_request(request_id, fingerprint, response)
+
+    def _settle_superseded_request(self, action: str, request_id: str) -> None:
+        previous = self._active_route_request_id
+        if previous is not None and action != "face_turn_heartbeat":
+            previous_action = str(self._remembered[previous][1].get("action", ""))
+            succeeded = (
+                action == "face_turn_stop" and previous_action == "face_turn_start"
+            ) or (
+                action == "line_recenter_stop"
+                and previous_action == "line_recenter_start"
+            )
+            self._finish_remembered(
+                previous,
+                "succeeded" if succeeded else "cancelled",
+                completed_by_request_id=request_id,
+            )
+            self._active_route_request_id = None
+        if action == "dispense_one":
+            previous_dispense = self._active_dispense_request_id
+            if previous_dispense is not None:
+                self._finish_remembered(
+                    previous_dispense,
+                    "cancelled",
+                    completed_by_request_id=request_id,
+                )
+                self._active_dispense_request_id = None
+
+    def _finish_remembered(
+        self,
+        request_id: str,
+        request_status: str,
+        *,
+        completed_by_request_id: str,
+    ) -> None:
+        remembered = self._remembered.get(request_id)
+        if remembered is None:
+            return
+        fingerprint, response = remembered
+        now = datetime.now(timezone.utc).isoformat()
+        updated = {
+            **response,
+            "updated_at": now,
+            "request_status": request_status,
+            "terminal": True,
+            "completed_at": now,
+            "completed_by_request_id": completed_by_request_id,
+        }
+        self._remember(request_id, fingerprint, updated)
+
+    @staticmethod
+    def _classify_request_status(action: str, detail: Any) -> str:
+        state = (
+            str(detail.get("state", "")).strip().upper()
+            if isinstance(detail, Mapping)
+            else ""
+        )
+        if any(marker in state for marker in ("ERROR", "FAULT", "LOST", "TIMEOUT")):
+            return "failed"
+        if action == "dispense_one":
+            if state in {"ERROR", "PARTIAL", "FAILED"}:
+                return "failed"
+            if state == "COMPLETED" or (
+                state == "RUNNING"
+                and isinstance(detail, Mapping)
+                and "feed" in detail
+                and "deal" in detail
+            ):
+                return "succeeded"
+            return "running"
+        if action in {
+            "face_turn_heartbeat",
+            "face_turn_stop",
+            "line_recenter_stop",
+            "stop",
+        }:
+            return "succeeded"
+        success_states = {
+            "follow_line_to_end": {"END_REACHED"},
+            "face_turn_start": {"FACE_CENTERED_STOP"},
+            "line_recenter_start": {"LINE_TURN_CENTERED", "LINE_TURN_STOPPED"},
+            "preset_turn": {
+                "MANUAL_RED_ALIGNED",
+                "MANUAL_COMPLETE",
+                "TURN_COMPLETE",
+            },
+        }
+        if state in success_states.get(action, set()):
+            return "succeeded"
+        return "running"
 
     def _remember(
         self, request_id: str, fingerprint: str, response: dict[str, Any]

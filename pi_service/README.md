@@ -252,10 +252,16 @@ required to report a successful DeskMate `DealerAck`.
 
 If an action response is lost or the client times out, do not submit a new
 action ID. Query `GET /api/robotics/v1/requests/<request_id>` first. A known ID
-returns the original accepted result without restarting the motion; an unknown
-ID returns HTTP 404. The bounded idempotency/result cache belongs to the current
-service process, so callers must treat a Pi service restart as a new control
-epoch and reconcile through `GET /api/robotics/v1/status`.
+returns the correlated request result without restarting the motion; an unknown
+ID returns HTTP 404. Each result includes `request_status` (`running`,
+`succeeded`, `failed`, or `cancelled`) and `terminal`. Terminal results also
+include `completed_at`. A later semantic stop records
+`completed_by_request_id` on the request it completed or cancelled. The raw
+route/controller state remains available in `state` and `detail`.
+
+The bounded idempotency/result cache belongs to the current service process, so
+callers must treat a Pi service restart as a new control epoch and reconcile
+through `GET /api/robotics/v1/status`.
 
 The browser telemetry loops are single-flight: a slow status or face request
 must finish or time out before its successor is scheduled. Control heartbeats
