@@ -45,7 +45,11 @@ from poker_dealer.perception.identity import (  # noqa: E402
 )
 
 
-DEFAULT_SOURCE = "http://100.80.46.54:5000/video_feed"
+# DroidCam phone 192.168.137.157 is connected through the Windows client.
+# While the client is active its HTTP /video endpoint reports "DroidCam is
+# Busy"; OpenCV must read the registered local virtual camera instead.
+DEFAULT_SOURCE = "1"
+DEFAULT_LOCAL_BACKEND = "msmf"
 
 
 def select_primary_feature(
@@ -117,14 +121,18 @@ def face_payload(
     }
 
 
-def camera_config(source: str) -> CameraConfig:
+def camera_config(
+    source: str,
+    *,
+    local_backend: str = DEFAULT_LOCAL_BACKEND,
+) -> CameraConfig:
     """Build DeskMate's bounded camera configuration for URL or local index."""
 
     if source.strip().isdigit():
         return CameraConfig(
             device_index=int(source),
             source_id="deskmate_face_camera",
-            backend="dshow",
+            backend=local_backend,
             width=1280,
             height=720,
             fps=30.0,
@@ -147,8 +155,14 @@ def camera_config(source: str) -> CameraConfig:
 class DeskMateFacePositionPublisher:
     """Own the camera/model loop and expose only an immutable latest snapshot."""
 
-    def __init__(self, source: str) -> None:
+    def __init__(
+        self,
+        source: str,
+        *,
+        local_backend: str = DEFAULT_LOCAL_BACKEND,
+    ) -> None:
         self.source = source
+        self.local_backend = local_backend
         self._lock = threading.Lock()
         self._latest: dict[str, Any] = {
             "time": datetime.now(timezone.utc).isoformat(),
@@ -187,7 +201,9 @@ class DeskMateFacePositionPublisher:
         try:
             config = FaceIdentityConfig.from_json(DESKMATE_FACE_CONFIG)
             model = OpenCvFaceIdentityAdapter(config)
-            with OpenCVCamera(camera_config(self.source)) as camera:
+            with OpenCVCamera(
+                camera_config(self.source, local_backend=self.local_backend)
+            ) as camera:
                 while max_frames is None or successful_frames < max_frames:
                     reading = camera.read()
                     if reading.status is not CameraReadStatus.OK or reading.frame is None:
@@ -246,6 +262,12 @@ def main() -> None:
         description="DeskMate YuNet/SFace PC face-position JSON publisher"
     )
     parser.add_argument("--source", default=DEFAULT_SOURCE)
+    parser.add_argument(
+        "--backend",
+        choices=("auto", "dshow", "msmf"),
+        default=DEFAULT_LOCAL_BACKEND,
+        help="OpenCV backend for a numeric local camera source",
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5059)
     parser.add_argument(
@@ -258,7 +280,10 @@ def main() -> None:
     if args.probe_frames < 0:
         parser.error("--probe-frames must be non-negative")
 
-    publisher = DeskMateFacePositionPublisher(args.source)
+    publisher = DeskMateFacePositionPublisher(
+        args.source,
+        local_backend=args.backend,
+    )
     if args.probe_frames:
         result = publisher.run(max_frames=args.probe_frames)
         print(json.dumps(result, ensure_ascii=False))

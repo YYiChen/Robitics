@@ -3,7 +3,7 @@
 这是一个电脑端隔离实验。它调用根目录 Git submodule
 `subrepos/DeskMate-Advance` 的正式摄像头与人脸模型接口：
 
-- `poker_dealer.io.camera.OpenCVCamera` 读取树莓派 MJPEG，并只保留最新帧；
+- `poker_dealer.io.camera.OpenCVCamera` 读取 Windows DroidCam 虚拟摄像头；
 - `OpenCvFaceIdentityAdapter` 使用 YuNet 检测和 SFace 特征模型；
 - 本实验只发布人脸框、中心偏移和置信度，不保存画面或人脸特征；
 - 本实验不导入机器人控制器，也不直接发送电机指令。
@@ -11,7 +11,8 @@
 ## 数据链路
 
 ```text
-Pi 5000/video_feed
+手机 DroidCam 192.168.137.157
+  -> Windows DroidCam Video（设备索引 1，MSMF）
   -> PC OpenCVCamera
   -> DeskMate YuNet/SFace
   -> PC 5059/api/face/latest
@@ -19,8 +20,12 @@ Pi 5000/video_feed
   -> Pi /api/autonomous/face-turn (HEARTBEAT 或 STOP)
 ```
 
-Pi 的 `start_robot.sh` 只负责 5000、相机和正式控制服务，不会启动电脑端
+Pi 的 `start_robot.sh` 只负责 5000 和正式控制服务，不会启动电脑端
 DeskMate 模型。本实验和桥接器必须分别在电脑上运行。
+
+`192.168.137.157:4747` 是手机和 DroidCam 客户端之间的连接地址。客户端占用时，
+其 `/video` 返回 `DroidCam is Busy`，不是可供 OpenCV 并发读取的 MJPEG。当前机器
+实测应读取本地 `DroidCam Video`：索引 `1`、后端 `msmf`。
 
 ## 首次准备
 
@@ -50,7 +55,7 @@ git -C .\subrepos\DeskMate-Advance lfs pull
 
 ```powershell
 cd C:\Users\32126\Desktop\Robitics
-py -3 .\pi_service\experiments\deskmate_face_position_bridge\deskmate_face_position_server.py --probe-frames 10
+py -3 .\pi_service\experiments\deskmate_face_position_bridge\deskmate_face_position_server.py --source 1 --backend msmf --probe-frames 10
 ```
 
 它只打印最后一帧 JSON 后退出，不向 Pi 发送控制请求。
@@ -61,7 +66,7 @@ py -3 .\pi_service\experiments\deskmate_face_position_bridge\deskmate_face_posit
 
 ```powershell
 cd C:\Users\32126\Desktop\Robitics
-py -3 .\pi_service\experiments\deskmate_face_position_bridge\deskmate_face_position_server.py --port 5059
+py -3 .\pi_service\experiments\deskmate_face_position_bridge\deskmate_face_position_server.py --source 1 --backend msmf --port 5059
 ```
 
 浏览器检查：

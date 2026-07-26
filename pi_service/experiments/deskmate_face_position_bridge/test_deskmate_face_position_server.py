@@ -6,6 +6,7 @@ import numpy as np
 
 from deskmate_face_position_server import (
     DESKMATE_FACE_CONFIG,
+    DEFAULT_LOCAL_BACKEND,
     DEFAULT_SOURCE,
     camera_config,
     face_payload,
@@ -108,15 +109,19 @@ class DeskMateFacePositionServerTests(unittest.TestCase):
         self.assertIsNone(payload["offset_x_normalized"])
 
     def test_camera_config_uses_deskmate_network_adapter_for_pi_stream(self) -> None:
-        network = camera_config(DEFAULT_SOURCE)
-        self.assertEqual(network.stream_url, DEFAULT_SOURCE)
+        network_source = "http://100.80.46.54:5000/video_feed"
+        network = camera_config(network_source)
+        self.assertEqual(network.stream_url, network_source)
         self.assertTrue(network.is_network_stream)
         self.assertEqual(network.backend, "auto")
 
-        local = camera_config("2")
-        self.assertEqual(local.device_index, 2)
+        local = camera_config(DEFAULT_SOURCE)
+        self.assertEqual(local.device_index, 1)
         self.assertIsNone(local.stream_url)
-        self.assertEqual(local.backend, "dshow")
+        self.assertEqual(local.backend, DEFAULT_LOCAL_BACKEND)
+
+        directshow = camera_config("1", local_backend="dshow")
+        self.assertEqual(directshow.backend, "dshow")
 
 
 if __name__ == "__main__":
