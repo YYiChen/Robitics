@@ -1,8 +1,8 @@
-"""Lightweight PC bridge: keep Pi face-pivot alive and stop it when centred.
+"""Keep Pi face-pivot alive and stop it when the PC face result is centred.
 
-MediaPipe remains exclusively inside ``face_position_server.py``.  This process
-only consumes its latest JSON, so the UI can trigger J/L on the Pi while the
-expensive model keeps running independently.
+The bridge is model-neutral.  It consumes the selected PC publisher's latest
+JSON, so DeskMate YuNet/SFace or another isolated detector can be replaced
+without duplicating Pi motor-control ownership.
 """
 from __future__ import annotations
 
@@ -32,9 +32,20 @@ class FaceStopArmer:
         return self.armed
 
 
+def decode_json_object(body: bytes) -> dict:
+    """Decode direct JSON objects and the Pi's legacy double-encoded response."""
+
+    value = json.loads(body.decode("utf-8"))
+    if isinstance(value, str):
+        value = json.loads(value)
+    if not isinstance(value, dict):
+        raise ValueError("expected a JSON object")
+    return value
+
+
 def fetch_json(url: str, timeout: float = .4) -> dict:
     with urlopen(url, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+        return decode_json_object(response.read())
 
 
 def post_command(pi_url: str, command: str, timeout: float = .4) -> dict:
