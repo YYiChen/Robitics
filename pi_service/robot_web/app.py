@@ -24,12 +24,15 @@ from camera import CameraStreamer
 from configuration import UnifiedConfigStore, migrate_formal_legacy_config
 from controller import RobotController
 from dual_stream_camera import DualStreamCamera
-from four_endpoint_validation_route import FourEndpointValidationRouteTracker
-from green_white_scanline_i_route import GreenWhiteScanlineIShapeRouteTracker
 from oled_status import OledStatusService
-from pc_vision_adaptor_route import PcVisionAdaptorRouteTracker
 from routes.end_line.tracker import EndLineTurnAdaptorRouteTracker
-from scanline_i_route import ScanlineIShapeRouteTracker, load_scanline_tuning_config
+from routes.pc_adaptor.tracker import PcVisionAdaptorRouteTracker
+from routes.scanline.four_endpoint import FourEndpointValidationRouteTracker
+from routes.scanline.green_white import GreenWhiteScanlineIShapeRouteTracker
+from routes.scanline.tracker import (
+    ScanlineIShapeRouteTracker,
+    load_scanline_tuning_config,
+)
 from system_metrics import SystemMetrics
 from webrtc_stream import WebRTCStreamer
 

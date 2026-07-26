@@ -4,7 +4,7 @@ from __future__ import annotations
 from flask import Response, jsonify, request
 
 from routes.end_line.tracker import EndLineTurnAdaptorRouteTracker
-from pc_vision_adaptor_route import PcVisionAdaptorRouteTracker
+from routes.pc_adaptor.tracker import PcVisionAdaptorRouteTracker
 
 
 def register_route_api(app, route_preview, route_tracker) -> None:

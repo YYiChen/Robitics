@@ -351,4 +351,3 @@ class ScanlineIShapeRouteTracker(ScanlineLoggingMixin):
             with self._tuning_lock:
                 self._planner = None
             self._set_status(running=False)
-
