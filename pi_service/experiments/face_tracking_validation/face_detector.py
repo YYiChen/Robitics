@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -24,11 +25,13 @@ class FaceDetector:
     """Haar frontal-face detector with no vehicle or route dependencies."""
 
     def __init__(self, cascade_path: str | None = None) -> None:
-        path = cascade_path or (cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-        self.cascade_path = path
-        self._cascade = cv2.CascadeClassifier(path)
+        bundled = Path(__file__).with_name("haarcascade_frontalface_default.xml")
+        opencv_data = getattr(getattr(cv2, "data", None), "haarcascades", "")
+        path = cascade_path or str(bundled if bundled.is_file() else Path(opencv_data) / "haarcascade_frontalface_default.xml")
+        self.cascade_path = str(path)
+        self._cascade = cv2.CascadeClassifier(self.cascade_path)
         if self._cascade.empty():
-            raise RuntimeError(f"无法加载 Haar 人脸模型: {path}")
+            raise RuntimeError(f"无法加载 Haar 人脸模型: {self.cascade_path}")
 
     def detect(self, frame: np.ndarray) -> FaceResult:
         height, width = frame.shape[:2]
