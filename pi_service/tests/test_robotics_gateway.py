@@ -116,8 +116,25 @@ class RoboticsGatewayTests(unittest.TestCase):
         self.assertIsNone(self.gateway.request_result("unknown-request"))
 
     def test_dispense_reuses_controller_token_and_marks_evidence_boundary(self) -> None:
-        payload = {"request_id": "deal-1", "action": "dispense_one"}
+        payload = {
+            "request_id": "deal-1",
+            "action": "dispense_one",
+            "feed_pwm": -10,
+            "feed_duration_ms": 20,
+            "deal_pwm": 30,
+            "deal_duration_ms": 40,
+        }
         first = self.gateway.execute(payload)
+        self.assertEqual(
+            self.controller.deal_calls,
+            [{
+                "token": "deal-1",
+                "feed_pwm": -150,
+                "feed_duration_ms": 1500,
+                "deal_pwm": 150,
+                "deal_duration_ms": 400,
+            }],
+        )
         self.controller.deal_result = {"state": "completed"}
         second = self.gateway.execute(payload)
         queried = self.gateway.request_result("deal-1")

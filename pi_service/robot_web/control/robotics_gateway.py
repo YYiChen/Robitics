@@ -33,10 +33,10 @@ VISUAL_TURN_TUNING_KEYS = (
     "face_turn_line_center_confirm_frames",
 )
 CARD_DEFAULTS = {
-    "feed_pwm": -255,
-    "feed_duration_ms": 5000,
-    "deal_pwm": 255,
-    "deal_duration_ms": 1000,
+    "feed_pwm": -150,
+    "feed_duration_ms": 1500,
+    "deal_pwm": 150,
+    "deal_duration_ms": 400,
 }
 
 
@@ -266,7 +266,7 @@ class RoboticsGateway:
         elif action == "dispense_one":
             request = {"token": request_id}
             for key, default in CARD_DEFAULTS.items():
-                request[key] = payload.get(key, default)
+                request[key] = default
             detail = self.controller.deal_from_key_request(request)
         else:
             detail = self.route_tracker.request_roundtrip_stop()
