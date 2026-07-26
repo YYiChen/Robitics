@@ -410,7 +410,12 @@ class EndLineTurnAdaptorRouteTracker:
                     elif self._motion_phase == "BRAKE_HOLD":
                         self._motion_phase, self._action_until = "PIVOT", now + self._turn_90.step_seconds
                     manual_active = self._motion_phase.startswith("MANUAL")
-                    if manual_active:
+                    if face_turn_active:
+                        # The continuous face pivot already issued its command
+                        # above.  Do not fall through into the manual-only
+                        # parking branch and immediately cancel that command.
+                        pass
+                    elif manual_active:
                         pass
                     elif self._manual_only:
                         self._stop_motor()
