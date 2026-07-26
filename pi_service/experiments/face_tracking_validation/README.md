@@ -1,13 +1,12 @@
 # Haar 人脸灵敏度探索（隔离，不控制小车）
 
-此实验只读取已经运行的 5000 相机流，在 5058 画出人脸框并记录 JSONL。OpenCV 官方
-`haarcascade_frontalface_default.xml` 已随实验目录保存，因此不依赖树莓派的 `cv2.data`。
-它不导入
-`robot_web.controller`，不发送 HTTP 电机指令，也不响应 M 键。
+此实验只读取已经运行的 5000 相机流，在 5058 画出人脸框并记录 JSONL。核心检测器使用
+MediaPipe Tasks 的 BlazeFace short-range 模型；它不导入 `robot_web.controller`，不发送 HTTP
+电机指令，也不响应 M 键。
 
 ## 树莓派运行
 
-先确保主服务的相机预览可访问，再运行：
+先确保主服务的相机预览可访问，并在当前 Python 环境安装 `mediapipe`，再运行：
 
 ```bash
 cd /home/g11/Desktop/pi_service/experiments/face_tracking_validation

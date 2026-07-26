@@ -19,7 +19,7 @@ import cv2
 import numpy as np
 from flask import Flask, Response, jsonify
 
-from face_detector import FaceDetector, FaceResult
+from face_detector import FaceDetectionResult, FaceDetector
 
 
 HTML = """<!doctype html><meta charset=utf-8><title>Haar Face Probe</title>
@@ -45,7 +45,7 @@ class FaceProbe:
         with self._lock:
             return self._latest, dict(self._status)
 
-    def _record(self, frame_index: int, result: FaceResult, processing_ms: float, source_fps: float) -> None:
+    def _record(self, frame_index: int, result: FaceDetectionResult, processing_ms: float, source_fps: float) -> None:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"time": datetime.now(timezone.utc).isoformat(), "frame": frame_index, "processing_ms": round(processing_ms, 2), "source_fps": round(source_fps, 2), **asdict(result)}
         with self.log_path.open("a", encoding="utf-8") as handle:
@@ -76,10 +76,11 @@ class FaceProbe:
                     now = time.monotonic()
                     source_fps = 1.0 / max(.001, now - last_at)
                     last_at = now
-                    if result.bbox is not None:
-                        x, y, width, height = result.bbox
-                        cv2.rectangle(frame, (x, y), (x + width, y + height), (0, 220, 0), 2)
-                        cv2.putText(frame, f"FACE {width}px", (x, max(22, y - 8)), cv2.FONT_HERSHEY_SIMPLEX, .65, (0, 220, 0), 2)
+                    if result.detected:
+                        x = round(result.center_x - result.box_width / 2)
+                        y = round(result.center_y - result.box_height / 2)
+                        cv2.rectangle(frame, (x, y), (x + result.box_width, y + result.box_height), (0, 220, 0), 2)
+                        cv2.putText(frame, f"FACE {result.box_width}px  {result.score:.0%}", (x, max(22, y - 8)), cv2.FONT_HERSHEY_SIMPLEX, .65, (0, 220, 0), 2)
                     cv2.putText(frame, f"Haar face probe | detected={result.detected} | {processing_ms:.1f} ms", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, .55, (0, 220, 255), 2)
                     ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 78])
                     if not ok:
@@ -92,7 +93,7 @@ class FaceProbe:
                     detect_rate = 100.0 * sum(detected for _at, detected in self._detections) / max(1, len(self._detections))
                     with self._lock:
                         self._latest = encoded.tobytes()
-                        self._status = {"detected": result.detected, "width": result.width, "area": result.area, "processing_ms": round(processing_ms, 1), "source_fps": round(source_fps, 1), "detect_rate_5s": round(detect_rate, 1), "frames": frame_index, "error": ""}
+                        self._status = {"detected": result.detected, "width": result.box_width, "area": result.box_width * result.box_height, "score": round(result.score, 3), "processing_ms": round(processing_ms, 1), "source_fps": round(source_fps, 1), "detect_rate_5s": round(detect_rate, 1), "frames": frame_index, "error": ""}
         except Exception as exc:
             with self._lock:
                 self._status["error"] = str(exc)
