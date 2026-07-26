@@ -31,6 +31,19 @@ git submodule update --init --recursive
 py -3 -m pip install -e .\subrepos\DeskMate-Advance
 ```
 
+两个 ONNX 模型由 Git LFS 管理。新机器如果没有完成 LFS smudge，模型文件会只是
+约 130 字节的文本指针，仓库虽然能克隆但模型一定无法加载。安装 Git LFS 后执行：
+
+```powershell
+git -C .\subrepos\DeskMate-Advance lfs pull
+```
+
+然后用 `FaceIdentityConfig.verify_assets()` 或本目录单元测试核对模型 SHA-256。
+当前固定模型哈希为：
+
+- YuNet：`8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4`
+- SFace：`0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79`
+
 ## 无电机探测
 
 先启动 Pi 的 5000 服务，然后在电脑执行有限帧探测：
