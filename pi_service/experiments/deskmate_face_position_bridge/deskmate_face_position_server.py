@@ -102,6 +102,12 @@ def _command_runs_this_server(cmdline: list[str], cwd: str | None) -> bool:
     return False
 
 
+def _is_python_runtime(process_name: str) -> bool:
+    """Exclude launchers such as py.exe while accepting real Python runtimes."""
+
+    return Path(process_name).stem.lower().startswith("python")
+
+
 def replace_existing_server_instances(
     port: int,
     *,
@@ -120,16 +126,18 @@ def replace_existing_server_instances(
 
     current_pid = os.getpid()
     matches = []
-    for process in psutil.process_iter(["pid", "cmdline"]):
+    for process in psutil.process_iter(["pid", "name", "cmdline"]):
         if process.pid == current_pid:
             continue
         try:
+            process_name = process.name()
             cmdline = process.cmdline()
             cwd = process.cwd()
         except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
             continue
         if (
             cmdline
+            and _is_python_runtime(process_name)
             and _configured_port(cmdline) == port
             and _command_runs_this_server(cmdline, cwd)
         ):

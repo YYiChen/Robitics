@@ -18,6 +18,7 @@ from deskmate_face_position_server import (
     DEFAULT_SOURCE,
     _command_runs_this_server,
     _configured_port,
+    _is_python_runtime,
     annotate_face_preview,
     camera_config,
     face_identity_config,
@@ -74,6 +75,12 @@ class DeskMateFacePositionServerTests(unittest.TestCase):
             _configured_port(["python.exe", "server.py", "--port=5061"]),
             5061,
         )
+
+    def test_single_instance_does_not_treat_py_launcher_as_server(self) -> None:
+        self.assertTrue(_is_python_runtime("python.exe"))
+        self.assertTrue(_is_python_runtime("python3.12"))
+        self.assertFalse(_is_python_runtime("py.exe"))
+        self.assertFalse(_is_python_runtime("pwsh.exe"))
 
     def test_submodule_assets_verify_and_official_models_load(self) -> None:
         config = FaceIdentityConfig.from_json(DESKMATE_FACE_CONFIG)
