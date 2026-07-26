@@ -96,6 +96,24 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
         if not isinstance(route_tracker, EndLineTurnAdaptorRouteTracker):
             return jsonify(ok=False, error="当前路线模式不支持 N 自动循迹左转任务"), 409
         return jsonify(ok=True, autonomous=route_tracker.toggle_auto_left_mission())
+    @app.post("/api/autonomous/face-turn")
+    def autonomous_face_turn():
+        if not isinstance(route_tracker, EndLineTurnAdaptorRouteTracker):
+            return jsonify(ok=False, error="当前路线模式不支持 J/L DroidCam 人脸转向"), 409
+        payload = request.get_json(silent=True) or {}
+        action = str(payload.get("action", "")).upper()
+        try:
+            if action == "START":
+                status = route_tracker.request_face_turn(payload.get("direction", ""))
+            elif action == "OBSERVE":
+                status = route_tracker.submit_face_observation(payload)
+            elif action == "CANCEL":
+                status = route_tracker.cancel_face_turn()
+            else:
+                raise ValueError("action 只支持 START、OBSERVE 或 CANCEL")
+            return jsonify(ok=True, autonomous=status)
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
     @app.get("/api/camera/highres/latest")
     def latest_highres_image():
         unavailable = highres_available()

@@ -73,6 +73,39 @@ class RobotWebClient:
     def stop(self) -> None:
         self._request("/api/stop", {})
 
+    def start_face_turn(self, direction: str) -> dict[str, Any]:
+        direction = direction.upper()
+        if direction not in {"LEFT", "RIGHT"}:
+            raise ValueError("face turn direction must be LEFT or RIGHT")
+        response = self._request(
+            "/api/autonomous/face-turn",
+            {"action": "START", "direction": direction},
+        )
+        return dict(response["autonomous"])
+
+    def send_face_observation(
+        self,
+        *,
+        found: bool,
+        frame_width: int,
+        center_x: float | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "action": "OBSERVE",
+            "found": bool(found),
+            "frame_width": int(frame_width),
+        }
+        if found:
+            if center_x is None:
+                raise ValueError("center_x is required when a face is found")
+            payload["center_x"] = float(center_x)
+        response = self._request("/api/autonomous/face-turn", payload)
+        return dict(response["autonomous"])
+
+    def cancel_face_turn(self) -> dict[str, Any]:
+        response = self._request("/api/autonomous/face-turn", {"action": "CANCEL"})
+        return dict(response["autonomous"])
+
     def configure_drive(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Persist a validated drive profile through robot-web's API."""
         return dict(self._request("/api/config", payload)["config"])

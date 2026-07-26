@@ -18,6 +18,8 @@ class StubRobotClient(RobotWebClient):
             return {"ok": True, **payload}
         if path == "/api/config":
             return {"ok": True, "config": payload}
+        if path == "/api/autonomous/face-turn":
+            return {"ok": True, "autonomous": {"face_turn_active": payload["action"] != "CANCEL"}}
         return {"ok": True}
 
 
@@ -45,6 +47,20 @@ class RobotWebClientTests(unittest.TestCase):
         self.assertEqual(
             client.calls,
             [("/api/drive", {"right_pwm": 140, "left_pwm": 80})],
+        )
+
+    def test_face_turn_start_observation_and_cancel_use_dedicated_endpoint(self):
+        client = StubRobotClient()
+        self.assertTrue(client.start_face_turn("left")["face_turn_active"])
+        client.send_face_observation(found=True, frame_width=640, center_x=300)
+        self.assertFalse(client.cancel_face_turn()["face_turn_active"])
+        self.assertEqual(
+            client.calls,
+            [
+                ("/api/autonomous/face-turn", {"action": "START", "direction": "LEFT"}),
+                ("/api/autonomous/face-turn", {"action": "OBSERVE", "found": True, "frame_width": 640, "center_x": 300.0}),
+                ("/api/autonomous/face-turn", {"action": "CANCEL"}),
+            ],
         )
 
 

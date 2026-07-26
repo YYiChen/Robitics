@@ -23,6 +23,12 @@ class _Gate:
     def set_enabled(self, enabled): self.value = bool(enabled); return self.value
 
 
+class _Controller:
+    def __init__(self): self.commands = []
+    def set_direct_drive(self, right, left): self.commands.append((right, left))
+    def stop_now(self): self.commands.append((0, 0))
+
+
 class EndLineAdaptorTuningTests(unittest.TestCase):
     def test_update_is_visible_immediate_and_persisted(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -99,3 +105,39 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
             self.assertFalse(status["enabled"])
             self.assertFalse(status["auto_mission_active"])
             self.assertEqual(status["state"], "AUTO_CANCELLED")
+
+    def test_j_left_face_turn_stops_after_four_centered_observations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gate = _Gate()
+            tracker = EndLineTurnAdaptorRouteTracker(_Controller(), None, None, gate, tuning_path=Path(directory) / "tuning.json")
+            status = tracker.request_face_turn("LEFT")
+            self.assertTrue(status["face_turn_active"])
+            self.assertEqual(status["face_search_side"], "LEFT")
+
+            now = tracker._face_turn_started_at + 0.1
+            for index in range(4):
+                tracker.submit_face_observation({"found": True, "frame_width": 640, "center_x": 320})
+                state, _motor, _command, _detail = tracker._step_face_turn(now + index * 0.01)
+            self.assertEqual(state, "FACE_CENTERED")
+            self.assertFalse(tracker.status_dict()["face_turn_active"])
+            self.assertFalse(gate.enabled())
+
+    def test_l_right_face_turn_searches_right_and_stale_stream_stops(self):
+        with tempfile.TemporaryDirectory() as directory:
+            controller = _Controller()
+            gate = _Gate()
+            tracker = EndLineTurnAdaptorRouteTracker(controller, None, None, gate, tuning_path=Path(directory) / "tuning.json")
+            tracker.request_face_turn("RIGHT")
+            tracker.submit_face_observation({"found": False, "frame_width": 640})
+            now = tracker._face_turn_started_at + 0.1
+            state, _motor, _command, _detail = tracker._step_face_turn(now)
+            self.assertEqual(state, "FACE_START_RIGHT")
+            state, _motor, command, _detail = tracker._step_face_turn(now + 0.01)
+            self.assertEqual(state, "FACE_PULSE_RIGHT")
+            self.assertEqual(command, (-adaptor_module.FACE_TURN_PWM, adaptor_module.FACE_TURN_PWM))
+
+            state, _motor, _command, _detail = tracker._step_face_turn(
+                tracker._face_observation_at + adaptor_module.FACE_OBSERVATION_TIMEOUT_SECONDS + 0.01
+            )
+            self.assertEqual(state, "FACE_STREAM_LOST")
+            self.assertFalse(gate.enabled())

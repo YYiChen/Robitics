@@ -23,6 +23,14 @@ from turn_profiles import TurnProfile, load_turn_profile, save_turn_profile  # n
 TUNING_PATH = EXPERIMENT / "end_line_web_tuning.json"
 TURN_90_PATH = EXPERIMENT / "turn_90.json"
 TURN_180_PATH = EXPERIMENT / "turn_180.json"
+FACE_TURN_PWM = 90
+FACE_PULSE_SECONDS = 0.10
+FACE_SETTLE_SECONDS = 0.32
+FACE_CENTER_TOLERANCE = 0.10
+FACE_CENTER_CONFIRM_FRAMES = 4
+FACE_MAX_PULSES = 40
+FACE_TURN_TIMEOUT_SECONDS = 25.0
+FACE_OBSERVATION_TIMEOUT_SECONDS = 1.0
 TUNING_RULES = {
     "process_fps": (float, 5.0, 60.0),
     "straight_pwm": (int, 0, 255),
@@ -83,6 +91,16 @@ class EndLineTurnAdaptorRouteTracker:
         # but must never make the vehicle start following the white line.
         self._manual_only = True
         self._auto_mission_active = False
+        self._face_turn_active = False
+        self._face_search_side = None
+        self._face_offset = None
+        self._face_found = False
+        self._face_observation_at = 0.0
+        self._face_observation_sequence = 0
+        self._face_processed_sequence = 0
+        self._face_turn_started_at = 0.0
+        self._face_center_streak = 0
+        self._face_pulse_count = 0
         self._idle_state = "PAUSED"
         self._idle_detail = "按 M 解锁半自动转向，或按 N 启动自动任务"
         self._run_log = None
@@ -116,7 +134,17 @@ class EndLineTurnAdaptorRouteTracker:
         result.update({
             "enabled": self.gate.enabled(),
             "auto_mission_active": self._auto_mission_active,
-            "control_mode": "AUTO_LEFT_90" if self._auto_mission_active else "MANUAL_TURN",
+            "face_turn_active": self._face_turn_active,
+            "face_search_side": self._face_search_side,
+            "face_found": self._face_found,
+            "face_offset": self._face_offset,
+            "face_center_streak": self._face_center_streak,
+            "face_pulse_count": self._face_pulse_count,
+            "control_mode": (
+                f"FACE_{self._face_search_side}"
+                if self._face_turn_active
+                else "AUTO_LEFT_90" if self._auto_mission_active else "MANUAL_TURN"
+            ),
             "tuning": self._tuning_values(),
             "tuning_path": str(self._tuning_path),
         })
@@ -131,10 +159,27 @@ class EndLineTurnAdaptorRouteTracker:
         self._manual_degrees, self._manual_profile = None, None
         self._manual_max_steps, self._manual_steps_started, self._red_alignment_streak = 0, 0, 0
 
+    def _clear_face_turn(self) -> None:
+        with self._lock:
+            self._face_turn_active = False
+            self._face_search_side = None
+            self._face_offset = None
+            self._face_found = False
+            self._face_observation_at = 0.0
+            self._face_observation_sequence = 0
+            self._face_processed_sequence = 0
+            self._face_turn_started_at = 0.0
+            self._face_center_streak = 0
+            self._face_pulse_count = 0
+
     def toggle_drive(self) -> dict:
         # M remains the semi-automatic diagnostic gate.  During an N mission it
         # doubles as an immediate cancel/stop, but never starts autonomous follow.
-        if self._auto_mission_active:
+        if self._face_turn_active:
+            self._clear_face_turn()
+            self._manual_only = True
+            enabled = self.gate.set_enabled(False)
+        elif self._auto_mission_active:
             self._auto_mission_active = False
             self._manual_only = True
             enabled = self.gate.set_enabled(False)
@@ -162,6 +207,7 @@ class EndLineTurnAdaptorRouteTracker:
             self._set_status(enabled=False, state=self._idle_state, detail=self._idle_detail)
             return self.status_dict()
 
+        self._clear_face_turn()
         self.gate.set_enabled(False)
         self._reset_motion()
         self._manual_only = False
@@ -176,6 +222,130 @@ class EndLineTurnAdaptorRouteTracker:
         )
         return self.status_dict()
 
+    def request_face_turn(self, direction: str) -> dict:
+        """Start J/L face-search turning while PWM authority remains on the Pi."""
+        side = str(direction).strip().upper()
+        if side not in {"LEFT", "RIGHT"}:
+            raise ValueError("人脸转向方向只支持 LEFT 或 RIGHT")
+        self.gate.set_enabled(False)
+        self._reset_motion()
+        self._auto_mission_active = False
+        self._manual_only = True
+        self._clear_face_turn()
+        now = time.monotonic()
+        with self._lock:
+            self._face_turn_active = True
+            self._face_search_side = side
+            self._face_turn_started_at = now
+            self._motion_phase = "FACE_ALIGN"
+        self.gate.set_enabled(True)
+        key = "J" if side == "LEFT" else "L"
+        self._set_status(
+            enabled=True,
+            state=f"FACE_SEARCH_{side}",
+            detail=f"{key} 人脸转向：等待 DroidCam 观测",
+        )
+        return self.status_dict()
+
+    def submit_face_observation(self, payload: dict) -> dict:
+        if not self._face_turn_active:
+            raise ValueError("请先在 DroidCam 窗口按 J 或 L 启动人脸转向")
+        if not isinstance(payload.get("found"), bool):
+            raise ValueError("found 必须是布尔值")
+        found = payload["found"]
+        try:
+            frame_width = int(payload.get("frame_width"))
+        except (TypeError, ValueError):
+            raise ValueError("frame_width 必须是正整数") from None
+        if frame_width <= 0:
+            raise ValueError("frame_width 必须是正整数")
+        offset = None
+        if found:
+            try:
+                center_x = float(payload.get("center_x"))
+            except (TypeError, ValueError):
+                raise ValueError("检测到人脸时 center_x 必须是数值") from None
+            if not 0.0 <= center_x <= frame_width:
+                raise ValueError("center_x 必须位于画面范围内")
+            offset = (center_x - frame_width / 2.0) / max(1.0, frame_width / 2.0)
+        with self._lock:
+            self._face_found = found
+            self._face_offset = offset
+            self._face_observation_at = time.monotonic()
+            self._face_observation_sequence += 1
+        return self.status_dict()
+
+    def cancel_face_turn(self) -> dict:
+        if not self._face_turn_active:
+            return self.status_dict()
+        self.gate.set_enabled(False)
+        self._clear_face_turn()
+        self._reset_motion()
+        self._idle_state, self._idle_detail = "FACE_CANCELLED", "人脸转向已取消，电机已停止"
+        self._set_status(enabled=False, state=self._idle_state, detail=self._idle_detail)
+        return self.status_dict()
+
+    def _finish_face_turn(self, state: str, detail: str) -> tuple[str, str, None, str]:
+        self._stop_motor()
+        self.gate.set_enabled(False)
+        self._clear_face_turn()
+        self._motion_phase = "FOLLOW"
+        self._idle_state, self._idle_detail = state, detail
+        return state, "STOP_FACE_TURN", None, detail
+
+    def _step_face_turn(self, now: float) -> tuple[str, str, tuple[int, int] | None, str]:
+        """Advance one fail-safe pulse/settle/observe cycle."""
+        if now - self._face_turn_started_at >= FACE_TURN_TIMEOUT_SECONDS:
+            return self._finish_face_turn("FACE_TURN_TIMEOUT", "人脸转向超时，已安全停车")
+        observation_age = now - self._face_observation_at if self._face_observation_at else float("inf")
+        if observation_age > FACE_OBSERVATION_TIMEOUT_SECONDS:
+            self._stop_motor()
+            if now - self._face_turn_started_at > FACE_OBSERVATION_TIMEOUT_SECONDS:
+                return self._finish_face_turn("FACE_STREAM_LOST", "DroidCam 观测中断，已安全停车")
+            return "FACE_WAIT_FRAME", "STOP_WAITING_FOR_DROIDCAM", None, "等待第一帧 DroidCam 人脸观测"
+
+        if self._motion_phase == "FACE_PULSE" and now < self._action_until:
+            pwm = FACE_TURN_PWM
+            command = (pwm, -pwm) if self._pending_turn_side == "LEFT" else (-pwm, pwm)
+            self.controller.set_direct_drive(*command)
+            self._motor_active = True
+            return f"FACE_PULSE_{self._pending_turn_side}", f"FACE_PULSE R={command[0]} L={command[1]}", command, "人脸短脉冲转向"
+        if self._motion_phase == "FACE_PULSE":
+            self._stop_motor()
+            self._motion_phase = "FACE_SETTLE"
+            self._action_until = now + FACE_SETTLE_SECONDS
+            return "FACE_SETTLE", "STOP_CAMERA_SETTLE", None, "等待 DroidCam 画面稳定"
+        if self._motion_phase == "FACE_SETTLE" and now < self._action_until:
+            self._stop_motor()
+            return "FACE_SETTLE", "STOP_CAMERA_SETTLE", None, "等待 DroidCam 画面稳定"
+        if self._motion_phase == "FACE_SETTLE":
+            self._motion_phase = "FACE_ALIGN"
+
+        self._stop_motor()
+        if self._face_observation_sequence == self._face_processed_sequence:
+            return "FACE_ALIGN", "STOP_WAITING_NEW_FACE_FRAME", None, "等待新的 DroidCam 人脸帧"
+        self._face_processed_sequence = self._face_observation_sequence
+        offset = self._face_offset
+        if offset is not None and abs(offset) <= FACE_CENTER_TOLERANCE:
+            self._face_center_streak += 1
+            if self._face_center_streak >= FACE_CENTER_CONFIRM_FRAMES:
+                return self._finish_face_turn("FACE_CENTERED", "人脸已连续居中确认，转向完成")
+            return "FACE_CENTER_CONFIRM", "STOP_FACE_IN_CENTER", None, f"人脸居中确认 {self._face_center_streak}/{FACE_CENTER_CONFIRM_FRAMES}"
+
+        self._face_center_streak = 0
+        if self._face_pulse_count >= FACE_MAX_PULSES:
+            return self._finish_face_turn("FACE_PULSE_LIMIT", "达到人脸转向最大脉冲数，已安全停车")
+        side = self._face_search_side if offset is None else ("LEFT" if offset < 0 else "RIGHT")
+        self._pending_turn_side = side
+        self._face_pulse_count += 1
+        self._motion_phase = "FACE_PULSE"
+        self._action_until = now + FACE_PULSE_SECONDS
+        return f"FACE_START_{side}", "STOP_BEFORE_FACE_PULSE", None, (
+            f"未检测到人脸，继续向{side}搜索"
+            if offset is None
+            else f"人脸偏差 {offset:+.3f}，向{side}修正"
+        )
+
     def request_manual_turn(self, command: str) -> dict:
         """M-gated turn; profiles are refreshed from disk for every key press."""
         # The JSON files are the source of truth.  Reload here as well as on
@@ -189,6 +359,8 @@ class EndLineTurnAdaptorRouteTracker:
             side, degrees, profile, steps = commands[str(command).upper()]
         except KeyError as exc:
             raise ValueError("手动转向只支持 LEFT_90、RIGHT_90、LEFT_180、RIGHT_180") from exc
+        if self._face_turn_active:
+            raise ValueError("J/L 人脸转向正在运行；请先停止")
         if self._auto_mission_active:
             raise ValueError("N 自动任务正在运行；请先按 N 或 M 停车")
         if not self.gate.enabled():
@@ -327,7 +499,7 @@ class EndLineTurnAdaptorRouteTracker:
 
         last, frame_index = 0.0, 0
         self._open_log()
-        self._set_status(running=True, state="ready", detail="M 解锁 Q/E/U/I 半自动转向；N 自动循迹到终点并左转 90°")
+        self._set_status(running=True, state="ready", detail="M 解锁 Q/E/U/I；N 自动循迹；J/L 使用 DroidCam 人脸居中转向")
         try:
             while not self._stop.is_set():
                 now, jpeg = time.monotonic(), self.camera.latest_jpeg()
@@ -358,13 +530,16 @@ class EndLineTurnAdaptorRouteTracker:
                 if self.gate.enabled():
                     recent_red = self._last_red_side is not None and frame_index - self._last_red_seen_frame <= self._line_config.red_direction_memory_frames
                     manual_active = self._motion_phase.startswith("MANUAL")
+                    face_cycle_active = self._face_turn_active
                     if manual_active:
                         if red.detected and red.angle_degrees is not None and red.angle_degrees >= self._red_alignment_min_angle:
                             self._red_alignment_streak += 1
                         else:
                             self._red_alignment_streak = 0
                     alignment_confirmed = self._red_alignment_streak >= self._red_alignment_confirm_frames
-                    if self._motion_phase == "MANUAL_STEP" and alignment_confirmed:
+                    if face_cycle_active:
+                        state, motor, commanded, detail = self._step_face_turn(now)
+                    elif self._motion_phase == "MANUAL_STEP" and alignment_confirmed:
                         self._stop_motor()
                         self._motion_phase = "MANUAL_COMPLETE"
                         state, motor, detail = "MANUAL_RED_ALIGNED", "STOP_RED_VERTICAL", f"red angle {red.angle_degrees:.1f}° confirmed"
@@ -402,7 +577,9 @@ class EndLineTurnAdaptorRouteTracker:
                     elif self._motion_phase == "BRAKE_HOLD":
                         self._motion_phase, self._action_until = "PIVOT", now + self._turn_90.step_seconds
                     manual_active = self._motion_phase.startswith("MANUAL")
-                    if manual_active:
+                    if face_cycle_active:
+                        pass
+                    elif manual_active:
                         pass
                     elif self._manual_only:
                         self._stop_motor()
@@ -468,7 +645,13 @@ class EndLineTurnAdaptorRouteTracker:
                     cv2.line(overlay, (0, red.y), (overlay.shape[1] - 1, red.y), (0, 0, 255), 2)
                     cv2.line(overlay, (0, red.bottom_y), (overlay.shape[1] - 1, red.bottom_y), (0, 80, 255), 1)
                 cv2.rectangle(overlay, (10, 10), (1110, 112), (20, 20, 20), cv2.FILLED)
-                drive_label = "AUTO N" if self._auto_mission_active else ("MANUAL M" if self.gate.enabled() else "PAUSED (M/N)")
+                drive_label = (
+                    f"FACE {self._face_search_side}"
+                    if self._face_turn_active
+                    else "AUTO N" if self._auto_mission_active
+                    else "MANUAL M" if self.gate.enabled()
+                    else "PAUSED (M/N/J/L)"
+                )
                 cv2.putText(overlay, f"END-LINE ADAPTOR: {drive_label}", (18, 38), cv2.FONT_HERSHEY_SIMPLEX, .65, (0, 220, 0) if self.gate.enabled() else (0, 180, 255), 2)
                 cv2.putText(overlay, f"WHITE: valid={result.valid} centre={result.center_x} conf={result.confidence:.2f}  RED: {red.detected} x={red.center_x} angle={red.angle_degrees} side={self._last_red_side}", (18, 66), cv2.FONT_HERSHEY_SIMPLEX, .43, (255, 255, 255), 1)
                 cv2.putText(overlay, f"STATE: {state}  {decision.reason}  MOTOR: {motor}", (18, 94), cv2.FONT_HERSHEY_SIMPLEX, .43, (0, 255, 255), 1)
