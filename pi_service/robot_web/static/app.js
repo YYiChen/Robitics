@@ -21,6 +21,8 @@ const heldKeys = new Set();
 const heldSteeringKeys = new Set();
 let autonomousToggleBusy = false;
 let facePreviewRetryTimer = null;
+let routeTuningBusy = false;
+const routeTuningDirtyInputs = new Set();
 
 async function toggleAutonomousDrive() {
   if (autonomousToggleBusy) return;
@@ -56,9 +58,9 @@ function updateAutonomousUi(autonomous) {
   for (const input of activeTuningInputs) {
     const key = scanlineI ? input.dataset.scanlineTuning : (endLine ? input.dataset.endLineTuning : input.dataset.routeTuning);
     const supported = Object.prototype.hasOwnProperty.call(tuning, key);
-    if (supported && document.activeElement !== input) input.value = tuning[key];
+    if (supported && document.activeElement !== input && !routeTuningDirtyInputs.has(input)) input.value = tuning[key];
     input.closest("label")?.classList.toggle("hidden", endLine && !supported);
-    input.disabled = !available;
+    input.disabled = !available || routeTuningBusy;
   }
   $("#scanlineRouteTuning").classList.toggle("hidden", !scanlineI);
   $("#endLineRouteTuning").classList.toggle("hidden", !endLine);
@@ -67,25 +69,48 @@ function updateAutonomousUi(autonomous) {
   $("#genericRouteTuning").classList.toggle("hidden", scanlineI || endLine);
   $("#genericRouteTuningNote").classList.toggle("hidden", scanlineI || endLine);
   const tuningState = $("#routeTuningState");
-  if (tuningState) tuningState.textContent = available ? (scanlineI ? "扫描线 I 型实时参数" : (endLine ? "单白线按键转向实时参数" : "实时参数")) : "路线预判未开启";
-  $("#applyRouteTuning").disabled = !available;
+  if (tuningState) tuningState.textContent = available ? (routeTuningDirtyInputs.size ? "有未保存的参数修改" : (scanlineI ? "扫描线 I 型实时参数" : (endLine ? "单白线按键转向实时参数" : "实时参数"))) : "路线预判未开启";
+  $("#applyRouteTuning").disabled = !available || routeTuningBusy;
   $("#applyRouteTuning").textContent = scanlineI ? "实时应用并保存 I 型参数" : (endLine ? "实时应用并保存单白线参数" : "实时应用并保存路线参数");
 }
 $("#autonomousToggle").onclick = toggleAutonomousDrive;
+for (const input of document.querySelectorAll("[data-scanline-tuning],[data-end-line-tuning],[data-route-tuning]")) {
+  input.addEventListener("input", () => { routeTuningDirtyInputs.add(input); });
+  input.addEventListener("change", () => { routeTuningDirtyInputs.add(input); });
+}
 $("#applyRouteTuning").onclick = async () => {
+  if (routeTuningBusy) return;
   const payload = {};
   const scanlineI = $("#scanlineRouteTuning").classList.contains("hidden") === false;
   const endLine = $("#endLineRouteTuning").classList.contains("hidden") === false;
-  for (const input of document.querySelectorAll(scanlineI ? "[data-scanline-tuning]" : (endLine ? "[data-end-line-tuning]" : "[data-route-tuning]"))) {
-    payload[scanlineI ? input.dataset.scanlineTuning : (endLine ? input.dataset.endLineTuning : input.dataset.routeTuning)] = Number(input.value);
+  const inputs = [...document.querySelectorAll(scanlineI ? "[data-scanline-tuning]" : (endLine ? "[data-end-line-tuning]" : "[data-route-tuning]"))];
+  for (const input of inputs) {
+    const value = Number(input.value);
+    if (!Number.isFinite(value) || !input.checkValidity()) {
+      note(`${input.closest("label")?.childNodes[0]?.textContent?.trim() || "参数"}不是有效数值`);
+      input.focus();
+      return;
+    }
+    payload[scanlineI ? input.dataset.scanlineTuning : (endLine ? input.dataset.endLineTuning : input.dataset.routeTuning)] = value;
   }
+  routeTuningBusy = true;
+  const button = $("#applyRouteTuning");
+  button.disabled = true;
+  for (const input of inputs) input.disabled = true;
   try {
-    const response = await requestJson("/api/autonomous/tuning", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)}, 1500);
-    const data = await response.json();
-    if (!response.ok || !data.ok) throw Error(data.error || "循迹参数应用失败");
+    const response = await requestJson("/api/autonomous/tuning", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)}, 5000);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) throw Error(data.error || `循迹参数应用失败（HTTP ${response.status}）`);
+    for (const input of inputs) routeTuningDirtyInputs.delete(input);
     updateAutonomousUi(data.autonomous || {});
     note(scanlineI ? "I 型直行、掉头与预判刹车参数已实时应用并保存。" : (endLine ? "单白线、Q/E/U/I 预设与 J/L/H/K 视觉转向参数已实时应用并保存。" : "循迹参数已实时应用，并保存到 tuning.py。"));
-  } catch (error) { note(error.message); }
+  } catch (error) {
+    note(error.name === "AbortError" ? "循迹参数保存超时，输入值已保留，请检查网络后重试。" : error.message);
+  } finally {
+    routeTuningBusy = false;
+    button.disabled = false;
+    for (const input of inputs) input.disabled = false;
+  }
 };
 
 async function requestJson(url, options = {}, timeoutMs = 500) {
