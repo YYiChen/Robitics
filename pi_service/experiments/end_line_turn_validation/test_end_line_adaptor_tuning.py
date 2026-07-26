@@ -75,6 +75,15 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
             self.assertEqual(status["state"], "FACE_CENTER_TURN")
             self.assertEqual(tracker._face_turn_side, "LEFT")
             self.assertEqual(adaptor_module.FACE_TURN_PWM, 255)
+            self.assertTrue(tracker._face_turn_pulse_active)
+            self.assertAlmostEqual(
+                tracker._face_turn_phase_until - tracker._face_turn_started,
+                adaptor_module.FACE_TURN_PULSE_SECONDS,
+                places=3,
+            )
+            self.assertEqual(status["tuning"]["face_turn_cooldown_seconds"], .12)
+            self.assertEqual(status["tuning"]["face_turn_heartbeat_seconds"], 3.0)
+            self.assertEqual(status["tuning"]["face_turn_max_seconds"], 15.0)
             first_deadline = tracker._face_turn_deadline
             tracker.request_face_center_turn("HEARTBEAT")
             self.assertGreaterEqual(tracker._face_turn_deadline, first_deadline)

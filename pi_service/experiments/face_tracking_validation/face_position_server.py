@@ -125,7 +125,7 @@ def make_handler(publisher: FacePositionPublisher):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Computer-side MediaPipe face-position JSON publisher")
-    parser.add_argument("--source", default="http://100.80.46.54:5000/video_feed", help="MJPEG URL, or a local camera index such as 0 for DroidCam")
+    parser.add_argument("--source", default="http://10.241.149.131:4747/video", help="MJPEG URL, or a local camera index such as 0 for DroidCam")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=5059)
     args = parser.parse_args()

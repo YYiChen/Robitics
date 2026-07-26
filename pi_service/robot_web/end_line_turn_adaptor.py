@@ -56,11 +56,14 @@ TUNING_RULES = {
     "turn_90_max_steps": (int, 1, 12),
     "turn_180_max_steps": (int, 1, 24),
 }
-FACE_TURN_HEARTBEAT_SECONDS = .60
+FACE_TURN_HEARTBEAT_SECONDS = 3.0
 # J/L is an operator-triggered, camera-stopped pivot.  It needs enough torque
 # to overcome the vehicle's static wheel friction, independently of the short
 # duration used by the Q/E preset turn.
 FACE_TURN_PWM = 255
+FACE_TURN_PULSE_SECONDS = .25
+FACE_TURN_COOLDOWN_SECONDS = .12
+FACE_TURN_MAX_SECONDS = 15.0
 
 
 class EndLineTurnAdaptorRouteTracker:
@@ -85,6 +88,8 @@ class EndLineTurnAdaptorRouteTracker:
         self._manual_max_steps, self._manual_steps_started = 0, 0
         self._red_alignment_streak = 0
         self._face_turn_side, self._face_turn_deadline = None, 0.0
+        self._face_turn_started = self._face_turn_phase_until = 0.0
+        self._face_turn_pulse_active = False
         # This deployment is deliberately keyboard-only: M arms turn commands
         # but must never make the vehicle start following the white line.
         self._manual_only = True
@@ -129,6 +134,8 @@ class EndLineTurnAdaptorRouteTracker:
             self._motion_phase, self._action_until, self._pending_turn_side = "FOLLOW", 0.0, None
             self._manual_max_steps, self._manual_steps_started, self._red_alignment_streak = 0, 0, 0
             self._face_turn_side, self._face_turn_deadline = None, 0.0
+            self._face_turn_started = self._face_turn_phase_until = 0.0
+            self._face_turn_pulse_active = False
         self._set_status(enabled=enabled, detail="按键转向已解锁，等待 Q/E/U/I" if enabled else "已暂停，电机已停止")
         return self.status_dict()
 
@@ -185,10 +192,14 @@ class EndLineTurnAdaptorRouteTracker:
                 raise ValueError("当前已有其他转向动作，请等待完成或按 M 停止")
             self._manual_only = True
             self._stop_motor()
+            now = time.monotonic()
             self._face_turn_side = "LEFT" if command.endswith("LEFT") else "RIGHT"
-            self._face_turn_deadline = time.monotonic() + FACE_TURN_HEARTBEAT_SECONDS
+            self._face_turn_deadline = now + FACE_TURN_HEARTBEAT_SECONDS
+            self._face_turn_started = now
+            self._face_turn_phase_until = now + FACE_TURN_PULSE_SECONDS
+            self._face_turn_pulse_active = True
             self._motion_phase = "FACE_CENTER_TURN"
-            self._set_status(state="FACE_CENTER_TURN", detail=f"PC 人脸居中：持续原地{self._face_turn_side}转，等待心跳", face_turn_active=True, face_search_side=self._face_turn_side)
+            self._set_status(state="FACE_CENTER_TURN", detail=f"PC 人脸居中：脉冲原地{self._face_turn_side}转，等待心跳", face_turn_active=True, face_search_side=self._face_turn_side)
         elif command == "HEARTBEAT":
             if self._motion_phase != "FACE_CENTER_TURN" or self._face_turn_side is None:
                 raise ValueError("当前没有进行中的人脸居中转向")
@@ -196,6 +207,8 @@ class EndLineTurnAdaptorRouteTracker:
         elif command == "STOP":
             self._stop_motor()
             self._motion_phase, self._face_turn_side, self._face_turn_deadline = "MANUAL_COMPLETE", None, 0.0
+            self._face_turn_started = self._face_turn_phase_until = 0.0
+            self._face_turn_pulse_active = False
             self._set_status(state="FACE_CENTERED_STOP", detail="PC 已确认人脸居中，原地转向停止", face_turn_active=False, face_search_side=None)
         else:
             raise ValueError("人脸转向只支持 START_LEFT、START_RIGHT、HEARTBEAT、STOP")
@@ -213,6 +226,10 @@ class EndLineTurnAdaptorRouteTracker:
                 "green_support_min_ratio": self._fast_config.green_support_min_ratio,
                 "turn_90_pwm": self._turn_90.pwm, "turn_90_step_seconds": self._turn_90.step_seconds,
                 "turn_180_pwm": self._turn_180.pwm, "turn_180_step_seconds": self._turn_180.step_seconds,
+                "face_turn_pwm": FACE_TURN_PWM, "face_turn_pulse_seconds": FACE_TURN_PULSE_SECONDS,
+                "face_turn_cooldown_seconds": FACE_TURN_COOLDOWN_SECONDS,
+                "face_turn_heartbeat_seconds": FACE_TURN_HEARTBEAT_SECONDS,
+                "face_turn_max_seconds": FACE_TURN_MAX_SECONDS,
                 "turn_interstep_pause_seconds": self._turn_interstep_pause_seconds,
                 "red_alignment_min_angle": self._red_alignment_min_angle,
                 "red_alignment_confirm_frames": self._red_alignment_confirm_frames,
@@ -362,15 +379,24 @@ class EndLineTurnAdaptorRouteTracker:
                         self._motion_phase, self._face_turn_side = "MANUAL_COMPLETE", None
                         state, motor, detail = "FACE_TURN_HEARTBEAT_TIMEOUT", "STOP_FACE_HEARTBEAT_TIMEOUT", "PC 人脸心跳超时，安全停车"
                         self._set_status(state=state, detail=detail, face_turn_active=False, face_search_side=None)
+                    elif face_turn_active and now - self._face_turn_started >= FACE_TURN_MAX_SECONDS:
+                        self._stop_motor()
+                        self._motion_phase, self._face_turn_side = "MANUAL_COMPLETE", None
+                        state, motor, detail = "FACE_TURN_SEARCH_TIMEOUT", "STOP_FACE_SEARCH_TIMEOUT", f"人脸搜索超过 {FACE_TURN_MAX_SECONDS:.0f}s，安全停车"
+                        self._set_status(state=state, detail=detail, face_turn_active=False, face_search_side=None)
                     elif face_turn_active:
-                        # J/L keeps turning until the PC reports a centred
-                        # face.  Use full bounded pivot PWM so it can overcome
-                        # static friction; Q/E keeps its separately tunable
-                        # short-preset PWM.
-                        face_pwm = FACE_TURN_PWM
-                        commanded = (face_pwm, -face_pwm) if self._face_turn_side == "LEFT" else (-face_pwm, face_pwm)
-                        self.controller.set_direct_drive(*commanded); self._motor_active = True
-                        state, motor, detail = f"FACE_CENTER_{self._face_turn_side}", f"FACE_CENTER_PIVOT R={commanded[0]} L={commanded[1]}", "PC heartbeat active; stop only when PC confirms centred"
+                        if now >= self._face_turn_phase_until:
+                            self._face_turn_pulse_active = not self._face_turn_pulse_active
+                            duration = FACE_TURN_PULSE_SECONDS if self._face_turn_pulse_active else FACE_TURN_COOLDOWN_SECONDS
+                            self._face_turn_phase_until = now + duration
+                        if self._face_turn_pulse_active:
+                            face_pwm = FACE_TURN_PWM
+                            commanded = (face_pwm, -face_pwm) if self._face_turn_side == "LEFT" else (-face_pwm, face_pwm)
+                            self.controller.set_direct_drive(*commanded); self._motor_active = True
+                            state, motor, detail = f"FACE_CENTER_{self._face_turn_side}", f"FACE_CENTER_PULSE R={commanded[0]} L={commanded[1]}", "PC heartbeat active; pulsed pivot until centred"
+                        else:
+                            self._stop_motor()
+                            state, motor, detail = "FACE_CENTER_COOLDOWN", f"STOP_FACE_COOLDOWN_{FACE_TURN_COOLDOWN_SECONDS:.2f}s", "cooldown and capture-stabilisation pause"
                     manual_active = self._motion_phase.startswith("MANUAL")
                     if face_turn_active:
                         pass

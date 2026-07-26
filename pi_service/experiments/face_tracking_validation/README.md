@@ -23,7 +23,7 @@ MediaPipe 必须运行在安装了它的电脑上，而非当前 Python 3.13 的
 
 ```powershell
 cd C:\Users\32126\Desktop\Robitics\pi_service\experiments\face_tracking_validation
-py -3 face_position_server.py --source http://100.80.46.54:5000/video_feed --port 5059
+py -3 face_position_server.py --source http://10.241.149.131:4747/video --port 5059
 ```
 
 数据地址为 `http://<电脑局域网IP>:5059/api/face/latest`，典型返回字段包括

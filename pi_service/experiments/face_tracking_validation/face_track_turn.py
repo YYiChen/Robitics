@@ -103,7 +103,7 @@ class PiMotorClient:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="PC face-offset → Pi in-place pivot")
-    parser.add_argument("--pi-source", default="http://10.157.23.223:4747/video")
+    parser.add_argument("--pi-source", default="http://10.241.149.131:4747/video")
     parser.add_argument("--pi-url", default="http://100.80.46.54:5000")
     parser.add_argument("--deadband-px", type=int, default=60)
     parser.add_argument("--heartbeat-seconds", type=float, default=0.18)
