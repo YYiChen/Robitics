@@ -1,13 +1,28 @@
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 import json
+from types import SimpleNamespace
 
 from face_turn_web_bridge import (
     DEFAULT_FACE_DEADBAND_NORMALIZED,
     FaceStopArmer,
     decode_json_object,
     is_fresh_and_centred,
+    post_command,
+    robotics_action_payload,
 )
+
+
+class JsonResponse:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        return b'{"ok":true,"result":{"accepted":true}}'
 
 
 class FaceTurnWebBridgeTests(unittest.TestCase):
@@ -42,6 +57,62 @@ class FaceTurnWebBridgeTests(unittest.TestCase):
         face["offset_x_normalized"] = 0.0
         face["time"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
         self.assertFalse(is_fresh_and_centred(face, minimum_score=.5, deadband_normalized=.08, max_age_ms=450))
+
+    def test_bridge_uses_versioned_robotics_actions(self):
+        self.assertEqual(
+            robotics_action_payload("HEARTBEAT", "heartbeat-1"),
+            {
+                "request_id": "heartbeat-1",
+                "action": "face_turn_heartbeat",
+            },
+        )
+        self.assertEqual(
+            robotics_action_payload("stop", "stop-1"),
+            {
+                "request_id": "stop-1",
+                "action": "face_turn_stop",
+            },
+        )
+        with self.assertRaises(ValueError):
+            robotics_action_payload("START_LEFT", "start-1")
+
+    def test_post_command_uses_formal_endpoint_and_unique_heartbeat_ids(self):
+        requests = []
+
+        def capture(request, timeout):
+            requests.append((request, timeout))
+            return JsonResponse()
+
+        uuids = [SimpleNamespace(hex="aaa"), SimpleNamespace(hex="bbb")]
+        with (
+            patch("face_turn_web_bridge.urlopen", side_effect=capture),
+            patch("face_turn_web_bridge.uuid4", side_effect=uuids),
+        ):
+            first = post_command("http://pi:5000/", "HEARTBEAT")
+            second = post_command("http://pi:5000", "HEARTBEAT")
+
+        self.assertTrue(first["ok"])
+        self.assertTrue(second["ok"])
+        self.assertEqual(len(requests), 2)
+        payloads = [json.loads(request.data) for request, _timeout in requests]
+        self.assertEqual(
+            [request.full_url for request, _timeout in requests],
+            [
+                "http://pi:5000/api/robotics/v1/actions",
+                "http://pi:5000/api/robotics/v1/actions",
+            ],
+        )
+        self.assertEqual(
+            [payload["action"] for payload in payloads],
+            ["face_turn_heartbeat", "face_turn_heartbeat"],
+        )
+        self.assertEqual(
+            [payload["request_id"] for payload in payloads],
+            [
+                "face-bridge-heartbeat-aaa",
+                "face-bridge-heartbeat-bbb",
+            ],
+        )
 
 
 if __name__ == "__main__":

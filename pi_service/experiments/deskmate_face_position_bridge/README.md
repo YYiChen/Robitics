@@ -18,7 +18,8 @@
   -> DeskMate YuNet/SFace
   -> PC 5059/api/face/latest
   -> face_turn_web_bridge.py
-  -> Pi /api/autonomous/face-turn (HEARTBEAT 或 STOP)
+  -> Pi /api/robotics/v1/actions
+     (face_turn_heartbeat 或 face_turn_stop，每次独立 request_id)
 ```
 
 Pi 的 `start_robot.sh` 只负责 5000 和正式控制服务，不会启动电脑端

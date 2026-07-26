@@ -12,8 +12,13 @@ import json
 from pathlib import Path
 import time
 from urllib.request import Request, urlopen
+from uuid import uuid4
 
 DEFAULT_FACE_DEADBAND_NORMALIZED = .20
+FACE_COMMAND_ACTIONS = {
+    "HEARTBEAT": "face_turn_heartbeat",
+    "STOP": "face_turn_stop",
+}
 
 
 class FaceStopArmer:
@@ -48,12 +53,32 @@ def fetch_json(url: str, timeout: float = .4) -> dict:
         return decode_json_object(response.read())
 
 
+def robotics_action_payload(command: str, request_id: str) -> dict:
+    """Map bridge decisions onto the versioned state-machine action contract."""
+
+    normalized = str(command).strip().upper()
+    try:
+        action = FACE_COMMAND_ACTIONS[normalized]
+    except KeyError as exc:
+        raise ValueError("bridge command must be HEARTBEAT or STOP") from exc
+    return {"request_id": request_id, "action": action}
+
+
 def post_command(pi_url: str, command: str, timeout: float = .4) -> dict:
-    body = json.dumps({"command": command}).encode("utf-8")
-    request = Request(f"{pi_url.rstrip('/')}/api/autonomous/face-turn", data=body,
-                      headers={"Content-Type": "application/json"}, method="POST")
+    normalized = str(command).strip().upper()
+    request_id = f"face-bridge-{normalized.lower()}-{uuid4().hex}"
+    body = json.dumps(
+        robotics_action_payload(normalized, request_id),
+        separators=(",", ":"),
+    ).encode("utf-8")
+    request = Request(
+        f"{pi_url.rstrip('/')}/api/robotics/v1/actions",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     with urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+        return decode_json_object(response.read())
 
 
 def is_fresh_and_centred(face: dict, *, minimum_score: float, deadband_normalized: float,
@@ -86,7 +111,10 @@ def main() -> None:
     log_dir = Path(__file__).with_name("runtime_logs"); log_dir.mkdir(exist_ok=True)
     log_path = log_dir / f"face_turn_web_bridge_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.jsonl"
     print(f"Web J/L bridge running: face={args.face_url}, Pi={args.pi_url}")
-    print("It never starts a turn. It only heartbeats an active Pi face turn and stops it once centred.")
+    print(
+        "It never starts a turn. It uses /api/robotics/v1/actions only to "
+        "heartbeat an active Pi face turn and stop it once centred."
+    )
     face_stop_armer = FaceStopArmer()
     was_face_turn_active = False
     try:

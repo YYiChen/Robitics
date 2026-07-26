@@ -1,8 +1,9 @@
-# MediaPipe 人脸转向（隔离验证）
+# 人脸转向桥接与历史隔离验证
 
-此实验只读取已经运行的 5000 相机流，在 5058 画出人脸框并记录 JSONL。核心检测器使用
-MediaPipe Tasks 的 BlazeFace short-range 模型；它不导入 `robot_web.controller`，不发送 HTTP
-电机指令，也不响应 M 键。
+本目录保留早期5058 MediaPipe纯观测实验，但正式车控不再使用该检测器。当前唯一车控
+检测器是相邻目录 `deskmate_face_position_bridge/deskmate_face_position_server.py`
+调用的DeskMate YuNet/SFace；本目录的 `face_turn_web_bridge.py` 仅负责将该检测结果
+转换成Pi正式动作API的心跳和停车。
 
 ## 树莓派运行
 
@@ -18,24 +19,30 @@ python3 -m unittest test_face_detector -v
 
 ## 唯一的人脸转向链路
 
-只保留这一套链路：电脑上的 `face_position_server.py` 使用 MediaPipe BlazeFace 做唯一一次推理；
-`face_turn_web_bridge.py` 只读取其 JSON，并在网页 J/L 已启动后向 Pi 发送心跳或居中停车。
-它们不是两套检测器，且没有使用 DeskMate 的 BD05/M9 模型。
+只保留这一套车控链路：电脑上的 `deskmate_face_position_server.py` 使用
+DeskMate YuNet/SFace做唯一一次推理；
+`face_turn_web_bridge.py` 只读取其 JSON，并在网页或状态机已经启动 J/L 转向后，
+通过正式的 `/api/robotics/v1/actions` 向 Pi 发送
+`face_turn_heartbeat` 或 `face_turn_stop`。每次心跳使用独立 `request_id`，
+确保Pi的幂等缓存不会吞掉后续续租。
+历史5058探测程序不参与电机控制，也不会和YuNet/SFace同时向Pi发动作。
 
-当前车控人脸摄像头固定为 `http://10.157.23.223:4747/video`。先在一个终端启动检测：
+当前车控人脸摄像头为 `http://100.93.97.117:4747/video`。先在一个终端启动检测：
 
 ```powershell
-cd C:\Users\32126\Desktop\Robitics\pi_service\experiments\face_tracking_validation
-py -3 face_position_server.py --port 5059
+cd C:\Users\32126\Desktop\Robitics
+py -3 .\pi_service\experiments\deskmate_face_position_bridge\deskmate_face_position_server.py --source http://100.93.97.117:4747/video --port 5059
 ```
 
 再在第二个终端启动桥接：
 
 ```powershell
+cd C:\Users\32126\Desktop\Robitics\pi_service\experiments\face_tracking_validation
 py -3 face_turn_web_bridge.py --face-url http://127.0.0.1:5059/api/face/latest --pi-url http://100.80.46.54:5000
 ```
 
-此后在 5000 网页先按 M，再按 J 或 L。只有 Pi 已进入 `FACE_CENTER_TURN` 时桥接才会工作：
+此后在 5000 网页先按 M，再按 J 或 L；状态机也可用
+`face_turn_start` 动作进入相同状态。只有 Pi 已进入 `FACE_CENTER_TURN` 时桥接才会工作：
 人脸未居中时持续 `HEARTBEAT`，人脸居中后发送 `STOP`。检测流或网络异常时不续租，Pi 会按安全超时停车。
 
 数据地址为 `http://127.0.0.1:5059/api/face/latest`，字段包括 `detected`、`offset_x`、
