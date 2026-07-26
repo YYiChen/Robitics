@@ -73,7 +73,13 @@
       "red_alignment_min_angle": 75.0,
       "red_alignment_confirm_frames": 2,
       "turn_90_max_steps": 4,
-      "turn_180_max_steps": 8
+      "turn_180_max_steps": 8,
+      "face_turn_pwm": 255,
+      "face_turn_pulse_seconds": 0.2,
+      "face_turn_cooldown_seconds": 2.0,
+      "face_turn_max_seconds": 15.0,
+      "face_turn_line_center_confirm_frames": 3,
+      "face_turn_line_center_deadband_normalized": 0.1
     }
   }
 }

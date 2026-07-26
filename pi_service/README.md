@@ -215,6 +215,12 @@ Other deployment-specific state includes:
 - `logs/`, `run/`, and all experiment `runtime_logs/`;
 - downloaded `vendor/` contents.
 
+The `routes.end_line` web panel also owns the shared J/L/H/K visual-turn
+settings: pulse PWM, pulse duration, stopped interval, search timeout, and the
+white-line centre deadband/confirmation count.  J/L face centring and H/K
+white-line centring use the same pulse settings; Q/E/U/I keep their independent
+red-line preset profiles.
+
 Never put credentials in either configuration file. Preserve
 `config/local.json` during code synchronization; copying tracked source files
 must not replace a tuned vehicle.

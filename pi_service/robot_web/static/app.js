@@ -80,7 +80,7 @@ $("#applyRouteTuning").onclick = async () => {
     const data = await response.json();
     if (!response.ok || !data.ok) throw Error(data.error || "循迹参数应用失败");
     updateAutonomousUi(data.autonomous || {});
-    note(scanlineI ? "I 型直行、掉头与预判刹车参数已实时应用并保存。" : (endLine ? "单白线与 Q/E/U/I 转向参数已实时应用；90°/180°预设已分别保存。" : "循迹参数已实时应用，并保存到 tuning.py。"));
+    note(scanlineI ? "I 型直行、掉头与预判刹车参数已实时应用并保存。" : (endLine ? "单白线、Q/E/U/I 预设与 J/L/H/K 视觉转向参数已实时应用并保存。" : "循迹参数已实时应用，并保存到 tuning.py。"));
   } catch (error) { note(error.message); }
 };
 
