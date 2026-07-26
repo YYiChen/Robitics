@@ -57,24 +57,58 @@ and matching validation.
 
 ## Formal Modules
 
-The main `robot_web/` responsibilities are intentionally separated:
+The formal service is split into independently debuggable packages:
 
 | Module | Responsibility |
 | --- | --- |
-| `app.py` | CLI, Flask routes, service assembly, and route-mode selection |
-| `controller.py` | Sole Pi-side Arduino serial controller and M1/M2 command path |
-| `camera.py` | MJPEG CSI capture and camera settings |
-| `dual_stream_camera.py` | Low-resolution video plus high-resolution JPEG capture |
+| `app.py` | CLI, service assembly, lifecycle, and route-mode selection only |
+| `api/` | Camera, control, route, and status HTTP endpoint registration |
+| `controller.py` | Sole Pi-side Arduino serial and M1/M2 ownership facade |
+| `control/` | Drive config, pure motor mapping, protocol parsing, servo, and card workflows |
+| `camera.py` | MJPEG CSI hardware lifecycle |
+| `dual_stream_camera.py` | WebRTC/H.264 plus high-resolution JPEG hardware lifecycle |
+| `media/` | Camera profiles, settings persistence, colour correction, and transport metrics |
 | `webrtc_stream.py` | WebRTC transport integration |
-| `end_line_turn_adaptor.py` | Current default white-line/end-line and operator-turn behavior |
-| `scanline_i_route.py` | Scanline I-route adapter |
-| `pc_vision_adaptor_route.py` | Legacy/optional PC vision event adapter |
-| `autonomous_route.py` | Generic route preview, tuning, and run-gate support |
+| `routes/common.py` | Shared motor run gate and latest-frame preview publisher |
+| `routes/end_line/` | Current white-line/end-line perception, profiles, and tracker |
+| `routes/scanline/` | Scanline models, config, control, perception, planning, logging, and variants |
+| `routes/pc_adaptor/` | PC event protocol plus Pi-local fast perception and motor tracker |
+| `routes/generic/` | Generic continuous-path planner, control, marker count, and tracker |
+| top-level route shims | Compatibility imports for existing scripts; no implementation ownership |
 | `templates/`, `static/` | Port-5000 browser console |
 
 Only `controller.py` should translate a route decision into the formal serial
 motor path. Experiments must not silently become competing camera or motor
 owners.
+
+## Debug Map
+
+Use the smallest module matching the symptom:
+
+| Symptom or adjustment | Start with | Hardware-free check |
+| --- | --- | --- |
+| Wrong wheel sign/PWM | `control/motor_commands.py` | `test_control_modules.py` |
+| Arduino reply parsing | `control/protocol.py` | `test_control_modules.py` |
+| M3/M4 sequence or validation | `control/card_control.py` | `test_controller_persistence.py` |
+| Servo command/heartbeat | `control/servo_control.py` | `test_controller_persistence.py` |
+| Camera profile persistence | `media/settings.py` | `test_media_modules.py` |
+| Camera bandwidth numbers | `media/metrics.py` | `test_media_modules.py` |
+| Edge colour correction | `media/color_correction.py` | `test_camera_metrics.py` |
+| HTTP request/response | matching file in `api/` | `test_api_structure.py` |
+| Current terminal detection | `routes/end_line/perception.py` | end-line experiment tests |
+| Current turn state/thread loop | `routes/end_line/tracker.py` | adaptor tuning tests |
+| Scanline thresholds | `routes/scanline/config.py` | `test_scanline_modules.py` |
+| Scanline wheel correction | `routes/scanline/control.py` | `test_scanline_modules.py` |
+| Scanline evidence/state types | `routes/scanline/models.py` | scanline route tests |
+| Scanline visual detection | `routes/scanline/perception.py` | scanline route tests |
+| Scanline turn state machine | `routes/scanline/planner.py` | scanline route tests |
+| Scanline audit records | `routes/scanline/logging.py` | scanline route tests |
+
+Static path validation, which does not open hardware:
+
+```bash
+python3 pi_service/verify_paths.py
+```
 
 ## Experiments
 

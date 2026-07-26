@@ -21,6 +21,14 @@ project-management directory unless the user explicitly requests one.
 ## Project Boundaries
 
 - `robot_web/` is the formal Raspberry Pi web/control service.
+- `robot_web/api/` owns HTTP endpoint registration; `app.py` only assembles
+  services, CLI arguments, lifecycle, and route selection.
+- `robot_web/control/` contains independently testable controller helpers;
+  top-level `controller.py` remains the only serial and M1/M2 owner.
+- `robot_web/media/` contains camera profiles, persistence, image processing,
+  and metrics; camera lifecycle remains in the two camera facade modules.
+- `robot_web/routes/` contains formal route implementations. Production route
+  code must not import implementation from `experiments/`.
 - `tests/` contains regression tests for the formal service.
 - `experiments/<target>/` contains isolated validation work. An experiment is
   not a production entry point merely because its tests pass.
@@ -62,6 +70,7 @@ Choose the smallest deterministic validation that covers the target.
 From the repository root on Windows:
 
 ```powershell
+py -3 pi_service/verify_paths.py
 py -3 -m unittest discover -s pi_service/tests -v
 node --check pi_service/robot_web/static/app.js
 git diff --check -- pi_service
