@@ -771,6 +771,25 @@ class IShapeTurnaroundPlanner:
         """Whether the confirmed red band has reached the camera near field."""
         return self._red_marker_bottom_armed
 
+    def diagnostics(self) -> dict[str, object]:
+        """Expose stable, read-only state for runtime telemetry.
+
+        Keeping this projection here avoids having the web adapter reach into
+        private counters and makes log-schema changes independent from the
+        planner's internal attribute names.
+        """
+        return {
+            "endpoint_frames": self._endpoint_frames,
+            "line_lost_frames": self._line_lost_frames,
+            "reacquire_frames": self._reacquire_frames,
+            "junction_frames": self._junction_frames,
+            "latched_junction_y_px": self._latched_junction_y,
+            "latched_endpoint_y_px": self._latched_endpoint_y,
+            "red_exit_armed": self._red_marker_bottom_armed,
+            "red_missing_frames": self._red_marker_missing_frames,
+            "fast_stem_loss_authorized": self._fast_stem_loss_authorized(),
+        }
+
     def _observe_red_marker(self, evidence: ScanlineEvidence) -> bool:
         """Arm on a near red marker, then report its confirmed bottom-edge exit.
 
