@@ -43,8 +43,10 @@ py -3 multi_camera_face_position_server.py `
   --port 5060
 ```
 
-读取 `http://10.50.77.205:5060/api/faces/latest`：`sources.pi` 与 `sources.phone` 是各自原始
-检测；`fused` 是选择出的主观测和选择原因。若未来要算真实空间坐标，需要额外完成双相机标定。
+浏览器打开 `http://127.0.0.1:5060/` 可并列观看两个带检测框的画面；
+`http://10.50.77.205:5060/api/faces/latest` 是供程序读取的 JSON。`sources.pi` 与 `sources.phone`
+是各自原始检测；`fused` 是选择出的主观测和选择原因。若未来要算真实空间坐标，需要额外完成
+双相机标定。
 
 ## 怎么测“最远可检出距离”
 
