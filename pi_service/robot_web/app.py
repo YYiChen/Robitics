@@ -14,6 +14,8 @@ from autonomous_route import AutonomousRouteTracker, AutonomousRunGate, RoutePre
 from scanline_i_route import ScanlineIShapeRouteTracker, load_scanline_tuning_config
 from green_white_scanline_i_route import GreenWhiteScanlineIShapeRouteTracker
 from four_endpoint_validation_route import FourEndpointValidationRouteTracker
+from pc_vision_adaptor_route import PcVisionAdaptorRouteTracker
+from end_line_turn_adaptor import EndLineTurnAdaptorRouteTracker
 
 def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStreamer | DualStreamCamera, system_metrics: SystemMetrics | None = None, oled: OledStatusService | None = None, route_preview: RoutePreviewPublisher | None = None, route_tracker: AutonomousRouteTracker | None = None) -> Flask:
     app = Flask(__name__)
@@ -43,6 +45,31 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
         if route_preview is None:
             return jsonify(error="路线预判未通过启动参数开启"), 404
         return Response(route_preview.iter_mjpeg(), mimetype="multipart/x-mixed-replace; boundary=frame")
+    @app.get("/api/vision-adaptor/frame")
+    def vision_adaptor_frame():
+        if not isinstance(route_tracker, PcVisionAdaptorRouteTracker):
+            return jsonify(ok=False, error="当前 route mode 不是 pc_vision_adaptor"), 409
+        jpeg, sequence, captured_at_ms, fast_center, fast_confidence, fast_centers = route_tracker.frame_snapshot()
+        if jpeg is None:
+            return jsonify(ok=False, error="Pi 尚未发布 adaptor 帧"), 503
+        fast_rows = ";".join(f"{y},{x:.1f},{width}" for y, x, width in fast_centers)
+        return Response(jpeg, mimetype="image/jpeg", headers={"Cache-Control": "no-store, max-age=0", "X-Vision-Frame-Seq": str(sequence), "X-Vision-Captured-At-Ms": str(captured_at_ms), "X-Vision-Pi-Fast-Centre": "" if fast_center is None else f"{fast_center:.1f}", "X-Vision-Pi-Fast-Confidence": f"{fast_confidence:.2f}", "X-Vision-Pi-Fast-Centers": fast_rows})
+    @app.post("/api/vision-adaptor/event")
+    def vision_adaptor_event():
+        if not isinstance(route_tracker, PcVisionAdaptorRouteTracker):
+            return jsonify(ok=False, error="当前 route mode 不是 pc_vision_adaptor"), 409
+        try:
+            return jsonify(ok=True, **route_tracker.submit_remote_event(request.get_json(silent=True) or {}))
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+    @app.post("/api/vision-adaptor/preview")
+    def vision_adaptor_preview():
+        if not isinstance(route_tracker, PcVisionAdaptorRouteTracker):
+            return jsonify(ok=False, error="当前 route mode 不是 pc_vision_adaptor"), 409
+        try:
+            return jsonify(ok=True, **route_tracker.submit_remote_preview(request.get_data(cache=False), request.headers))
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
     @app.post("/api/autonomous/toggle")
     def autonomous_toggle():
         if route_tracker is None:
@@ -54,6 +81,14 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
             return jsonify(ok=False, error="路线预判未通过启动参数开启"), 409
         try:
             return jsonify(ok=True, autonomous=route_tracker.update_tuning(request.get_json(silent=True) or {}))
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+    @app.post("/api/autonomous/manual-turn")
+    def autonomous_manual_turn():
+        if not isinstance(route_tracker, EndLineTurnAdaptorRouteTracker):
+            return jsonify(ok=False, error="当前路线模式不支持 Q/E/U/I 视觉转向"), 409
+        try:
+            return jsonify(ok=True, autonomous=route_tracker.request_manual_turn((request.get_json(silent=True) or {}).get("command", "")))
         except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
     @app.get("/api/camera/highres/latest")
@@ -205,7 +240,7 @@ def main() -> None:
     parser.add_argument("--webrtc-udp-output", default="udp://127.0.0.1:1234?pkt_size=1316")
     parser.add_argument("--disable-oled", action="store_true")
     parser.add_argument("--enable-autonomous-route", action="store_true", help="run route preview inside the port-5000 service")
-    parser.add_argument("--route-mode", choices=("generic", "scanline_i", "scanline_i_green_white", "scanline_i_four_endpoint_green_white"), default="generic", help="generic route, I-shape turnaround, or green-floor four-endpoint pivot validation")
+    parser.add_argument("--route-mode", choices=("generic", "scanline_i", "scanline_i_green_white", "scanline_i_four_endpoint_green_white", "pc_vision_adaptor", "end_line_turn_adaptor"), default="end_line_turn_adaptor", help="single-white-line/red-terminal adaptor, legacy PC adaptor, generic route, or isolated I-shape validations")
     parser.add_argument("--route-config", type=Path, default=Path(__file__).resolve().parents[2] / "third_party" / "DeskMate-Advance" / "src" / "track_line" / "config.fixed_green_white_course.json")
     parser.add_argument("--route-process-fps", type=float, default=20.0)
     parser.add_argument("--route-tuning", type=Path, default=Path(__file__).resolve().parents[1] / "experiments" / "continuous_path_validation" / "tuning.py")
@@ -235,7 +270,13 @@ def main() -> None:
     route_gate = AutonomousRunGate() if args.enable_autonomous_route else None
     route_tracker = None
     if route_preview is not None and route_gate is not None:
-        if args.route_mode == "scanline_i":
+        if args.route_mode == "end_line_turn_adaptor":
+            route_tracker = EndLineTurnAdaptorRouteTracker(controller, camera, route_preview, route_gate)
+        elif args.route_mode == "pc_vision_adaptor":
+            # Default: Pi owns low-latency M1/M2 control; desktop reports only
+            # authenticated high-level visual events through the adaptor API.
+            route_tracker = PcVisionAdaptorRouteTracker(controller, camera, route_preview, route_gate)
+        elif args.route_mode == "scanline_i":
             route_tracker = ScanlineIShapeRouteTracker(controller, camera, route_preview, route_gate, load_scanline_tuning_config(args.scanline_tuning))
         elif args.route_mode == "scanline_i_green_white":
             route_tracker = GreenWhiteScanlineIShapeRouteTracker(controller, camera, route_preview, route_gate, load_scanline_tuning_config(args.green_white_scanline_tuning))

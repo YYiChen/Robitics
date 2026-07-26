@@ -488,11 +488,35 @@ class ScanlineIShapeRouteTracker:
         return {"mode": self.route_mode, "variant": "legacy", "detail": "扫描线 I 型识别运行中；按 M 开启自动行驶"}
 
     def _draw(self, cv2, frame, result, decision, motor_text: str):
+        candidate_mask = getattr(self, "_visual_tape_candidate_mask", None)
+        output = frame.copy()
+        # Pale yellow is every white tape candidate retained inside the green
+        # course.  It gives a truthful visual answer when a near horizontal
+        # bar is deliberately withheld from steering control.
+        if candidate_mask is not None and candidate_mask.shape == frame.shape[:2] and candidate_mask.any():
+            candidate = output.copy()
+            candidate[candidate_mask > 0] = (90, 210, 255)
+            output = cv2.addWeighted(output, .72, candidate, .28, 0)
         # Yellow, not grayscale: this is the selected near-anchored route
         # component used by control, so it remains legible on a grey floor.
-        yellow_route = frame.copy()
+        yellow_route = output.copy()
         yellow_route[result.component_mask > 0] = (0, 220, 255)
-        output = cv2.addWeighted(frame, .62, yellow_route, .38, 0)
+        output = cv2.addWeighted(output, .62, yellow_route, .38, 0)
+        course_field = getattr(self, "_visual_course_field", None)
+        if course_field is not None and course_field.shape == output.shape[:2] and course_field.any():
+            contours, _ = cv2.findContours(course_field, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            # Red outline = the actual green-course area where white tape is
+            # permitted to become a recognition candidate.
+            cv2.drawContours(output, contours, -1, (0, 0, 255), 2, cv2.LINE_AA)
+        red_marker_mask = getattr(self, "_visual_red_marker_mask", None)
+        if red_marker_mask is not None and red_marker_mask.shape == output.shape[:2] and red_marker_mask.any():
+            red_contours, _ = cv2.findContours(red_marker_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(output, red_contours, -1, (0, 0, 255), 3, cv2.LINE_AA)
+        tape_fit_line = getattr(self, "_visual_tape_fit_line", None)
+        if tape_fit_line is not None:
+            # Black = permissive, diagnostic-only tape fit; it never commands
+            # the motors and is intentionally distinct from yellow control.
+            cv2.line(output, tape_fit_line[0], tape_fit_line[1], (0, 0, 0), 3, cv2.LINE_AA)
         evidence = result.evidence
         for y, x, _width in evidence.line_centers:
             cv2.circle(output, (int(x), y), 5, (0, 255, 0), -1)
@@ -506,15 +530,16 @@ class ScanlineIShapeRouteTracker:
         if evidence.red_marker_detected and evidence.red_marker_y is not None:
             cv2.line(output, (0, evidence.red_marker_y), (output.shape[1] - 1, evidence.red_marker_y), (0, 0, 255), 2)
         color = (0, 220, 0) if self.gate.enabled() else (0, 180, 255)
-        bar_y = max(76 + 24 * 6, 220)
-        cv2.rectangle(output, (10, 76), (940, 250), (20, 20, 20), cv2.FILLED)
-        cv2.putText(output, f"SCANLINE I-TURN: {'RUNNING' if self.gate.enabled() else 'PAUSED (press M)'}", (18, 104), cv2.FONT_HERSHEY_SIMPLEX, .65, color, 2)
-        cv2.putText(output, f"STATE: {decision.state.value}  {decision.reason}", (18, 132), cv2.FONT_HERSHEY_SIMPLEX, .48, (255, 255, 255), 1)
-        cv2.putText(output, f"BAR: {evidence.endpoint_detected} y={evidence.endpoint_y} w={evidence.endpoint_width}  JUNCTION: {evidence.junction_detected} y={evidence.junction_y} arms={evidence.junction_arm_count}", (18, 160), cv2.FONT_HERSHEY_SIMPLEX, .46, (100, 220, 255), 1)
-        cv2.putText(output, f"RED BAND: {evidence.red_marker_detected} y={evidence.red_marker_y} span={evidence.red_marker_span}", (18, 182), cv2.FONT_HERSHEY_SIMPLEX, .46, (0, 80, 255), 1)
-        cv2.putText(output, f"LOOKAHEAD: ({evidence.lookahead_x}, {evidence.lookahead_y}) path={evidence.path_length_px}px  MOTOR: {motor_text}", (18, 204), cv2.FONT_HERSHEY_SIMPLEX, .46, (0, 255, 255), 1)
-        cv2.putText(output, f"CONF: {evidence.confidence:.2f}  narrow-centre={evidence.line_center_x}  M: start/pause", (18, 226), cv2.FONT_HERSHEY_SIMPLEX, .44, (190, 190, 190), 1)
-        cv2.putText(output, "Red pre-authorizes; white endpoint and stem loss remain mandatory.", (18, 248), cv2.FONT_HERSHEY_SIMPLEX, .42, (0, 220, 255), 1)
+        # Keep the debug panel at the top so it never covers the approaching
+        # tape, red band, or junction in the lower driving field.
+        cv2.rectangle(output, (10, 10), (940, 184), (20, 20, 20), cv2.FILLED)
+        cv2.putText(output, f"SCANLINE I-TURN: {'RUNNING' if self.gate.enabled() else 'PAUSED (press M)'}", (18, 38), cv2.FONT_HERSHEY_SIMPLEX, .65, color, 2)
+        cv2.putText(output, f"STATE: {decision.state.value}  {decision.reason}", (18, 66), cv2.FONT_HERSHEY_SIMPLEX, .48, (255, 255, 255), 1)
+        cv2.putText(output, f"BAR: {evidence.endpoint_detected} y={evidence.endpoint_y} w={evidence.endpoint_width}  JUNCTION: {evidence.junction_detected} y={evidence.junction_y} arms={evidence.junction_arm_count}", (18, 94), cv2.FONT_HERSHEY_SIMPLEX, .46, (100, 220, 255), 1)
+        cv2.putText(output, f"RED BAND: {evidence.red_marker_detected} y={evidence.red_marker_y} span={evidence.red_marker_span}", (18, 116), cv2.FONT_HERSHEY_SIMPLEX, .46, (0, 80, 255), 1)
+        cv2.putText(output, f"LOOKAHEAD: ({evidence.lookahead_x}, {evidence.lookahead_y}) path={evidence.path_length_px}px  MOTOR: {motor_text}", (18, 138), cv2.FONT_HERSHEY_SIMPLEX, .46, (0, 255, 255), 1)
+        cv2.putText(output, f"CONF: {evidence.confidence:.2f}  narrow-centre={evidence.line_center_x}  M: start/pause", (18, 160), cv2.FONT_HERSHEY_SIMPLEX, .44, (190, 190, 190), 1)
+        cv2.putText(output, "Red pre-authorizes; white endpoint and stem loss remain mandatory.", (18, 182), cv2.FONT_HERSHEY_SIMPLEX, .42, (0, 220, 255), 1)
         return output
 
     def _run(self) -> None:
@@ -546,6 +571,10 @@ class ScanlineIShapeRouteTracker:
                 if self._run_log is None:
                     self._open_run_log(config, frame.shape)
                 result = analyzer.analyze(frame)
+                self._visual_course_field = getattr(analyzer, "course_field_mask", None)
+                self._visual_tape_candidate_mask = getattr(analyzer, "tape_candidate_mask", None)
+                self._visual_red_marker_mask = getattr(analyzer, "red_marker_mask", None)
+                self._visual_tape_fit_line = getattr(analyzer, "tape_fit_line", None)
                 evidence = result.evidence
                 motor_text = "PAUSED"
                 commanded: tuple[int, int] | None = None
