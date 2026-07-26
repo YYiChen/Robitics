@@ -81,7 +81,7 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
                 adaptor_module.FACE_TURN_PULSE_SECONDS,
                 places=3,
             )
-            self.assertEqual(status["tuning"]["face_turn_cooldown_seconds"], .12)
+            self.assertEqual(status["tuning"]["face_turn_cooldown_seconds"], 2.0)
             self.assertEqual(status["tuning"]["face_turn_heartbeat_seconds"], 3.0)
             self.assertEqual(status["tuning"]["face_turn_max_seconds"], 15.0)
             first_deadline = tracker._face_turn_deadline
