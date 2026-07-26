@@ -237,9 +237,7 @@ class RoboticsGateway:
             raise ValueError(f"{action} does not accept direction")
         degrees = payload.get("degrees")
         if action == "preset_turn":
-            try:
-                degrees = int(degrees)
-            except (TypeError, ValueError):
+            if isinstance(degrees, bool) or not isinstance(degrees, int):
                 raise ValueError("preset_turn requires degrees 90 or 180") from None
             if degrees not in {90, 180}:
                 raise ValueError("preset_turn requires degrees 90 or 180")

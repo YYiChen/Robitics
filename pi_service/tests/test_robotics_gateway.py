@@ -159,6 +159,19 @@ class RoboticsGatewayTests(unittest.TestCase):
                     "degrees": 45,
                 }
             )
+        for request_id, invalid_degrees in (
+            ("preset-fractional", 90.5),
+            ("preset-boolean", True),
+        ):
+            with self.assertRaisesRegex(ValueError, "degrees 90 or 180"):
+                self.gateway.execute(
+                    {
+                        "request_id": request_id,
+                        "action": "preset_turn",
+                        "direction": "RIGHT",
+                        "degrees": invalid_degrees,
+                    }
+                )
 
     def test_grouped_config_updates_only_owned_tuning(self) -> None:
         result = self.gateway.update_config(

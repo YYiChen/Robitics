@@ -239,8 +239,9 @@ endpoints:
 - `POST config` updates only the grouped line-follow and visual-turn settings
   already owned by `routes.end_line`.
 
-Every action requires a caller-generated `request_id`.  Reusing an ID with a
-different payload is rejected.  An HTTP retry for one event reuses its ID;
+Every action requires a caller-generated URL-safe `request_id` (letters,
+digits, dot, underscore, colon or hyphen). Reusing an ID with a different
+payload is rejected.  An HTTP retry for one event reuses its ID;
 successive face-heartbeat events need distinct IDs so the Pi dead-man timer is
 refreshed.  `dispense_one` reuses the controller's tokenized workflow so
 polling/retry only reads the current result and cannot issue another motor
