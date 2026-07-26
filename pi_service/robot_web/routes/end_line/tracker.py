@@ -11,7 +11,6 @@ import time
 from .line_following import FastLineConfig, analyse_fast_line, pwm_for_line
 from .perception import EndLineConfig, EndLineStopPlanner, RedEndBandDetector
 from .roundtrip import LandmarkTarget, RoundtripPhase, TwoFaceRoundtripPlanner
-from .return_route import ReturnRouteRecorder, blend_return_pwm
 from .turn_profiles import TurnProfile, load_turn_profile, save_turn_profile
 
 
@@ -20,7 +19,6 @@ LEGACY_EXPERIMENT = SERVICE_ROOT / "experiments" / "end_line_turn_validation"
 TUNING_PATH = LEGACY_EXPERIMENT / "end_line_web_tuning.json"
 TURN_90_PATH = LEGACY_EXPERIMENT / "turn_90.json"
 TURN_180_PATH = LEGACY_EXPERIMENT / "turn_180.json"
-RETURN_ROUTE_PATH = SERVICE_ROOT / "logs" / "end_line_return_route.json"
 TUNING_RULES = {
     "process_fps": (float, 5.0, 60.0),
     "straight_pwm": (int, 0, 255),
@@ -53,14 +51,6 @@ TUNING_RULES = {
     "red_alignment_confirm_frames": (int, 1, 10),
     "turn_90_max_steps": (int, 1, 12),
     "turn_180_max_steps": (int, 1, 24),
-    "face_turn_pulse_seconds": (float, .05, 5.0),
-    "face_turn_cooldown_seconds": (float, 0.0, 10.0),
-    "face_turn_max_seconds": (float, 1.0, 120.0),
-    "face_turn_line_center_confirm_frames": (int, 1, 30),
-    "face_turn_line_center_deadband_normalized": (float, .01, .8),
-    "return_replay_weight": (float, 0.0, .5),
-    "return_line_lost_confirm_frames": (int, 1, 20),
-    "return_turn_pause_seconds": (float, .05, 3.0),
 }
 FACE_TURN_HEARTBEAT_SECONDS = 3.0
 # J/L is an operator-triggered, camera-stopped pivot.  It needs enough torque
@@ -86,7 +76,6 @@ class EndLineTurnAdaptorRouteTracker:
         gate,
         tuning_path: Path = TUNING_PATH,
         config_store=None,
-        return_recorder: ReturnRouteRecorder | None = None,
     ) -> None:
         self.controller, self.camera, self.publisher, self.gate = controller, camera, publisher, gate
         self._stop, self._thread, self._lock, self._tuning_lock = threading.Event(), None, threading.RLock(), threading.RLock()
@@ -96,13 +85,7 @@ class EndLineTurnAdaptorRouteTracker:
         (self._process_fps, self._straight_pwm, self._fast_config, self._line_config,
          self._turn_interstep_pause_seconds, self._red_alignment_min_angle,
          self._red_alignment_confirm_frames, self._turn_90_max_steps,
-         self._turn_180_max_steps, self._vision_turn_pulse_seconds,
-         self._vision_turn_cooldown_seconds, self._vision_turn_max_seconds,
-         self._line_turn_center_confirm_frames,
-         self._line_turn_center_deadband_normalized,
-         self._return_replay_weight,
-         self._return_line_lost_confirm_frames,
-         self._return_turn_pause_seconds) = self._load_tuning()
+         self._turn_180_max_steps) = self._load_tuning()
         if self.config_store is not None:
             stored = self._read_tuning_data()
             self._turn_90 = TurnProfile(int(stored.get("turn_90_pwm", 200)), float(stored.get("turn_90_step_seconds", 1.25)))
@@ -126,20 +109,6 @@ class EndLineTurnAdaptorRouteTracker:
         self._roundtrip = TwoFaceRoundtripPlanner()
         self._roundtrip_pending_turn = None
         self._roundtrip_hold_until = 0.0
-        self._return_recorder = return_recorder or ReturnRouteRecorder(
-            RETURN_ROUTE_PATH,
-            nominal_sample_seconds=1.0 / self._process_fps,
-        )
-        self._return_replay = None
-        self._return_turn_phase_until = 0.0
-        self._return_turn_pulse_active = False
-        self._return_turn_steps = 0
-        self._return_line_departed = False
-        self._return_line_center_streak = 0
-        self._return_line_lost_frames = 0
-        self._pending_return_checkpoints: list[str] = []
-        if hasattr(self.controller, "add_card_event_listener"):
-            self.controller.add_card_event_listener(self._on_card_event)
         # This deployment is deliberately keyboard-only: M arms turn commands
         # but must never make the vehicle start following the white line.
         self._manual_only = True
@@ -156,8 +125,6 @@ class EndLineTurnAdaptorRouteTracker:
     def stop(self) -> None:
         self._stop.set()
         self._stop_motor()
-        if hasattr(self.controller, "remove_card_event_listener"):
-            self.controller.remove_card_event_listener(self._on_card_event)
         if self._thread and self._thread is not threading.current_thread():
             self._thread.join(timeout=1.0)
 
@@ -180,8 +147,6 @@ class EndLineTurnAdaptorRouteTracker:
         )
         result.update({"enabled": self.gate.enabled(), "tuning": self._tuning_values(), "tuning_path": tuning_path})
         result["roundtrip"] = self._roundtrip.status_dict()
-        result["return_route"] = self._return_recorder.status_dict()
-        result["return_replay"] = None if self._return_replay is None else self._return_replay.status_dict()
         return result
 
     def toggle_drive(self) -> dict:
@@ -202,11 +167,6 @@ class EndLineTurnAdaptorRouteTracker:
             self._roundtrip.reset()
             self._roundtrip_pending_turn = None
             self._roundtrip_hold_until = 0.0
-            self._return_replay = None
-            self._return_turn_pulse_active = False
-            self._return_line_departed = False
-            self._return_line_center_streak = 0
-            self._return_line_lost_frames = 0
         self._set_status(
             enabled=enabled,
             detail="按键转向已解锁，等待 Q/E/U/I/J/L/H/K" if enabled else "已暂停，电机已停止",
@@ -223,55 +183,11 @@ class EndLineTurnAdaptorRouteTracker:
         if self._motion_phase not in {"FOLLOW", "MANUAL_COMPLETE", "TURN_COMPLETE"}:
             raise ValueError("当前已有转向动作，请等待其完成或按 M 停止")
         self._manual_only = False
-        self._return_replay = None
-        self._return_recorder.start_recording()
         self._planner.reset()
         self._last_red_side, self._last_red_seen_frame = None, -10_000
         self._motion_phase, self._action_until, self._pending_turn_side = "FOLLOW", 0.0, None
         self._set_status(state="FOLLOWING_TO_END", detail="N 已触发，沿白线行驶至尽头")
         return self.status_dict()
-
-    def request_return(self) -> dict:
-        """R key: turn around, then return under vision with replay feed-forward."""
-        if not self.gate.enabled():
-            raise ValueError("请先按 M 开启自动电机门控，再触发 R 返程")
-        if not self._return_recorder.has_samples():
-            raise ValueError("尚未记录有效去程，不能开始返程")
-        if self._motion_phase not in {"FOLLOW", "MANUAL_COMPLETE", "TURN_COMPLETE"}:
-            raise ValueError("当前已有转向动作，请等待完成或按 M 停止")
-        self._stop_motor()
-        self._flush_return_checkpoints()
-        self._return_replay = self._return_recorder.prepare_return()
-        self._manual_only = False
-        self._planner.reset()
-        self._return_turn_phase_until = time.monotonic() + self._turn_180.step_seconds
-        self._return_turn_pulse_active = True
-        self._return_turn_steps = 1
-        self._return_line_departed = False
-        self._return_line_center_streak = 0
-        self._return_line_lost_frames = 0
-        self._motion_phase = "RETURN_TURN"
-        self._set_status(
-            state="RETURN_TURN",
-            detail="R 已触发：原地掉头，重新捕获白线后按分段记录返程",
-        )
-        return self.status_dict()
-
-    def _on_card_event(self, event: str) -> None:
-        if event == "DEAL:DONE":
-            # Serial RX only enqueues the landmark.  The vision worker owns
-            # route persistence so a growing JSON file cannot delay heartbeats.
-            with self._lock:
-                self._pending_return_checkpoints.append(
-                    f"deal_complete_{int(time.time() * 1000)}"
-                )
-
-    def _flush_return_checkpoints(self) -> None:
-        with self._lock:
-            checkpoints = tuple(self._pending_return_checkpoints)
-            self._pending_return_checkpoints.clear()
-        for checkpoint in checkpoints:
-            self._return_recorder.checkpoint(checkpoint)
 
     def request_manual_turn(self, command: str) -> dict:
         """M-gated turn; profiles are refreshed from disk for every key press."""
@@ -322,7 +238,7 @@ class EndLineTurnAdaptorRouteTracker:
             self._face_turn_side = "LEFT" if command.endswith("LEFT") else "RIGHT"
             self._face_turn_deadline = now + FACE_TURN_HEARTBEAT_SECONDS
             self._face_turn_started = now
-            self._face_turn_phase_until = now + self._vision_turn_pulse_seconds
+            self._face_turn_phase_until = now + FACE_TURN_PULSE_SECONDS
             self._face_turn_pulse_active = True
             self._face_turn_line_departed = False
             self._face_turn_line_center_streak = 0
@@ -472,7 +388,7 @@ class EndLineTurnAdaptorRouteTracker:
             self._face_turn_side = "LEFT" if command.endswith("LEFT") else "RIGHT"
             self._face_turn_deadline = 0.0
             self._face_turn_started = now
-            self._face_turn_phase_until = now + self._vision_turn_pulse_seconds
+            self._face_turn_phase_until = now + FACE_TURN_PULSE_SECONDS
             self._face_turn_pulse_active = True
             self._face_turn_line_departed = False
             self._face_turn_line_center_streak = 0
@@ -519,19 +435,16 @@ class EndLineTurnAdaptorRouteTracker:
                 "green_support_min_ratio": self._fast_config.green_support_min_ratio,
                 "turn_90_pwm": self._turn_90.pwm, "turn_90_step_seconds": self._turn_90.step_seconds,
                 "turn_180_pwm": self._turn_180.pwm, "turn_180_step_seconds": self._turn_180.step_seconds,
-                "face_turn_pwm": FACE_TURN_PWM, "face_turn_pulse_seconds": self._vision_turn_pulse_seconds,
-                "face_turn_cooldown_seconds": self._vision_turn_cooldown_seconds,
+                "face_turn_pwm": FACE_TURN_PWM, "face_turn_pulse_seconds": FACE_TURN_PULSE_SECONDS,
+                "face_turn_cooldown_seconds": FACE_TURN_COOLDOWN_SECONDS,
                 "face_turn_heartbeat_seconds": FACE_TURN_HEARTBEAT_SECONDS,
-                "face_turn_max_seconds": self._vision_turn_max_seconds,
-                "face_turn_line_center_deadband_normalized": self._line_turn_center_deadband_normalized,
-                "face_turn_line_center_confirm_frames": self._line_turn_center_confirm_frames,
+                "face_turn_max_seconds": FACE_TURN_MAX_SECONDS,
+                "face_turn_line_center_deadband_normalized": FACE_TURN_LINE_CENTER_DEADBAND_NORMALIZED,
+                "face_turn_line_center_confirm_frames": FACE_TURN_LINE_CENTER_CONFIRM_FRAMES,
                 "turn_interstep_pause_seconds": self._turn_interstep_pause_seconds,
                 "red_alignment_min_angle": self._red_alignment_min_angle,
                 "red_alignment_confirm_frames": self._red_alignment_confirm_frames,
                 "turn_90_max_steps": self._turn_90_max_steps, "turn_180_max_steps": self._turn_180_max_steps,
-                "return_replay_weight": self._return_replay_weight,
-                "return_line_lost_confirm_frames": self._return_line_lost_confirm_frames,
-                "return_turn_pause_seconds": self._return_turn_pause_seconds,
                 **asdict(self._line_config),
             }
 
@@ -548,7 +461,7 @@ class EndLineTurnAdaptorRouteTracker:
             centre_x is not None
             and frame_width > 0
             and abs((float(centre_x) - frame_width / 2) / (frame_width / 2))
-            <= self._line_turn_center_deadband_normalized
+            <= FACE_TURN_LINE_CENTER_DEADBAND_NORMALIZED
         )
         if not centred:
             self._face_turn_line_departed = True
@@ -557,26 +470,9 @@ class EndLineTurnAdaptorRouteTracker:
         if not self._face_turn_line_departed:
             return False
         self._face_turn_line_center_streak += 1
-        return self._face_turn_line_center_streak >= self._line_turn_center_confirm_frames
+        return self._face_turn_line_center_streak >= FACE_TURN_LINE_CENTER_CONFIRM_FRAMES
 
-    def _observe_return_turn_line(self, result, frame_width: int) -> bool:
-        centre_x = result.center_x if result.valid else None
-        centred = bool(
-            centre_x is not None
-            and frame_width > 0
-            and abs((float(centre_x) - frame_width / 2) / (frame_width / 2))
-            <= FACE_TURN_LINE_CENTER_DEADBAND_NORMALIZED
-        )
-        if not centred:
-            self._return_line_departed = True
-            self._return_line_center_streak = 0
-            return False
-        if not self._return_line_departed:
-            return False
-        self._return_line_center_streak += 1
-        return self._return_line_center_streak >= FACE_TURN_LINE_CENTER_CONFIRM_FRAMES
-
-    def _load_tuning(self) -> tuple:
+    def _load_tuning(self) -> tuple[float, int, FastLineConfig, EndLineConfig, float, float, int, int, int]:
         values = {
             "process_fps": 20.0, "straight_pwm": 85,
             "correction_deadband": FastLineConfig().deadband, "correction_gain": FastLineConfig().correction_gain,
@@ -588,14 +484,6 @@ class EndLineTurnAdaptorRouteTracker:
             "turn_interstep_pause_seconds": 2.0,
             "red_alignment_min_angle": 75.0, "red_alignment_confirm_frames": 2,
             "turn_90_max_steps": 4, "turn_180_max_steps": 8,
-            "face_turn_pulse_seconds": FACE_TURN_PULSE_SECONDS,
-            "face_turn_cooldown_seconds": FACE_TURN_COOLDOWN_SECONDS,
-            "face_turn_max_seconds": FACE_TURN_MAX_SECONDS,
-            "face_turn_line_center_confirm_frames": FACE_TURN_LINE_CENTER_CONFIRM_FRAMES,
-            "face_turn_line_center_deadband_normalized": FACE_TURN_LINE_CENTER_DEADBAND_NORMALIZED,
-            "return_replay_weight": .25,
-            "return_line_lost_confirm_frames": 3,
-            "return_turn_pause_seconds": .20,
             **asdict(EndLineConfig()),
         }
         try:
@@ -613,13 +501,7 @@ class EndLineTurnAdaptorRouteTracker:
         return (process_fps, straight_pwm, fast_config, line_config,
                 values["turn_interstep_pause_seconds"], values["red_alignment_min_angle"],
                 values["red_alignment_confirm_frames"], values["turn_90_max_steps"],
-                values["turn_180_max_steps"], values["face_turn_pulse_seconds"],
-                values["face_turn_cooldown_seconds"], values["face_turn_max_seconds"],
-                values["face_turn_line_center_confirm_frames"],
-                values["face_turn_line_center_deadband_normalized"],
-                values["return_replay_weight"],
-                values["return_line_lost_confirm_frames"],
-                values["return_turn_pause_seconds"])
+                values["turn_180_max_steps"])
 
     def _read_tuning_data(self) -> dict:
         if self.config_store is not None:
@@ -677,14 +559,6 @@ class EndLineTurnAdaptorRouteTracker:
             self._red_alignment_min_angle = current["red_alignment_min_angle"]
             self._red_alignment_confirm_frames = current["red_alignment_confirm_frames"]
             self._turn_90_max_steps, self._turn_180_max_steps = current["turn_90_max_steps"], current["turn_180_max_steps"]
-            self._vision_turn_pulse_seconds = current["face_turn_pulse_seconds"]
-            self._vision_turn_cooldown_seconds = current["face_turn_cooldown_seconds"]
-            self._vision_turn_max_seconds = current["face_turn_max_seconds"]
-            self._line_turn_center_confirm_frames = current["face_turn_line_center_confirm_frames"]
-            self._line_turn_center_deadband_normalized = current["face_turn_line_center_deadband_normalized"]
-            self._return_replay_weight = current["return_replay_weight"]
-            self._return_line_lost_confirm_frames = current["return_line_lost_confirm_frames"]
-            self._return_turn_pause_seconds = current["return_turn_pause_seconds"]
         return self.status_dict()
 
     def _open_log(self) -> None:
@@ -728,7 +602,6 @@ class EndLineTurnAdaptorRouteTracker:
                 image = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
                 if image is None:
                     continue
-                self._flush_return_checkpoints()
                 with self._tuning_lock:
                     fast_config, detector, planner, straight_pwm = self._fast_config, self._red_detector, self._planner, self._straight_pwm
                     line_analysis = analyse_fast_line(image, self._last_center_x, fast_config)
@@ -769,54 +642,6 @@ class EndLineTurnAdaptorRouteTracker:
                         state = "ROUNDTRIP_HOLD"
                         motor = f"STOP_ROUNDTRIP_HOLD_{max(0.0, self._roundtrip_hold_until - now):.2f}s"
                         detail = "停车稳定后再开始下一段视觉转向"
-                    return_turn_active = self._motion_phase == "RETURN_TURN"
-                    return_line_centered = (
-                        return_turn_active
-                        and self._observe_return_turn_line(result, image.shape[1])
-                    )
-                    face_turn_active = self._motion_phase == "FACE_CENTER_TURN"
-                    line_return_centered = face_turn_active and self._observe_face_turn_line(result, image.shape[1])
-                    if return_line_centered:
-                        self._stop_motor()
-                        self._motion_phase = "RETURN_REPLAY"
-                        with self._tuning_lock:
-                            self._planner.reset()
-                        state, motor, detail = (
-                            "RETURN_LINE_REACQUIRED",
-                            "STOP_RETURN_HEADING_READY",
-                            "掉头后已重新捕获白线，开始视觉主导返程",
-                        )
-                    elif return_turn_active:
-                        if now >= self._return_turn_phase_until:
-                            if self._return_turn_pulse_active:
-                                self._return_turn_pulse_active = False
-                                self._return_turn_phase_until = now + self._return_turn_pause_seconds
-                            elif self._return_turn_steps >= self._turn_180_max_steps:
-                                self._stop_motor()
-                                self._manual_only = True
-                                self._return_replay = None
-                                self._motion_phase = "MANUAL_COMPLETE"
-                                state, motor, detail = (
-                                    "RETURN_TURN_TIMEOUT",
-                                    "STOP_RETURN_TURN_TIMEOUT",
-                                    "返程掉头未重新捕获白线，已安全停车",
-                                )
-                            else:
-                                self._return_turn_steps += 1
-                                self._return_turn_pulse_active = True
-                                self._return_turn_phase_until = now + self._turn_180.step_seconds
-                        if self._motion_phase == "RETURN_TURN" and self._return_turn_pulse_active:
-                            commanded = (-self._turn_180.pwm, self._turn_180.pwm)
-                            self.controller.set_direct_drive(*commanded)
-                            self._motor_active = True
-                            state, motor, detail = (
-                                f"RETURN_TURN_{self._return_turn_steps}/{self._turn_180_max_steps}",
-                                f"RETURN_TURN R={commanded[0]} L={commanded[1]}",
-                                "分段原地掉头，等待白线离开后重新居中",
-                            )
-                        elif self._motion_phase == "RETURN_TURN":
-                            self._stop_motor()
-                            state, motor = "RETURN_TURN_PAUSE", "STOP_RETURN_TURN_PAUSE"
                     elif face_turn_active and now >= self._face_turn_deadline:
                         self._stop_motor()
                         self._motion_phase, self._face_turn_side = "MANUAL_COMPLETE", None
@@ -835,7 +660,7 @@ class EndLineTurnAdaptorRouteTracker:
                         self._set_status(state=state, detail=detail, face_turn_active=False, line_turn_active=False, face_search_side=None, vision_turn_target=None)
                         if completes_roundtrip:
                             self._complete_roundtrip_target(LandmarkTarget.WHITE_LINE)
-                    elif vision_turn_active and now - self._face_turn_started >= self._vision_turn_max_seconds:
+                    elif vision_turn_active and now - self._face_turn_started >= FACE_TURN_MAX_SECONDS:
                         self._stop_motor()
                         self._motion_phase, self._face_turn_side = "MANUAL_COMPLETE", None
                         timed_out_target = self._vision_turn_target
@@ -843,12 +668,12 @@ class EndLineTurnAdaptorRouteTracker:
                         state = "FACE_TURN_SEARCH_TIMEOUT" if timed_out_target == "FACE" else "LINE_TURN_SEARCH_TIMEOUT"
                         motor = "STOP_FACE_SEARCH_TIMEOUT" if timed_out_target == "FACE" else "STOP_LINE_SEARCH_TIMEOUT"
                         target_text = "人脸" if timed_out_target == "FACE" else "白线"
-                        detail = f"{target_text}搜索超过 {self._vision_turn_max_seconds:.1f}s，安全停车"
+                        detail = f"{target_text}搜索超过 {FACE_TURN_MAX_SECONDS:.0f}s，安全停车"
                         self._set_status(state=state, detail=detail, face_turn_active=False, line_turn_active=False, face_search_side=None, vision_turn_target=None)
                     elif vision_turn_active:
                         if now >= self._face_turn_phase_until:
                             self._face_turn_pulse_active = not self._face_turn_pulse_active
-                            duration = self._vision_turn_pulse_seconds if self._face_turn_pulse_active else self._vision_turn_cooldown_seconds
+                            duration = FACE_TURN_PULSE_SECONDS if self._face_turn_pulse_active else FACE_TURN_COOLDOWN_SECONDS
                             self._face_turn_phase_until = now + duration
                         if self._face_turn_pulse_active:
                             face_pwm = FACE_TURN_PWM
@@ -860,9 +685,9 @@ class EndLineTurnAdaptorRouteTracker:
                         else:
                             self._stop_motor()
                             target_name = "FACE" if face_turn_active else "LINE"
-                            state, motor, detail = f"{target_name}_CENTER_COOLDOWN", f"STOP_{target_name}_COOLDOWN_{self._vision_turn_cooldown_seconds:.2f}s", "cooldown and capture-stabilisation pause"
+                            state, motor, detail = f"{target_name}_CENTER_COOLDOWN", f"STOP_{target_name}_COOLDOWN_{FACE_TURN_COOLDOWN_SECONDS:.2f}s", "cooldown and capture-stabilisation pause"
                     manual_active = self._motion_phase.startswith("MANUAL")
-                    if route_action_active or return_turn_active:
+                    if route_action_active:
                         pass
                     elif manual_active:
                         if red.detected and red.angle_degrees is not None and red.angle_degrees >= self._red_alignment_min_angle:
@@ -908,75 +733,13 @@ class EndLineTurnAdaptorRouteTracker:
                     elif self._motion_phase == "BRAKE_HOLD":
                         self._motion_phase, self._action_until = "PIVOT", now + self._turn_90.step_seconds
                     manual_active = self._motion_phase.startswith("MANUAL")
-                    if route_action_active or return_turn_active:
+                    if route_action_active:
                         # The continuous vision pivot already issued its command
                         # above.  Do not fall through into the manual-only
                         # parking branch and immediately cancel that command.
                         pass
                     elif manual_active:
                         pass
-                    elif self._motion_phase == "RETURN_REPLAY":
-                        replay_step = (
-                            None if self._return_replay is None
-                            else self._return_replay.step(now)
-                        )
-                        if replay_step is None or replay_step.complete:
-                            self._stop_motor()
-                            self._manual_only = True
-                            self._return_replay = None
-                            self._motion_phase = "RETURN_COMPLETE"
-                            state, motor, detail = (
-                                "RETURN_COMPLETE",
-                                "STOP_RETURN_COMPLETE",
-                                "所有记录路段已逆序完成，返程结束",
-                            )
-                        else:
-                            vision_pwm = pwm_for_line(
-                                result, image.shape[1], straight_pwm, fast_config
-                            )
-                            replay_pwm = replay_step.forward_facing_pwm
-                            if vision_pwm is None:
-                                self._return_line_lost_frames += 1
-                            else:
-                                self._return_line_lost_frames = 0
-                            if self._return_line_lost_frames >= self._return_line_lost_confirm_frames:
-                                self._stop_motor()
-                                self._manual_only = True
-                                self._return_replay = None
-                                self._motion_phase = "MANUAL_COMPLETE"
-                                state, motor, detail = (
-                                    "RETURN_LINE_LOST",
-                                    "STOP_RETURN_LINE_LOST",
-                                    "返程连续丢失白线，已安全停车",
-                                )
-                            elif vision_pwm is None:
-                                commanded = tuple(
-                                    int(round(value * .5)) for value in replay_pwm
-                                )
-                                self.controller.set_direct_drive(*commanded)
-                                self._motor_active = True
-                                state, motor, detail = (
-                                    "RETURN_REPLAY_LIMITED",
-                                    f"RETURN_LIMITED R={commanded[0]} L={commanded[1]}",
-                                    "白线短暂丢失，限速使用记录前馈",
-                                )
-                            else:
-                                commanded = blend_return_pwm(
-                                    vision_pwm,
-                                    replay_pwm,
-                                    self._return_replay_weight,
-                                )
-                                self.controller.set_direct_drive(*commanded)
-                                self._motor_active = True
-                                state = "RETURN_VISION_FOLLOW"
-                                motor = (
-                                    f"RETURN R={commanded[0]} L={commanded[1]} "
-                                    f"SEG={replay_step.segment_index}"
-                                )
-                                detail = (
-                                    "摄像头主闭环 + 逆序分段 PWM 前馈"
-                                    + ("；已进入上一检查点路段" if replay_step.segment_changed else "")
-                                )
                     elif self._manual_only:
                         self._stop_motor()
                         state, motor = "MANUAL_READY", "STOP_WAITING_FOR_Q/E/U/I"
@@ -1023,14 +786,6 @@ class EndLineTurnAdaptorRouteTracker:
                         else:
                             self.controller.set_direct_drive(*commanded)
                             self._motor_active = True
-                            self._return_recorder.record(
-                                commanded[0],
-                                commanded[1],
-                                line_center_x=result.center_x,
-                                confidence=result.confidence,
-                                wheel_speed=getattr(self.controller, "speed", None),
-                                now=now,
-                            )
                             motor = f"{'PRECISION' if precision else 'FOLLOW'}_PWM R={commanded[0]} L={commanded[1]}"
                 else:
                     self._stop_motor()

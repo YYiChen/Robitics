@@ -28,11 +28,9 @@ tools/windows_recorder/    Windows 端 MJPEG 图片记录工具
 2. 将 `pi_service/` 复制到树莓派，执行 `./install_dependencies.sh` 一次。
 3. 执行 `chmod +x start_robot.sh && ./start_robot.sh`，随后打开输出的网址。脚本使用 Bash，不能用 `sh start_robot.sh` 启动。
 
-首次启动后，先在网页“状态”页确认 Arduino 和摄像头均在线、M1/M2 输出为 `0`；确认预览正常后，再以低 PWM 做人工遥控测试。
-
 `start_robot.sh` 是日常正式入口：`camera.py` 同时配置 CSI 主画面与 640×480 lores 输出，低延迟 MJPEG 直接读取 lores。高清 JPEG 默认 `2 FPS / 质量 75`，可在网页调为 `1–15 FPS`；关闭高清预览时不持续编码该通道。
 
-当前默认路线模式为 `end_line_turn_adaptor`：M 只解锁电机；Q/E/U/I 执行红线校准的分段原地转向；N 才会沿白线行驶到末端并停车。红线用于记录方向与转正校验，不会单独触发自动转弯。`pc_vision_adaptor`、`scanline_i` 等属于按需验证模式，须显式设置 `ROBOT_ROUTE_MODE` 后再启动。
+当前默认路线模式为 `pc_vision_adaptor`：树莓派只做底部近场白胶带跟随、网页预览、M 键门控和唯一的 M1/M2 PWM 输出；电脑端通过 `/api/vision-adaptor/frame` 拉取最新 JPEG，在本机运行绿地、红标、骨架和路口等重型识别，并仅向 `/api/vision-adaptor/event` 回传带帧号、时间和 token 的高层视觉事件。电脑端不能调用 PWM，也不能绕过 M 键。协议、电脑端启动命令、失联安全策略和测试见 [pc_vision_adaptor_validation](pi_service/experiments/pc_vision_adaptor_validation/README.md)。
 
 ## 低延迟 H.264 / WebRTC 视频
 
@@ -67,17 +65,12 @@ WebRTC 模式不能同时运行 `start_robot.sh`，也不会支持现有 MJPEG �
 
 ## 重要约定
 
-### 控制与安全
-
 - 串口波特率为 9600；协议见 `docs/serial-protocol.md`。
 - 电机分配为 M1 右侧行驶、M2 左侧行驶、M3 送牌、M4 出牌。M3/M4 上电后默认关闭；网页可分别实时设置 PWM（1–255）、正转/反转和运行时间（0.1–60 秒），无需为这些参数重复烧录。默认值为 M3 反转 255/5 秒、M4 正转 255/1 秒。网页保持 `W/A/S/D` 行驶控制；单击键盘 `P` 会通过同一按键控制通道同时按各自预设触发 M3 和 M4，并分别等待 Arduino 确认。
 - 后轮编码器使用 Mega 的 18（左）和 19（右）；IMU 使用 MPU-6500 I2C。
 - 超声波仅保留中间前向传感器（TRIG 26 / ECHO 27），返回 `US,front`；当前阈值为 1 cm，达到阈值时 Arduino 只拒绝前进，原地转向和后退不受限制。
 - SG90 舵机信号线使用 Mega D23，网页滑块控制 `0–180°`；Mega D22 保留给 HW-487 卡片光电传感器。舵机必须独立稳定供电并与 Mega 共地。舵机命令不会延长电机心跳。
-- 网页“轮速配置”、PWM 与 PID 参数保存在树莓派独立的 `drive_config.json`；该文件不进入 Git，也不会被后续代码更新覆盖。首次升级会从旧 `robot_config.json` 自动复制现有调参值。`drive_config.example.json` 仅是可提交的默认模板。树莓派已有的 `drive_config.json`、`camera_config.json` 与路线调参 JSON 会优先于代码默认值，调车前应先备份并查看。
-
-### 视频与本机保存
-
+- 网页“轮速配置”、PWM 与 PID 参数保存在树莓派独立的 `drive_config.json`；该文件不进入 Git，也不会被后续代码更新覆盖。首次升级会从旧 `robot_config.json` 自动复制现有调参值。`drive_config.example.json` 仅是可提交的默认模板。
 - 网页相机支持自动曝光 EV 和固定快门；快门以 `1/xx` 秒输入。自动曝光模式下 EV 生效，固定快门模式下关闭自动曝光。
 - 日常网页预览的“低延迟”档位为 `640×480`、JPEG 质量 60，直接使用相机 lores 输出。高清 JPEG 通道默认 `2 FPS`、质量 75，可在网页调为 `1–15 FPS`，不在树莓派保存文件；DL 或电脑可用 `/highres_feed` 获取连续图片，或用 `/api/camera/highres/latest` 拉取最新单张。高清通道可在网页选择原始尺寸、最大 1640 px 或最大 1280 px，切换不重启相机。
 - 网页采用“按住才动、松开即停”的按键状态协议：浏览器每 180 ms 经 HTTP/TCP 发送按键集合，树莓派每 200 ms 向 Arduino 发送电机命令。网页失焦、网络断开和 Arduino 1 秒收不到命令都会停车。
@@ -90,9 +83,6 @@ WebRTC 模式不能同时运行 `start_robot.sh`，也不会支持现有 MJPEG �
 - 视频卡片中的“电脑端辅助画面”使用浏览器 Canvas 复用当前视频帧，可完整缩放或中心裁切到 640×480；它不创建第二条视频连接，不增加树莓派网络带宽和编码负载。
 - 网页可在 `1640×1232` 与 `3280×2464` 两个 CSI 读取档位之间切换；两个档位都请求 30 FPS 传感器帧时长，切换会短暂重启视频流，实际采集/编码帧率以网页指标为准。
 - 本地图片保存需要 Chrome/Edge 的 HTTPS 或 localhost 安全上下文，并由用户选择文件夹授权。
-
-### 可选硬件
-
 - OLED 为可选的 SSD1306 `64×48` I2C 模块：GND→pin 6、VCC→pin 1（3.3V，推荐）或 pin 2（5V）、SDA→GPIO2/pin 3、SCL→GPIO3/pin 5；先用 `sudo raspi-config` 开启 I2C。默认地址为 `0x3C`、总线 1，服务启动后每秒显示 Arduino、相机和前向距离。OLED 缺失、I2C 未开或依赖未装不会阻止控制服务启动，网页“状态”标签会显示错误原因。可用 `--disable-oled` 关闭，或以 `--oled-address 0x3D --oled-i2c-port 1` 修改参数。
 
 ## Git 工作流

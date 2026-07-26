@@ -6,6 +6,10 @@
     "kp": 2.0,
     "ki": 0.8,
     "kd": 0.05,
+    "straight_pwm": 80,
+    "pivot_pwm": 150,
+    "curve_outer_pwm": 160,
+    "curve_inner_pwm": 60,
     "servo_center_angle": 90,
     "servo_speed_dps": 45.0,
     "servo_acceleration_dps2": 120.0,
@@ -16,8 +20,6 @@
       "B": {"rf": -80, "lf": -80, "lr": -80, "rr": -80},
       "PL": {"rf": 150, "lf": -150, "lr": -150, "rr": 150},
       "PR": {"rf": -150, "lf": 150, "lr": 150, "rr": -150},
-      "SPL": {"rf": 120, "lf": -120, "lr": -120, "rr": 120},
-      "SPR": {"rf": -120, "lf": 120, "lr": 120, "rr": -120},
       "FL": {"rf": 160, "lf": 60, "lr": 60, "rr": 160},
       "FR": {"rf": 60, "lf": 160, "lr": 160, "rr": 60},
       "BL": {"rf": -60, "lf": -160, "lr": -160, "rr": -60},
@@ -71,15 +73,7 @@
       "red_alignment_min_angle": 75.0,
       "red_alignment_confirm_frames": 2,
       "turn_90_max_steps": 4,
-      "turn_180_max_steps": 8,
-      "face_turn_pulse_seconds": 0.2,
-      "face_turn_cooldown_seconds": 2.0,
-      "face_turn_max_seconds": 15.0,
-      "face_turn_line_center_confirm_frames": 3,
-      "face_turn_line_center_deadband_normalized": 0.1,
-      "return_replay_weight": 0.25,
-      "return_line_lost_confirm_frames": 3,
-      "return_turn_pause_seconds": 0.2
+      "turn_180_max_steps": 8
     }
   }
 }

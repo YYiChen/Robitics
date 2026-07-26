@@ -10,11 +10,11 @@ WHEELS = ("rf", "lf", "lr", "rr")
 
 def default_profiles() -> dict[str, dict[str, int]]:
     return {
-        "F": {"rf": 80, "lf": 80, "lr": 80, "rr": 80}, "SF": {"rf": 100, "lf": 100, "lr": 100, "rr": 100}, "B": {"rf": -80, "lf": -80, "lr": -80, "rr": -80},
-        "PL": {"rf": 150, "lf": -150, "lr": -150, "rr": 150}, "PR": {"rf": -150, "lf": 150, "lr": 150, "rr": -150},
+        "F": {"rf": 255, "lf": 255, "lr": 255, "rr": 255}, "SF": {"rf": 100, "lf": 100, "lr": 100, "rr": 100}, "B": {"rf": -255, "lf": -255, "lr": -255, "rr": -255},
+        "PL": {"rf": 180, "lf": -180, "lr": -180, "rr": 180}, "PR": {"rf": -180, "lf": 180, "lr": 180, "rr": -180},
         "SPL": {"rf": 120, "lf": -120, "lr": -120, "rr": 120}, "SPR": {"rf": -120, "lf": 120, "lr": 120, "rr": -120},
-        "FL": {"rf": 160, "lf": 60, "lr": 60, "rr": 160}, "FR": {"rf": 60, "lf": 160, "lr": 160, "rr": 60},
-        "BL": {"rf": -60, "lf": -160, "lr": -160, "rr": -60}, "BR": {"rf": -160, "lf": -60, "lr": -60, "rr": -160},
+        "FL": {"rf": 255, "lf": 60, "lr": 60, "rr": 255}, "FR": {"rf": 60, "lf": 255, "lr": 255, "rr": 60},
+        "BL": {"rf": -255, "lf": -60, "lr": -60, "rr": -255}, "BR": {"rf": -60, "lf": -255, "lr": -255, "rr": -60},
     }
 
 
@@ -43,6 +43,10 @@ class Config:
     kp: float = 2.0
     ki: float = 0.8
     kd: float = 0.05
+    straight_pwm: int = 80
+    pivot_pwm: int = 150
+    curve_outer_pwm: int = 160
+    curve_inner_pwm: int = 60
     servo_center_angle: int = 90
     servo_speed_dps: float = 45.0
     servo_acceleration_dps2: float = 120.0
@@ -50,13 +54,12 @@ class Config:
     profiles: dict[str, dict[str, int]] = field(default_factory=default_profiles)
 
 
-def legacy_scalar_profiles(raw: dict) -> dict[str, dict[str, int]]:
-    """Translate a pre-profile document once; profiles remain authoritative."""
-    defaults = default_profiles()
-    straight = max(0, min(255, int(raw.get("straight_pwm", defaults["F"]["rf"]))))
-    pivot = max(0, min(255, int(raw.get("pivot_pwm", defaults["PL"]["rf"]))))
-    outer = max(0, min(255, int(raw.get("curve_outer_pwm", defaults["FL"]["rf"]))))
-    inner = max(0, min(255, int(raw.get("curve_inner_pwm", defaults["FL"]["lf"]))))
+def legacy_scalar_profiles(config: Config) -> dict[str, dict[str, int]]:
+    """Translate pre-profile PWM settings into the current action profiles."""
+    straight = max(0, min(255, int(config.straight_pwm)))
+    pivot = max(0, min(255, int(config.pivot_pwm)))
+    outer = max(0, min(255, int(config.curve_outer_pwm)))
+    inner = max(0, min(255, int(config.curve_inner_pwm)))
     profiles = default_profiles()
     profiles.update({
         "F": {wheel: straight for wheel in WHEELS},

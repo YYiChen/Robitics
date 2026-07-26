@@ -61,7 +61,7 @@ class ControllerPersistenceTests(unittest.TestCase):
     def test_drive_uses_m1_m2_and_card_motors_accept_power_and_time(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             controller = RobotController("unused", Path(directory) / "drive_config.json")
-            self.assertEqual(controller._raw("F", controller.config), (80, 80, 0, 0))
+            self.assertEqual(controller._raw("F", controller.config), (255, 255, 0, 0))
             commands: list[str] = []
             def write_with_ack(command: str) -> bool:
                 commands.append(command)
@@ -211,23 +211,6 @@ class ControllerPersistenceTests(unittest.TestCase):
             self.assertEqual(controller.config.profiles["F"], {"rf": 121, "lf": 121, "lr": 121, "rr": 121})
             self.assertEqual(controller.config.profiles["FL"], {"rf": 201, "lf": 71, "lr": 71, "rr": 201})
             self.assertEqual(controller.config.profiles["FR"], {"rf": 71, "lf": 201, "lr": 201, "rr": 71})
-            self.assertNotIn("straight_pwm", controller.status()["config"])
-
-    def test_scalar_pwm_update_cannot_override_drive_profiles(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            controller = RobotController("unused", Path(directory) / "drive_config.json")
-            before = controller.config.profiles
-
-            saved = controller.update_config({
-                "straight_pwm": 255,
-                "pivot_pwm": 255,
-                "curve_outer_pwm": 255,
-                "curve_inner_pwm": 255,
-            })
-
-            self.assertEqual(controller.config.profiles, before)
-            self.assertNotIn("straight_pwm", saved)
-            self.assertNotIn("pivot_pwm", saved)
 
     def test_parses_one_front_sensor_and_servo_reply(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -252,60 +235,6 @@ class ControllerPersistenceTests(unittest.TestCase):
             self.assertEqual(controller.set_servo_angle(90, fast=True), 90)
             self.assertEqual(commands, ["SV,42", "SVF,90"])
             with self.assertRaises(ValueError): controller.set_servo_angle(181)
-
-    def test_empty_browser_heartbeat_does_not_cancel_autonomous_drive(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            controller = RobotController("unused", Path(directory) / "drive_config.json")
-            controller.set_direct_drive(80, 90)
-
-            action = controller.update_keys({"keys": [], "steering": 0})
-
-            self.assertEqual(action, "PID")
-            self.assertEqual(controller.direct_drive, (80, 90))
-            self.assertEqual(controller.direct_drive_owner, "autonomous")
-            controller.update_keys({"keys": ["w"], "steering": 0})
-            self.assertIsNone(controller.direct_drive)
-            self.assertIsNone(controller.direct_drive_owner)
-            self.assertEqual(controller.action, "F")
-
-    def test_explicit_browser_stop_cancels_autonomous_drive_immediately(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            controller = RobotController("unused", Path(directory) / "drive_config.json")
-            commands: list[str] = []
-            controller._write = commands.append
-            controller.set_direct_drive(80, 90)
-
-            self.assertEqual(controller.update_keys({"keys": [], "stop": True}), "STOP")
-            self.assertIsNone(controller.direct_drive)
-            self.assertIsNone(controller.direct_drive_owner)
-            self.assertEqual(commands, ["STOP"])
-
-    def test_autonomous_drive_expires_without_tracker_renewal(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            controller = RobotController("unused", Path(directory) / "drive_config.json")
-            controller._write = lambda command: True
-            controller.start()
-            try:
-                controller.set_direct_drive(80, 90, lease_seconds=.01)
-                time.sleep(.15)
-                self.assertIsNone(controller.direct_drive)
-                self.assertIsNone(controller.direct_drive_owner)
-                self.assertEqual(controller.action, "STOP")
-            finally:
-                controller.stop()
-
-    def test_deal_done_notifies_checkpoint_listeners(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            controller = RobotController("unused", Path(directory) / "drive_config.json")
-            events: list[str] = []
-            listener = events.append
-            controller.add_card_event_listener(listener)
-
-            controller._parse("OK:DEAL,200,1000")
-            controller._parse("DEAL:DONE")
-
-            self.assertEqual(events, ["DEAL:DONE"])
-            controller.remove_card_event_listener(listener)
 
 
 if __name__ == "__main__":
