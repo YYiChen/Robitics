@@ -10,6 +10,8 @@
 
 日常部署只需要关注下列正式主线；完整边界见 [docs/architecture.md](docs/architecture.md)。
 
+给同事交接时，请先阅读 [docs/TEAM_HANDOVER.md](docs/TEAM_HANDOVER.md)：它列出正式部署入口、全部小车相关页面、验证页面边界、配置文件和资料归档位置。
+
 ```text
 firmware/motor_bridge/     正式 Arduino Mega 固件（唯一日常烧录目标）
 pi_service/robot_web/      正式树莓派网页、相机和串口服务
