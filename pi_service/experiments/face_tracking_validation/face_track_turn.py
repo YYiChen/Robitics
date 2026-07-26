@@ -103,10 +103,10 @@ class PiMotorClient:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="PC face-offset → Pi in-place pivot")
-    parser.add_argument("--pi-source", default="http://100.80.46.54:5000/video_feed")
+    parser.add_argument("--pi-source", default="http://10.157.23.223:4747/video")
     parser.add_argument("--pi-url", default="http://100.80.46.54:5000")
     parser.add_argument("--deadband-px", type=int, default=60)
-    parser.add_argument("--cooldown-seconds", type=float, default=1.5)
+    parser.add_argument("--cooldown-seconds", type=float, default=0.8)
     parser.add_argument("--no-motor", action="store_true")
     parser.add_argument("--confidence", type=float, default=0.5)
     args = parser.parse_args()
@@ -211,32 +211,28 @@ def main() -> None:
         cv2.putText(frame, status_text, (8, frame.shape[0] - 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
 
-        # ── Keyboard & turn logic ─────────────────────────────────────
+        # ── Centering logic (J/L key latches direction until face centered) ──
         key = cv2.waitKey(1) & 0xFF
-
-        # J = center-left: keep turning left in small pulses until face centered
-        # L = center-right: same to the right
-        # ESC = quit
         if key == ord("j"):
             centering_direction = "LEFT_90"
+            print(f"  [frame {frame_idx}] J → CENTER LEFT")
         elif key == ord("l"):
             centering_direction = "RIGHT_90"
-        elif key == 27:  # ESC
+            print(f"  [frame {frame_idx}] L → CENTER RIGHT")
+        elif key == 27:
             break
-        else:
-            key = None  # ignore other keys
 
-        if centering_direction is not None and pi and face.detected and face.offset_x is not None:
-            # Keep pulsing until face is within deadband, then stop
-            if abs(face.offset_x) <= args.deadband_px:
+        if centering_direction is not None and pi:
+            # Face temporarily lost during rotation? Keep trying.
+            if not face.detected:
+                cv2.putText(frame, f"CENTERING {centering_direction} — waiting for face...", (12, 48),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 220, 255), 2)
+            elif face.offset_x is not None and abs(face.offset_x) <= args.deadband_px:
                 centering_direction = None
                 print(f"  [frame {frame_idx}] CENTERED (offX={face.offset_x:.0f})")
             elif now - last_turn_at > args.cooldown_seconds:
                 if not pi_armed:
                     pi_armed = pi.toggle_m()
-                    if not pi_armed:
-                        cv2.putText(frame, "PI NOT REACHABLE", (12, 56),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 if pi_armed:
                     ok = pi.send_turn(centering_direction)
                     if ok:
@@ -244,17 +240,15 @@ def main() -> None:
                         print(f"  [frame {frame_idx}] {centering_direction} pulse (offX={face.offset_x:.0f})")
                     else:
                         last_turn_at = now
-                        print(f"  [frame {frame_idx}] {centering_direction} REJECTED (offX={face.offset_x:.0f})")
-                        cv2.putText(frame, f"Pi busy...", (12, 56),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 165, 255), 2)
 
         # Status overlay
         cv2.putText(frame, "J=center-left  L=center-right  ESC=quit", (12, frame.shape[0] - 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
         if centering_direction:
             color = (0, 255, 0) if centering_direction == "LEFT_90" else (255, 0, 255)
-            cv2.putText(frame, f"CENTERING: {centering_direction}", (12, 48),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+            prefix = "WAITING" if not face.detected else "CENTERING"
+            cv2.putText(frame, f"{prefix}: {centering_direction}  offX={face.offset_x:.0f}" if face.offset_x else f"{prefix}: {centering_direction}",
+                        (12, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
 
         cv2.imshow("Face -> Pi Turn (J/L center, ESC quit)", frame)
 
