@@ -16,6 +16,21 @@ python3 -m unittest test_face_detector -v
 
 浏览器打开：`http://127.0.0.1:5058`。
 
+## 电脑端位置数据服务（给后续 Pi 功能复用）
+
+MediaPipe 必须运行在安装了它的电脑上，而非当前 Python 3.13 的树莓派。电脑读取 Pi 的
+相机流后，可通过 HTTP 发布人脸相对相机的位置；它只发布 JSON，不控制小车：
+
+```powershell
+cd C:\Users\32126\Desktop\Robitics\pi_service\experiments\face_tracking_validation
+py -3 face_position_server.py --source http://100.80.46.54:5000/video_feed --port 5059
+```
+
+数据地址为 `http://<电脑局域网IP>:5059/api/face/latest`，典型返回字段包括
+`detected`、`offset_x`、`offset_y`、归一化偏移、框尺寸和置信度。正 `offset_x` 表示人脸在
+相机画面右侧，负值表示左侧。未来 Pi 若接入此地址，也必须把它当作只读传感器；电机门控仍由
+Pi 的 M 键和现有安全逻辑负责。
+
 ## 怎么测“最远可检出距离”
 
 1. 面向镜头站立，从近到远每次移动 0.5 米；不要让人脸偏向或被遮挡。
