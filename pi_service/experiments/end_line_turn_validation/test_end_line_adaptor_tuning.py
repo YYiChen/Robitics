@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -23,6 +24,17 @@ class _Gate:
 
 
 class EndLineAdaptorTuningTests(unittest.TestCase):
+    def test_face_turn_line_stop_arms_only_after_departure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tracker = EndLineTurnAdaptorRouteTracker(None, None, None, _Gate(True), tuning_path=Path(directory) / "tuning.json")
+            centred = SimpleNamespace(valid=True, center_x=320.0)
+            lost = SimpleNamespace(valid=False, center_x=None)
+            self.assertFalse(tracker._observe_face_turn_line(centred, 640))
+            self.assertFalse(tracker._observe_face_turn_line(lost, 640))
+            self.assertFalse(tracker._observe_face_turn_line(centred, 640))
+            self.assertFalse(tracker._observe_face_turn_line(centred, 640))
+            self.assertTrue(tracker._observe_face_turn_line(centred, 640))
+
     def test_update_is_visible_immediate_and_persisted(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "tuning.json"

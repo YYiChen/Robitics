@@ -64,6 +64,8 @@ FACE_TURN_PWM = 255
 FACE_TURN_PULSE_SECONDS = .20
 FACE_TURN_COOLDOWN_SECONDS = 2.0
 FACE_TURN_MAX_SECONDS = 15.0
+FACE_TURN_LINE_CENTER_DEADBAND_NORMALIZED = .10
+FACE_TURN_LINE_CENTER_CONFIRM_FRAMES = 3
 
 
 class EndLineTurnAdaptorRouteTracker:
@@ -104,6 +106,8 @@ class EndLineTurnAdaptorRouteTracker:
         self._face_turn_side, self._face_turn_deadline = None, 0.0
         self._face_turn_started = self._face_turn_phase_until = 0.0
         self._face_turn_pulse_active = False
+        self._face_turn_line_departed = False
+        self._face_turn_line_center_streak = 0
         # This deployment is deliberately keyboard-only: M arms turn commands
         # but must never make the vehicle start following the white line.
         self._manual_only = True
@@ -155,6 +159,8 @@ class EndLineTurnAdaptorRouteTracker:
             self._face_turn_side, self._face_turn_deadline = None, 0.0
             self._face_turn_started = self._face_turn_phase_until = 0.0
             self._face_turn_pulse_active = False
+            self._face_turn_line_departed = False
+            self._face_turn_line_center_streak = 0
         self._set_status(enabled=enabled, detail="按键转向已解锁，等待 Q/E/U/I" if enabled else "已暂停，电机已停止")
         return self.status_dict()
 
@@ -222,6 +228,8 @@ class EndLineTurnAdaptorRouteTracker:
             self._face_turn_started = now
             self._face_turn_phase_until = now + FACE_TURN_PULSE_SECONDS
             self._face_turn_pulse_active = True
+            self._face_turn_line_departed = False
+            self._face_turn_line_center_streak = 0
             self._motion_phase = "FACE_CENTER_TURN"
             self._set_status(state="FACE_CENTER_TURN", detail=f"PC 人脸居中：脉冲原地{self._face_turn_side}转，等待心跳", face_turn_active=True, face_search_side=self._face_turn_side)
         elif command == "HEARTBEAT":
@@ -233,6 +241,8 @@ class EndLineTurnAdaptorRouteTracker:
             self._motion_phase, self._face_turn_side, self._face_turn_deadline = "MANUAL_COMPLETE", None, 0.0
             self._face_turn_started = self._face_turn_phase_until = 0.0
             self._face_turn_pulse_active = False
+            self._face_turn_line_departed = False
+            self._face_turn_line_center_streak = 0
             self._set_status(state="FACE_CENTERED_STOP", detail="PC 已确认人脸居中，原地转向停止", face_turn_active=False, face_search_side=None)
         else:
             raise ValueError("人脸转向只支持 START_LEFT、START_RIGHT、HEARTBEAT、STOP")
@@ -254,12 +264,38 @@ class EndLineTurnAdaptorRouteTracker:
                 "face_turn_cooldown_seconds": FACE_TURN_COOLDOWN_SECONDS,
                 "face_turn_heartbeat_seconds": FACE_TURN_HEARTBEAT_SECONDS,
                 "face_turn_max_seconds": FACE_TURN_MAX_SECONDS,
+                "face_turn_line_center_deadband_normalized": FACE_TURN_LINE_CENTER_DEADBAND_NORMALIZED,
+                "face_turn_line_center_confirm_frames": FACE_TURN_LINE_CENTER_CONFIRM_FRAMES,
                 "turn_interstep_pause_seconds": self._turn_interstep_pause_seconds,
                 "red_alignment_min_angle": self._red_alignment_min_angle,
                 "red_alignment_confirm_frames": self._red_alignment_confirm_frames,
                 "turn_90_max_steps": self._turn_90_max_steps, "turn_180_max_steps": self._turn_180_max_steps,
                 **asdict(self._line_config),
             }
+
+    def _observe_face_turn_line(self, result, frame_width: int) -> bool:
+        """Arm after leaving the starting line, then confirm its reacquisition.
+
+        J/L may start while the white stem is already centred.  That initial
+        line must not cancel the turn before the first pulse.  Once the line is
+        lost or leaves the centre gate, a stable centred reacquisition is a
+        valid return-heading stop landmark.
+        """
+        centre_x = result.center_x if result.valid else None
+        centred = bool(
+            centre_x is not None
+            and frame_width > 0
+            and abs((float(centre_x) - frame_width / 2) / (frame_width / 2))
+            <= FACE_TURN_LINE_CENTER_DEADBAND_NORMALIZED
+        )
+        if not centred:
+            self._face_turn_line_departed = True
+            self._face_turn_line_center_streak = 0
+            return False
+        if not self._face_turn_line_departed:
+            return False
+        self._face_turn_line_center_streak += 1
+        return self._face_turn_line_center_streak >= FACE_TURN_LINE_CENTER_CONFIRM_FRAMES
 
     def _load_tuning(self) -> tuple[float, int, FastLineConfig, EndLineConfig, float, float, int, int, int]:
         values = {
@@ -409,10 +445,16 @@ class EndLineTurnAdaptorRouteTracker:
                 if self.gate.enabled():
                     recent_red = self._last_red_side is not None and frame_index - self._last_red_seen_frame <= self._line_config.red_direction_memory_frames
                     face_turn_active = self._motion_phase == "FACE_CENTER_TURN"
+                    line_return_centered = face_turn_active and self._observe_face_turn_line(result, image.shape[1])
                     if face_turn_active and now >= self._face_turn_deadline:
                         self._stop_motor()
                         self._motion_phase, self._face_turn_side = "MANUAL_COMPLETE", None
                         state, motor, detail = "FACE_TURN_HEARTBEAT_TIMEOUT", "STOP_FACE_HEARTBEAT_TIMEOUT", "PC 人脸心跳超时，安全停车"
+                        self._set_status(state=state, detail=detail, face_turn_active=False, face_search_side=None)
+                    elif line_return_centered:
+                        self._stop_motor()
+                        self._motion_phase, self._face_turn_side = "MANUAL_COMPLETE", None
+                        state, motor, detail = "FACE_TURN_LINE_CENTERED", "STOP_WHITE_LINE_CENTERED", "回转后白线重新居中，连续确认后停车"
                         self._set_status(state=state, detail=detail, face_turn_active=False, face_search_side=None)
                     elif face_turn_active and now - self._face_turn_started >= FACE_TURN_MAX_SECONDS:
                         self._stop_motor()
@@ -545,7 +587,7 @@ class EndLineTurnAdaptorRouteTracker:
                     self.publisher.publish(encoded.tobytes())
                 if self.gate.enabled() or frame_index % 20 == 0:
                     self._write_log(frame_index, result, red, decision, state, motor, commanded, float(np.mean(line_analysis.course_mask)))
-                self._set_status(state=state, detail=detail, frame=frame_index, confidence=result.confidence, line_center_x=result.center_x, green_course_coverage=float(np.mean(line_analysis.course_mask)), green_gate_enabled=fast_config.green_gate_enabled, red_direction_marker=asdict(red), last_red_side=self._last_red_side, last_red_seen_frame=self._last_red_seen_frame, motion_phase=self._motion_phase, motor=motor)
+                self._set_status(state=state, detail=detail, frame=frame_index, confidence=result.confidence, line_center_x=result.center_x, green_course_coverage=float(np.mean(line_analysis.course_mask)), green_gate_enabled=fast_config.green_gate_enabled, red_direction_marker=asdict(red), last_red_side=self._last_red_side, last_red_seen_frame=self._last_red_seen_frame, motion_phase=self._motion_phase, motor=motor, face_line_stop_armed=self._face_turn_line_departed, face_line_center_streak=self._face_turn_line_center_streak)
                 frame_index += 1
         except Exception as exc:
             import traceback

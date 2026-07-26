@@ -16,6 +16,22 @@ from urllib.request import Request, urlopen
 DEFAULT_FACE_DEADBAND_NORMALIZED = .20
 
 
+class FaceStopArmer:
+    """Ignore an initially centred face until the turn has moved away from it."""
+
+    def __init__(self) -> None:
+        self.armed = False
+
+    def reset(self) -> None:
+        self.armed = False
+
+    def should_stop(self, centred: bool) -> bool:
+        if not centred:
+            self.armed = True
+            return False
+        return self.armed
+
+
 def fetch_json(url: str, timeout: float = .4) -> dict:
     with urlopen(url, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
@@ -60,6 +76,8 @@ def main() -> None:
     log_path = log_dir / f"face_turn_web_bridge_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.jsonl"
     print(f"Web J/L bridge running: face={args.face_url}, Pi={args.pi_url}")
     print("It never starts a turn. It only heartbeats an active Pi face turn and stops it once centred.")
+    face_stop_armer = FaceStopArmer()
+    was_face_turn_active = False
     try:
         with log_path.open("a", encoding="utf-8") as log:
             while True:
@@ -67,17 +85,27 @@ def main() -> None:
                 try:
                     status = fetch_json(f"{args.pi_url.rstrip('/')}/api/status")
                     autonomous = status.get("autonomous", {})
-                    if autonomous.get("motion_phase") != "FACE_CENTER_TURN":
+                    face_turn_active = autonomous.get("motion_phase") == "FACE_CENTER_TURN"
+                    if not face_turn_active:
+                        face_stop_armer.reset()
+                        was_face_turn_active = False
                         record.update(action="idle", reason=autonomous.get("motion_phase"))
                     else:
+                        if not was_face_turn_active:
+                            face_stop_armer.reset()
+                            was_face_turn_active = True
                         face = fetch_json(args.face_url)
-                        if is_fresh_and_centred(face, minimum_score=args.minimum_score,
-                                                deadband_normalized=args.deadband_normalized,
-                                                max_age_ms=args.max_age_ms):
+                        centred = is_fresh_and_centred(
+                            face,
+                            minimum_score=args.minimum_score,
+                            deadband_normalized=args.deadband_normalized,
+                            max_age_ms=args.max_age_ms,
+                        )
+                        if face_stop_armer.should_stop(centred):
                             reply, action = post_command(args.pi_url, "STOP"), "stop_centered"
                         else:
                             reply, action = post_command(args.pi_url, "HEARTBEAT"), "heartbeat"
-                        record.update(action=action, face=face, reply=reply)
+                        record.update(action=action, face=face, face_centred=centred, face_stop_armed=face_stop_armer.armed, reply=reply)
                 except Exception as exc:
                     # Deliberately do not send HEARTBEAT on any local/network
                     # fault: the Pi-side 0.6 s dead-man timer performs STOP.

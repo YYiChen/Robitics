@@ -1,12 +1,20 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from face_turn_web_bridge import DEFAULT_FACE_DEADBAND_NORMALIZED, is_fresh_and_centred
+from face_turn_web_bridge import DEFAULT_FACE_DEADBAND_NORMALIZED, FaceStopArmer, is_fresh_and_centred
 
 
 class FaceTurnWebBridgeTests(unittest.TestCase):
     def test_default_stop_zone_is_twenty_percent(self):
         self.assertEqual(DEFAULT_FACE_DEADBAND_NORMALIZED, .20)
+
+    def test_initially_centred_face_must_depart_before_it_can_stop_return(self):
+        armer = FaceStopArmer()
+        self.assertFalse(armer.should_stop(True))
+        self.assertFalse(armer.should_stop(False))
+        self.assertTrue(armer.should_stop(True))
+        armer.reset()
+        self.assertFalse(armer.should_stop(True))
 
     def test_only_fresh_confident_centred_face_stops_turn(self):
         now = datetime.now(timezone.utc).isoformat()
