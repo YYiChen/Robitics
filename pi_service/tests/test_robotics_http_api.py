@@ -88,6 +88,11 @@ class RoboticsGatewayHttpTests(unittest.TestCase):
         )
         self.assertEqual(invalid.status_code, 400)
         self.assertIn("degrees 90 or 180", invalid.get_json()["error"])
+        fractional = self.client.post(
+            "/api/robotics/v1/actions",
+            json={**payload, "request_id": "preset-fractional", "degrees": 90.5},
+        )
+        self.assertEqual(fractional.status_code, 400)
 
 
 if __name__ == "__main__":
