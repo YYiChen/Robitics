@@ -5,7 +5,8 @@ from dataclasses import dataclass, replace
 import cv2
 import numpy as np
 
-from .perception_planner import HybridScanlineAnalyzer, HybridScanlineConfig
+from .models import ScanlineEvidence
+from .perception import HybridScanlineAnalyzer, HybridScanlineConfig
 
 
 @dataclass(frozen=True)

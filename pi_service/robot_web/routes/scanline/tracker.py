@@ -15,14 +15,13 @@ from .config import (
 )
 from .control import straight_control, straight_pair
 from .logging import RUN_LOG_SCHEMA_VERSION, ScanlineLoggingMixin
-from .perception_planner import (
+from .models import TurnaroundConfig, TurnaroundState
+from .perception import (
     HybridScanlineAnalyzer,
     HybridScanlineConfig,
     IShapeScanlineAnalyzer,
-    IShapeTurnaroundPlanner,
-    TurnaroundConfig,
-    TurnaroundState,
 )
+from .planner import IShapeTurnaroundPlanner
 
 
 FORWARD_TRACKING_STATES = frozenset((
