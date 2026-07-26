@@ -475,7 +475,7 @@ class CameraStreamer:
                 main={"size": (self.width, self.height), "format": "RGB888"},
                 # The ISP performs this downscale before Python receives the
                 # preview frame, avoiding a main-resolution resize at 30 FPS.
-                lores={"size": LOW_LATENCY_SIZE, "format": "RGB888"},
+                lores={"size": STREAM_PROFILES["low_latency"]["size"], "format": "RGB888"},
                 controls={
                     "FrameDurationLimits": (frame_duration_us, frame_duration_us),
                     "AwbEnable": True,
