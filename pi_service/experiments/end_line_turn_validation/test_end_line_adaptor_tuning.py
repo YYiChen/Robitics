@@ -76,7 +76,20 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
             save_turn_profile(turn_180, TurnProfile(200, .3))
             with patch.object(adaptor_module, "TURN_90_PATH", turn_90), patch.object(adaptor_module, "TURN_180_PATH", turn_180):
                 tracker = EndLineTurnAdaptorRouteTracker(None, None, None, _Gate(), tuning_path=path)
-                status = tracker.update_tuning({"straight_pwm": 91, "turn_90_step_seconds": 1.4, "turn_interstep_pause_seconds": 1.5, "red_alignment_min_angle": 78, "red_alignment_confirm_frames": 3, "turn_90_max_steps": 5, "correction_gain": 190})
+                status = tracker.update_tuning({
+                    "straight_pwm": 91,
+                    "turn_90_step_seconds": 1.4,
+                    "turn_interstep_pause_seconds": 1.5,
+                    "red_alignment_min_angle": 78,
+                    "red_alignment_confirm_frames": 3,
+                    "turn_90_max_steps": 5,
+                    "correction_gain": 190,
+                    "face_turn_pulse_seconds": .35,
+                    "face_turn_cooldown_seconds": 1.2,
+                    "face_turn_max_seconds": 24,
+                    "face_turn_line_center_confirm_frames": 5,
+                    "face_turn_line_center_deadband_normalized": .16,
+                })
                 self.assertEqual(status["tuning"]["straight_pwm"], 91)
                 self.assertEqual(status["tuning"]["correction_gain"], 190.0)
                 self.assertEqual(status["tuning"]["turn_90_step_seconds"], 1.4)
@@ -84,9 +97,15 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
                 self.assertEqual(status["tuning"]["red_alignment_min_angle"], 78.0)
                 self.assertEqual(status["tuning"]["red_alignment_confirm_frames"], 3)
                 self.assertEqual(status["tuning"]["turn_90_max_steps"], 5)
+                self.assertEqual(status["tuning"]["face_turn_pulse_seconds"], .35)
+                self.assertEqual(status["tuning"]["face_turn_cooldown_seconds"], 1.2)
+                self.assertEqual(status["tuning"]["face_turn_max_seconds"], 24.0)
+                self.assertEqual(status["tuning"]["face_turn_line_center_confirm_frames"], 5)
+                self.assertEqual(status["tuning"]["face_turn_line_center_deadband_normalized"], .16)
                 self.assertTrue(path.exists())
                 reloaded = EndLineTurnAdaptorRouteTracker(None, None, None, _Gate(), tuning_path=path)
                 self.assertEqual(reloaded.status_dict()["tuning"]["straight_pwm"], 91)
+                self.assertEqual(reloaded.status_dict()["tuning"]["face_turn_pulse_seconds"], .35)
 
     def test_rejects_invalid_correction_range(self):
         with tempfile.TemporaryDirectory() as directory:
