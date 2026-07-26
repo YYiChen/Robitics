@@ -62,6 +62,7 @@ DEFAULT_PREVIEW_FPS = 10.0
 DEFAULT_PREVIEW_JPEG_QUALITY = 78
 DEFAULT_CENTER_DEADBAND_NORMALIZED = 0.20
 DEFAULT_SERVER_PORT = 5059
+DEFAULT_CAMERA_RETRY_SECONDS = 1.0
 
 
 def _configured_port(cmdline: list[str]) -> int:
@@ -414,10 +415,17 @@ class DeskMateFacePositionPublisher:
                 name="deskmate-face-preview-encoder",
             ).start()
         threading.Thread(
-            target=self.run,
+            target=self._run_forever,
             daemon=True,
             name="deskmate-face-position-publisher",
         ).start()
+
+    def _run_forever(self) -> None:
+        """Recover when a network camera is busy or temporarily unavailable."""
+
+        while True:
+            self.run()
+            time.sleep(DEFAULT_CAMERA_RETRY_SECONDS)
 
     def _set_error(self, error: str) -> None:
         with self._condition:
