@@ -57,6 +57,10 @@ TUNING_RULES = {
     "turn_180_max_steps": (int, 1, 24),
 }
 FACE_TURN_HEARTBEAT_SECONDS = .60
+# J/L is an operator-triggered, camera-stopped pivot.  It needs enough torque
+# to overcome the vehicle's static wheel friction, independently of the short
+# duration used by the Q/E preset turn.
+FACE_TURN_PWM = 255
 
 
 class EndLineTurnAdaptorRouteTracker:
@@ -359,9 +363,11 @@ class EndLineTurnAdaptorRouteTracker:
                         state, motor, detail = "FACE_TURN_HEARTBEAT_TIMEOUT", "STOP_FACE_HEARTBEAT_TIMEOUT", "PC 人脸心跳超时，安全停车"
                         self._set_status(state=state, detail=detail, face_turn_active=False, face_search_side=None)
                     elif face_turn_active:
-                        # Reuse the live Q/E 90-degree PWM setting.  The face
-                        # mode changes only *when* to stop, not wheel power.
-                        face_pwm = self._turn_90.pwm
+                        # J/L keeps turning until the PC reports a centred
+                        # face.  Use full bounded pivot PWM so it can overcome
+                        # static friction; Q/E keeps its separately tunable
+                        # short-preset PWM.
+                        face_pwm = FACE_TURN_PWM
                         commanded = (face_pwm, -face_pwm) if self._face_turn_side == "LEFT" else (-face_pwm, face_pwm)
                         self.controller.set_direct_drive(*commanded); self._motor_active = True
                         state, motor, detail = f"FACE_CENTER_{self._face_turn_side}", f"FACE_CENTER_PIVOT R={commanded[0]} L={commanded[1]}", "PC heartbeat active; stop only when PC confirms centred"
