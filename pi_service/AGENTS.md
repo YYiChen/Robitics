@@ -95,6 +95,11 @@ and physical-car validation separately.
 
 - Inspect staged and unstaged changes before committing.
 - Stage only paths owned by the current `pi_service` target.
+- After a requested `pi_service` code change passes its declared checks, create
+  the scoped local Git commit before deploying it to the Raspberry Pi.
+- After that commit, synchronize only its relevant changed files, preserving
+  their repository-relative paths under `/home/g11/Desktop`. Do not copy the
+  entire repository when a bounded file sync is sufficient.
 - Keep `main` deployable; use a target branch for unfinished or experimental
   work when publication is involved.
 - Do not rewrite shared history or force-push to make the branch look tidy.
