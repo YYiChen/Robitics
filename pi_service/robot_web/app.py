@@ -14,7 +14,7 @@ from api import (
     register_route_api,
     register_status_api,
 )
-from autonomous_route import (
+from routes.generic.tracker import (
     AutonomousRouteTracker,
     AutonomousRunGate,
     RoutePreviewPublisher,
