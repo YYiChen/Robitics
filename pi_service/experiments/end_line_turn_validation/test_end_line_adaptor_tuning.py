@@ -89,6 +89,7 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
                     "face_turn_max_seconds": 24,
                     "face_turn_line_center_confirm_frames": 5,
                     "face_turn_line_center_deadband_normalized": .16,
+                    "turn_pulse_pwm": 222,
                 })
                 self.assertEqual(status["tuning"]["straight_pwm"], 91)
                 self.assertEqual(status["tuning"]["correction_gain"], 190.0)
@@ -102,6 +103,8 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
                 self.assertEqual(status["tuning"]["face_turn_max_seconds"], 24.0)
                 self.assertEqual(status["tuning"]["face_turn_line_center_confirm_frames"], 5)
                 self.assertEqual(status["tuning"]["face_turn_line_center_deadband_normalized"], .16)
+                self.assertEqual(status["tuning"]["turn_pulse_pwm"], 222)
+                self.assertEqual(status["tuning"]["face_turn_pwm"], 222)
                 self.assertTrue(path.exists())
                 reloaded = EndLineTurnAdaptorRouteTracker(None, None, None, _Gate(), tuning_path=path)
                 self.assertEqual(reloaded.status_dict()["tuning"]["straight_pwm"], 91)
@@ -119,6 +122,7 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
             turn_90, turn_180 = Path(directory) / "turn_90.json", Path(directory) / "turn_180.json"
             save_turn_profile(turn_90, TurnProfile(200, 2.5))
             save_turn_profile(turn_180, TurnProfile(200, 5.0))
+            path.write_text('{"turn_pulse_pwm": 137}\n', encoding="utf-8")
             with patch.object(adaptor_module, "TURN_90_PATH", turn_90), patch.object(adaptor_module, "TURN_180_PATH", turn_180):
                 tracker = EndLineTurnAdaptorRouteTracker(None, None, None, _Gate(True), tuning_path=path)
                 save_turn_profile(turn_90, TurnProfile(137, 1.7))
@@ -143,7 +147,8 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
             self.assertEqual(status["state"], "FACE_CENTER_TURN")
             self.assertEqual(status["vision_turn_target"], "FACE")
             self.assertEqual(tracker._face_turn_side, "LEFT")
-            self.assertEqual(adaptor_module.FACE_TURN_PWM, 255)
+            self.assertEqual(status["tuning"]["turn_pulse_pwm"], 255)
+            self.assertEqual(status["tuning"]["face_turn_pwm"], 255)
             self.assertTrue(tracker._face_turn_pulse_active)
             self.assertAlmostEqual(
                 tracker._face_turn_phase_until - tracker._face_turn_started,
