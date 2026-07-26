@@ -48,7 +48,8 @@ def main() -> None:
     parser.add_argument("--pi-url", default="http://100.80.46.54:5000")
     parser.add_argument("--heartbeat-seconds", type=float, default=.18)
     parser.add_argument("--minimum-score", type=float, default=.5)
-    parser.add_argument("--deadband-normalized", type=float, default=.1875)
+    # ±8% of half-frame width: about ±26 px for the 640 px Pi stream.
+    parser.add_argument("--deadband-normalized", type=float, default=.08)
     parser.add_argument("--max-age-ms", type=int, default=450)
     args = parser.parse_args()
     log_dir = Path(__file__).with_name("runtime_logs"); log_dir.mkdir(exist_ok=True)

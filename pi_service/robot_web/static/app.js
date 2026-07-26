@@ -459,7 +459,7 @@ function setSteeringKey(key, pressed) { if (pressed) heldSteeringKeys.add(key); 
 function stopFaceVisionTurn() {
   requestJson("/api/autonomous/face-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command:"STOP"})}, 800).catch(() => {});
 }
-function releaseKeys() { heldKeys.clear(); heldSteeringKeys.clear(); syncVisualSteeringDirection(); sendKeys(); stopFaceVisionTurn(); }
+function releaseKeys(stopFace = true) { heldKeys.clear(); heldSteeringKeys.clear(); syncVisualSteeringDirection(); sendKeys(); if (stopFace) stopFaceVisionTurn(); }
 async function manualVisionTurn(command) {
   releaseKeys();
   try {
@@ -471,7 +471,9 @@ async function manualVisionTurn(command) {
   } catch (error) { note(error.message); }
 }
 async function faceVisionTurn(command) {
-  releaseKeys();
+  // Do not issue the generic async STOP before START: a delayed STOP could
+  // otherwise arrive at the Pi after START and cancel the new face turn.
+  releaseKeys(false);
   try {
     const response = await requestJson("/api/autonomous/face-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command})}, 1200);
     const data = await response.json();
