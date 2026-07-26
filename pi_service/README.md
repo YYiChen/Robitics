@@ -24,6 +24,12 @@ vision paused; the operator uses the port-5000 console to arm or stop motor
 control. Source support, passing tests, and successful HTTP/serial replies must
 not be reported as successful physical motion without a real-car check.
 
+Manual drive actions use `drive.profiles` as their only action source. W/S/A/D,
+their combined curves, and slow pivots select a named profile; direct-PWM mode
+sends its M1/M2 values, while speed mode preserves the same signs and left/right
+ratio at `target_speed`. Legacy scalar drive PWM fields are accepted only when
+importing an old document that has no `profiles` section.
+
 The end-line route also supports checkpointed return:
 
 1. press `M`, then `N` to start forward white-line following and recording;

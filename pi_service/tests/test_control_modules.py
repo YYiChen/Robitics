@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[1] / "robot_web"))
 
 from control.card_control import CardControlMixin
-from control.drive_config import Config, normalize_profiles
+from control.drive_config import Config, default_profiles, normalize_profiles
 from control.motor_commands import raw_motor_output, speed_targets
 from control.protocol import parse_protocol_line
 
@@ -20,6 +20,26 @@ class ControlModuleTests(unittest.TestCase):
         config = Config()
         self.assertEqual(raw_motor_output("F", config)[2:], (0, 0))
         self.assertEqual(speed_targets("PL", config)[:2], (-30.0, 30.0))
+
+    def test_direct_and_speed_modes_both_derive_actions_from_profiles(self) -> None:
+        config = Config(target_speed=40)
+        config.profiles = normalize_profiles({
+            "F": {"rf": 100, "lf": 50},
+            "PL": {"rf": 220, "lf": -110},
+        })
+
+        self.assertEqual(raw_motor_output("F", config), (100, 50, 0, 0))
+        self.assertEqual(speed_targets("F", config), (20.0, 40.0, 0, 0))
+        self.assertEqual(speed_targets("PL", config), (-20.0, 40.0, 0, 0))
+
+    def test_tracked_drive_defaults_match_code_profile_defaults(self) -> None:
+        import json
+
+        defaults_path = Path(__file__).parents[1] / "config" / "defaults.json"
+        tracked = json.loads(defaults_path.read_text(encoding="utf-8"))["drive"]
+        self.assertNotIn("straight_pwm", tracked)
+        self.assertNotIn("pivot_pwm", tracked)
+        self.assertEqual(normalize_profiles(tracked["profiles"]), default_profiles())
 
     def test_protocol_parser_is_pure_and_preserves_card_outputs_on_stop(self) -> None:
         self.assertEqual(

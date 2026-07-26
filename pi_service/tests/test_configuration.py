@@ -63,7 +63,7 @@ class UnifiedConfigurationTests(unittest.TestCase):
             store = self.make_store(
                 directory,
                 {
-                    "drive": {"target_speed": 35, "straight_pwm": 80},
+                    "drive": {"target_speed": 35, "profiles": {"F": {"rf": 80, "lf": 80}}},
                     "camera": {"highres_fps": 2.0},
                 },
             )

@@ -33,9 +33,25 @@ class CameraMetricsTests(unittest.TestCase):
         keydown = script.split('addEventListener("keydown"', 1)[1].split('addEventListener("keyup"', 1)[0]
         self.assertLess(keydown.index('event.code === "KeyP"'), keydown.index("editing(event)"))
 
+    def test_route_hotkeys_are_checked_before_input_focus_guard(self) -> None:
+        script = (Path(__file__).parents[1] / "robot_web" / "static" / "app.js").read_text(encoding="utf-8")
+        keydown = script.split('addEventListener("keydown"', 1)[1].split('addEventListener("keyup"', 1)[0]
+        focus_guard = keydown.index("if (editing(event)) return")
+        for code in ("KeyM", "KeyN", "KeyQ", "KeyE", "KeyJ", "KeyL"):
+            self.assertLess(keydown.index(code), focus_guard)
+        self.assertIn('const keyboardCodes = {KeyW:"w", KeyA:"a", KeyS:"s", KeyD:"d"', script)
+
+    def test_route_start_waits_for_manual_stop_request_to_drain(self) -> None:
+        script = (Path(__file__).parents[1] / "robot_web" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("keysDrainPromise = (async () =>", script)
+        self.assertIn("await sendKeys(true)", script)
+        for function_name in ("toggleAutonomousDrive", "manualVisionTurn", "faceVisionTurn", "followToEnd"):
+            body = script.split(f"function {function_name}", 1)[1].split("\n}", 1)[0]
+            self.assertIn("await releaseKeys", body)
+
     def test_inflight_wasd_timeout_cannot_clear_a_new_queued_p_event(self) -> None:
         script = (Path(__file__).parents[1] / "robot_web" / "static" / "app.js").read_text(encoding="utf-8")
-        send_keys = script.split("async function sendKeys()", 1)[1].split("function setKey(", 1)[0]
+        send_keys = script.split("function sendKeys(", 1)[1].split("function setKey(", 1)[0]
         self.assertIn("const dealRequestSent = pendingDealRequest", send_keys)
         self.assertIn("if (dealRequestSent)", send_keys)
         self.assertIn("pendingDealRequest?.token === dealRequestSent.token", send_keys)

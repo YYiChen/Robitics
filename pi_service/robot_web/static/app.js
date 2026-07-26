@@ -1,7 +1,7 @@
 const $ = selector => document.querySelector(selector);
 const video = $("#video"), webrtcVideo = $("#webrtcVideo"), highresVideo = $("#highresVideo"), save = $("#save");
 const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:false});
-let folder, aborter, count = 0, profiles = {}, configLoaded = false, keysSending = false, keysQueued = false, stopQueued = false;
+let folder, aborter, count = 0, profiles = {}, configLoaded = false, keysSending = false, keysQueued = false, stopQueued = false, keysDrainPromise = null;
 let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, highresProfileDirty = false, highresProfileBusy = false, highresFpsDirty = false, highresFpsBusy = false, exposureDirty = false, exposureBusy = false, colorCorrectionDirty = false, colorCorrectionBusy = false, videoRetryTimer;
 let servoBusy = false, queuedServoAngle = null, steeringCenterAngle = 90, steeringReversed = true;
 let feedBusy = false, dealBusy = false;
@@ -14,6 +14,7 @@ let webrtcPeer = null, webrtcSessionUrl = "", webrtcStatsTimer = null, webrtcSta
 const webrtcMetrics = {state:"未连接", fps:null, kbps:null, jitterMs:null, jitterBufferMs:null, packetsLost:null, framesDropped:null};
 const actionKeys = {F:"w", SF:"slow", PL:"a", PR:"d", SPL:"x", SPR:"c", B:"s"};
 const keyboardKeys = {w:"w", a:"a", s:"s", d:"d", x:"x", c:"c", ArrowUp:"w", ArrowDown:"s", ArrowLeft:"a", ArrowRight:"d"};
+const keyboardCodes = {KeyW:"w", KeyA:"a", KeyS:"s", KeyD:"d", KeyX:"x", KeyC:"c"};
 const heldKeys = new Set();
 const heldSteeringKeys = new Set();
 let autonomousToggleBusy = false;
@@ -23,7 +24,7 @@ async function toggleAutonomousDrive() {
   autonomousToggleBusy = true;
   try {
     // Never leave a manual key held when handing control to the route tracker.
-    releaseKeys();
+    await releaseKeys();
     const response = await requestJson("/api/autonomous/toggle", {method:"POST"}, 1000);
     const data = await response.json();
     if (!response.ok || !data.ok) throw Error(data.error || "自动行驶切换失败");
@@ -408,77 +409,89 @@ function animateServoIndicator(now) {
   }
   requestAnimationFrame(animateServoIndicator);
 }
-async function sendKeys() {
-  const stop = arguments[0] === true;
+function sendKeys(stop = false) {
   if (stop) stopQueued = true;
-  if (keysSending) { keysQueued = true; return; }
-  keysSending = true;
-  do {
-    keysQueued = false;
-    const stopRequested = stopQueued;
-    stopQueued = false;
-    // Capture which P event is actually carried by this particular HTTP
-    // request. A previous WASD heartbeat may already be in flight when P is
-    // pressed; its timeout must never clear the newly queued P event.
-    const dealRequestSent = pendingDealRequest;
+  keysQueued = true;
+  if (keysDrainPromise) return keysDrainPromise;
+  keysDrainPromise = (async () => {
+    keysSending = true;
     try {
-      const payload = {keys:[...heldKeys], steering:steeringDirection()};
-      if (stopRequested) payload.stop = true;
-      if (dealRequestSent) payload.deal_request = dealRequestSent;
-      const response = await requestJson("/api/keys", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload), keepalive:true}, dealRequestSent ? 3500 : 1000);
-      const data = await response.json();
-      if (!response.ok || !data.ok) throw Error(data.error || "动作发送失败");
-      $("#action").textContent = data.action;
-      if (data.deal && dealRequestSent && data.deal.token === dealRequestSent.token) {
-        if (data.deal.state === "pending") {
-          note(`P 已送达树莓派：正在等待 M3、M4 的 Arduino 确认`);
-          continue;
+      do {
+        keysQueued = false;
+        const stopRequested = stopQueued;
+        stopQueued = false;
+        // Capture which P event is actually carried by this particular HTTP
+        // request. A previous WASD heartbeat may already be in flight when P is
+        // pressed; its timeout must never clear the newly queued P event.
+        const dealRequestSent = pendingDealRequest;
+        try {
+          const payload = {keys:[...heldKeys], steering:steeringDirection()};
+          if (stopRequested) payload.stop = true;
+          if (dealRequestSent) payload.deal_request = dealRequestSent;
+          const response = await requestJson("/api/keys", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload), keepalive:true}, dealRequestSent ? 3500 : 1000);
+          const data = await response.json();
+          if (!response.ok || !data.ok) throw Error(data.error || "动作发送失败");
+          $("#action").textContent = data.action;
+          if (data.deal && dealRequestSent && data.deal.token === dealRequestSent.token) {
+            if (data.deal.state === "pending") {
+              note(`P 已送达树莓派：正在等待 M3、M4 的 Arduino 确认`);
+              continue;
+            }
+            const request = dealRequestSent;
+            if (pendingDealRequest?.token === dealRequestSent.token) pendingDealRequest = null;
+            const feedResult = data.deal.feed || {}, dealResult = data.deal.deal || {};
+            const feedText = feedResult.state === "error"
+              ? `M3失败：${feedResult.error || feedResult.reply || "未确认"}`
+              : feedResult.state === "busy"
+                ? `M3已在运行：${feedResult.reply}`
+                : `M3已运行 ${request.feed_direction_label}/PWM ${request.feed_power}/${request.feed_seconds}秒：${feedResult.reply}`;
+            const dealText = dealResult.state === "error"
+              ? `M4失败：${dealResult.error || dealResult.reply || "未确认"}`
+              : dealResult.state === "busy"
+                ? `M4已在运行：${dealResult.reply}`
+                : dealResult.state === "legacy"
+                  ? `M4按旧固件固定参数运行：${dealResult.reply}`
+                  : `M4已运行 ${request.deal_direction_label}/PWM ${request.deal_power}/${request.deal_seconds}秒：${dealResult.reply}`;
+            note(`${feedText}；${dealText}`);
+            resetDealControls(data.deal.state === "error" ? 0 : Math.max(request.feed_duration_ms, request.deal_duration_ms));
+          }
+        } catch (error) {
+          if (dealRequestSent) {
+            note(`M4 命令失败：${error.message}`);
+            if (pendingDealRequest?.token === dealRequestSent.token) pendingDealRequest = null;
+            resetDealControls(0);
+          } else {
+            note(`行驶命令失败：${error.message}`);
+          }
         }
-        const request = dealRequestSent;
-        if (pendingDealRequest?.token === dealRequestSent.token) pendingDealRequest = null;
-        const feedResult = data.deal.feed || {}, dealResult = data.deal.deal || {};
-        const feedText = feedResult.state === "error"
-          ? `M3失败：${feedResult.error || feedResult.reply || "未确认"}`
-          : feedResult.state === "busy"
-            ? `M3已在运行：${feedResult.reply}`
-            : `M3已运行 ${request.feed_direction_label}/PWM ${request.feed_power}/${request.feed_seconds}秒：${feedResult.reply}`;
-        const dealText = dealResult.state === "error"
-          ? `M4失败：${dealResult.error || dealResult.reply || "未确认"}`
-          : dealResult.state === "busy"
-            ? `M4已在运行：${dealResult.reply}`
-            : dealResult.state === "legacy"
-              ? `M4按旧固件固定参数运行：${dealResult.reply}`
-              : `M4已运行 ${request.deal_direction_label}/PWM ${request.deal_power}/${request.deal_seconds}秒：${dealResult.reply}`;
-        note(`${feedText}；${dealText}`);
-        resetDealControls(data.deal.state === "error" ? 0 : Math.max(request.feed_duration_ms, request.deal_duration_ms));
-      }
-    } catch (error) {
-      if (dealRequestSent) {
-        note(`M4 命令失败：${error.message}`);
-        if (pendingDealRequest?.token === dealRequestSent.token) pendingDealRequest = null;
-        resetDealControls(0);
-      } else {
-        note(`行驶命令失败：${error.message}`);
-      }
+      } while (keysQueued || stopQueued);
+    } finally {
+      keysSending = false;
+      keysDrainPromise = null;
     }
-  } while (keysQueued || stopQueued);
-  keysSending = false;
+  })();
+  return keysDrainPromise;
 }
 function setKey(key, pressed) { if (pressed) heldKeys.add(key); else heldKeys.delete(key); sendKeys(); }
 function setSteeringKey(key, pressed) { if (pressed) heldSteeringKeys.add(key); else heldSteeringKeys.delete(key); syncVisualSteeringDirection(); sendKeys(); }
 function stopFaceVisionTurn() {
-  requestJson("/api/autonomous/face-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command:"STOP"})}, 800).catch(() => {});
+  return requestJson("/api/autonomous/face-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command:"STOP"})}, 800).catch(() => {});
 }
 function stopLineVisionTurn() {
-  requestJson("/api/autonomous/line-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command:"STOP"})}, 800).catch(() => {});
+  return requestJson("/api/autonomous/line-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command:"STOP"})}, 800).catch(() => {});
 }
 function stopVisionTurns() {
-  stopFaceVisionTurn();
-  stopLineVisionTurn();
+  return Promise.allSettled([stopFaceVisionTurn(), stopLineVisionTurn()]);
 }
-function releaseKeys(stopVision = true) { heldKeys.clear(); heldSteeringKeys.clear(); syncVisualSteeringDirection(); sendKeys(true); if (stopVision) stopVisionTurns(); }
+async function releaseKeys(stopVision = true) {
+  heldKeys.clear();
+  heldSteeringKeys.clear();
+  syncVisualSteeringDirection();
+  await sendKeys(true);
+  if (stopVision) await stopVisionTurns();
+}
 async function manualVisionTurn(command) {
-  releaseKeys();
+  await releaseKeys();
   try {
     const response = await requestJson("/api/autonomous/manual-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command})}, 1200);
     const data = await response.json();
@@ -490,7 +503,7 @@ async function manualVisionTurn(command) {
 async function faceVisionTurn(command) {
   // Do not issue the generic async STOP before START: a delayed STOP could
   // otherwise arrive at the Pi after START and cancel the new face turn.
-  releaseKeys(false);
+  await releaseKeys(false);
   try {
     const response = await requestJson("/api/autonomous/face-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command})}, 1200);
     const data = await response.json();
@@ -502,7 +515,7 @@ async function faceVisionTurn(command) {
 async function lineVisionTurn(command) {
   // As with J/L, avoid sending an asynchronous stale STOP immediately before
   // the new H/K request.
-  releaseKeys(false);
+  await releaseKeys(false);
   try {
     const response = await requestJson("/api/autonomous/line-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command})}, 1200);
     const data = await response.json();
@@ -512,7 +525,7 @@ async function lineVisionTurn(command) {
   } catch (error) { note(error.message); }
 }
 async function roundtripRequest(path, body, successText) {
-  releaseKeys(false);
+  await releaseKeys(false);
   try {
     const options = {method:"POST"};
     if (body) {
@@ -536,7 +549,7 @@ function stopRoundtrip() {
   return roundtripRequest("stop", null, "双人脸往返序列已停止。");
 }
 async function followToEnd() {
-  releaseKeys();
+  await releaseKeys();
   try {
     const response = await requestJson("/api/autonomous/follow-to-end", {method:"POST"}, 1200);
     const data = await response.json();
@@ -546,7 +559,7 @@ async function followToEnd() {
   } catch (error) { note(error.message); }
 }
 async function returnAlongRecordedRoute() {
-  releaseKeys();
+  await releaseKeys();
   try {
     const response = await requestJson("/api/autonomous/return", {method:"POST"}, 1200);
     const data = await response.json();
@@ -621,7 +634,7 @@ function resetDealControls(delayMs) {
 }
 for (const button of document.querySelectorAll("[data-action]")) {
   const key = actionKeys[button.dataset.action];
-  if (!key) { button.onclick = releaseKeys; continue; }
+  if (!key) { button.onclick = () => { void releaseKeys(); }; continue; }
   button.addEventListener("pointerdown", event => { event.preventDefault(); button.setPointerCapture(event.pointerId); setKey(key, true); });
   for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) button.addEventListener(name, event => { event.preventDefault(); setKey(key, false); });
 }
@@ -648,31 +661,30 @@ addEventListener("keydown", event => { if (event.repeat) return;
   // P is reserved for the combined M3/M4 card action. Use KeyboardEvent.code as well
   // so the physical key still works with a Chinese input method enabled.
   if (event.code === "KeyP" || event.key?.toLowerCase() === "p") { event.preventDefault(); dealCard(); return; }
-  // M controls only the autonomous motor gate. Vision stays alive and the
-  // current route-prediction frame remains visible while no form field is active.
-  if (!editing(event) && (event.code === "KeyM" || event.key?.toLowerCase() === "m")) { event.preventDefault(); toggleAutonomousDrive(); return; }
-  if (editing(event)) return;
-  if (event.code === "Space") { event.preventDefault(); releaseKeys(); return; }
-  if (event.key?.toLowerCase() === "z") { event.preventDefault(); centerServo(); return; }
-  if (!editing(event) && (event.code === "KeyN" || event.key?.toLowerCase() === "n")) { event.preventDefault(); followToEnd(); return; }
-  if (!editing(event) && (event.code === "KeyR" || event.key?.toLowerCase() === "r")) { event.preventDefault(); returnAlongRecordedRoute(); return; }
-  if (!editing(event) && (event.code === "KeyJ" || event.key?.toLowerCase() === "j")) { event.preventDefault(); faceVisionTurn("START_LEFT"); return; }
-  if (!editing(event) && (event.code === "KeyL" || event.key?.toLowerCase() === "l")) { event.preventDefault(); faceVisionTurn("START_RIGHT"); return; }
-  if (!editing(event) && (event.code === "KeyH" || event.key?.toLowerCase() === "h")) { event.preventDefault(); lineVisionTurn("START_LEFT"); return; }
-  if (!editing(event) && (event.code === "KeyK" || event.key?.toLowerCase() === "k")) { event.preventDefault(); lineVisionTurn("START_RIGHT"); return; }
+  // Route hotkeys remain active after tuning an INPUT/SELECT. Physical
+  // KeyboardEvent.code also keeps them stable under a Chinese IME.
+  if (event.code === "KeyM" || event.key?.toLowerCase() === "m") { event.preventDefault(); void toggleAutonomousDrive(); return; }
+  if (event.code === "KeyN" || event.key?.toLowerCase() === "n") { event.preventDefault(); void followToEnd(); return; }
+  if (event.code === "KeyR" || event.key?.toLowerCase() === "r") { event.preventDefault(); void returnAlongRecordedRoute(); return; }
+  if (event.code === "KeyJ" || event.key?.toLowerCase() === "j") { event.preventDefault(); void faceVisionTurn("START_LEFT"); return; }
+  if (event.code === "KeyL" || event.key?.toLowerCase() === "l") { event.preventDefault(); void faceVisionTurn("START_RIGHT"); return; }
+  if (event.code === "KeyH" || event.key?.toLowerCase() === "h") { event.preventDefault(); void lineVisionTurn("START_LEFT"); return; }
+  if (event.code === "KeyK" || event.key?.toLowerCase() === "k") { event.preventDefault(); void lineVisionTurn("START_RIGHT"); return; }
   const turnKey = event.key?.toLowerCase();
-  // KeyboardEvent.code keeps Q/E/U/I stable when a Chinese IME is active.
   const manualTurn = {q:"LEFT_90", e:"RIGHT_90", u:"LEFT_180", i:"RIGHT_180"}[turnKey] || {KeyQ:"LEFT_90", KeyE:"RIGHT_90", KeyU:"LEFT_180", KeyI:"RIGHT_180"}[event.code];
-  if (manualTurn) { event.preventDefault(); manualVisionTurn(manualTurn); return; }
-  const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, true); }
+  if (manualTurn) { event.preventDefault(); void manualVisionTurn(manualTurn); return; }
+  if (editing(event)) return;
+  if (event.code === "Space") { event.preventDefault(); void releaseKeys(); return; }
+  if (event.code === "KeyZ" || event.key?.toLowerCase() === "z") { event.preventDefault(); centerServo(); return; }
+  const key = keyboardCodes[event.code] || keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, true); }
 });
-addEventListener("keyup", event => { if (editing(event)) return; if (event.code === "KeyP" || event.key?.toLowerCase() === "p") { event.preventDefault(); return; } const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, false); } });
+addEventListener("keyup", event => { if (editing(event)) return; if (event.code === "KeyP" || event.key?.toLowerCase() === "p") { event.preventDefault(); return; } const key = keyboardCodes[event.code] || keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, false); } });
 // Losing browser focus must release held WASD/QE keys, but must not cancel a
 // landmark sequence that is intentionally continuing under Pi/PC vision.
-addEventListener("blur", () => releaseKeys(false)); addEventListener("beforeunload", () => navigator.sendBeacon("/api/stop")); setInterval(sendKeys, 180);
+addEventListener("blur", () => { void releaseKeys(false); }); addEventListener("beforeunload", () => navigator.sendBeacon("/api/stop")); setInterval(sendKeys, 180);
 async function sendHeartbeat() { try { await requestJson("/api/heartbeat", {method:"POST", keepalive:true}, 500); } catch (_) {} }
 setInterval(sendHeartbeat, 180);
-$("#stopButton").onclick = releaseKeys;
+$("#stopButton").onclick = () => { void releaseKeys(); };
 
 // Send the first slider update immediately. While a request is in flight, keep
 // only the newest angle so a rapid drag cannot build up stale serial commands.

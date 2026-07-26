@@ -86,10 +86,10 @@ class RobotController(CardControlMixin, ServoControlMixin):
     def _read_config(path: Path) -> tuple[Config | None, str]:
         try:
             data = json.loads(path.read_text(encoding="utf-8")); config = Config()
-            for key in ("speed_mode", "target_speed", "kp", "ki", "kd", "straight_pwm", "pivot_pwm", "curve_outer_pwm", "curve_inner_pwm", "servo_center_angle", "servo_speed_dps", "servo_acceleration_dps2", "servo_qe_reversed"):
+            for key in ("speed_mode", "target_speed", "kp", "ki", "kd", "servo_center_angle", "servo_speed_dps", "servo_acceleration_dps2", "servo_qe_reversed"):
                 if key in data: setattr(config, key, type(getattr(config, key))(data[key]))
             raw_profiles = data.get("profiles")
-            config.profiles = normalize_profiles(raw_profiles) if isinstance(raw_profiles, dict) else legacy_scalar_profiles(config)
+            config.profiles = normalize_profiles(raw_profiles) if isinstance(raw_profiles, dict) else legacy_scalar_profiles(data)
             return config, ""
         except FileNotFoundError:
             return None, ""
@@ -101,11 +101,11 @@ class RobotController(CardControlMixin, ServoControlMixin):
             try:
                 data = self.config_store.read_section("drive")
                 config = Config()
-                for key in ("speed_mode", "target_speed", "kp", "ki", "kd", "straight_pwm", "pivot_pwm", "curve_outer_pwm", "curve_inner_pwm", "servo_center_angle", "servo_speed_dps", "servo_acceleration_dps2", "servo_qe_reversed"):
+                for key in ("speed_mode", "target_speed", "kp", "ki", "kd", "servo_center_angle", "servo_speed_dps", "servo_acceleration_dps2", "servo_qe_reversed"):
                     if key in data:
                         setattr(config, key, type(getattr(config, key))(data[key]))
                 raw_profiles = data.get("profiles")
-                config.profiles = normalize_profiles(raw_profiles) if isinstance(raw_profiles, dict) else legacy_scalar_profiles(config)
+                config.profiles = normalize_profiles(raw_profiles) if isinstance(raw_profiles, dict) else legacy_scalar_profiles(data)
                 return config, False, "unified_config:drive", ""
             except (TypeError, ValueError, OSError) as exc:
                 return Config(), False, "code_defaults", f"无法读取统一 drive 配置: {exc}"
@@ -284,8 +284,6 @@ class RobotController(CardControlMixin, ServoControlMixin):
                 setattr(self.config, key, bool(payload[key]) if isinstance(old, bool) else type(old)(payload[key]))
             if "profiles" in payload: self.config.profiles = normalize_profiles(payload["profiles"])
             self.config.target_speed = max(0.0, min(200.0, self.config.target_speed))
-            for key in ("straight_pwm", "pivot_pwm", "curve_outer_pwm", "curve_inner_pwm"):
-                setattr(self.config, key, max(0, min(255, getattr(self.config, key))))
             self.config.servo_center_angle = max(0, min(180, self.config.servo_center_angle))
             self.config.servo_speed_dps = max(1.0, min(45.0, self.config.servo_speed_dps))
             self.config.servo_acceleration_dps2 = max(20.0, min(360.0, self.config.servo_acceleration_dps2))

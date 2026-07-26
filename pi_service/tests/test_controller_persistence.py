@@ -61,7 +61,7 @@ class ControllerPersistenceTests(unittest.TestCase):
     def test_drive_uses_m1_m2_and_card_motors_accept_power_and_time(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             controller = RobotController("unused", Path(directory) / "drive_config.json")
-            self.assertEqual(controller._raw("F", controller.config), (255, 255, 0, 0))
+            self.assertEqual(controller._raw("F", controller.config), (80, 80, 0, 0))
             commands: list[str] = []
             def write_with_ack(command: str) -> bool:
                 commands.append(command)
@@ -211,6 +211,23 @@ class ControllerPersistenceTests(unittest.TestCase):
             self.assertEqual(controller.config.profiles["F"], {"rf": 121, "lf": 121, "lr": 121, "rr": 121})
             self.assertEqual(controller.config.profiles["FL"], {"rf": 201, "lf": 71, "lr": 71, "rr": 201})
             self.assertEqual(controller.config.profiles["FR"], {"rf": 71, "lf": 201, "lr": 201, "rr": 71})
+            self.assertNotIn("straight_pwm", controller.status()["config"])
+
+    def test_scalar_pwm_update_cannot_override_drive_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = RobotController("unused", Path(directory) / "drive_config.json")
+            before = controller.config.profiles
+
+            saved = controller.update_config({
+                "straight_pwm": 255,
+                "pivot_pwm": 255,
+                "curve_outer_pwm": 255,
+                "curve_inner_pwm": 255,
+            })
+
+            self.assertEqual(controller.config.profiles, before)
+            self.assertNotIn("straight_pwm", saved)
+            self.assertNotIn("pivot_pwm", saved)
 
     def test_parses_one_front_sensor_and_servo_reply(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
