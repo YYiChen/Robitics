@@ -249,7 +249,7 @@ class EndLineTurnAdaptorRouteTracker:
 
     def submit_face_observation(self, payload: dict) -> dict:
         if not self._face_turn_active:
-            raise ValueError("请先在 DroidCam 窗口按 J 或 L 启动人脸转向")
+            return self.status_dict()
         if not isinstance(payload.get("found"), bool):
             raise ValueError("found 必须是布尔值")
         found = payload["found"]

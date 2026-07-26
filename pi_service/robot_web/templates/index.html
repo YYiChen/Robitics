@@ -36,7 +36,7 @@
           <img id="routePreview" src="/route_preview_feed" alt="路线识别与预判画面">
           <div class="feed-unavailable hidden" id="routePreviewUnavailable">本次服务未开启路线预判。</div>
         </div>
-        <div class="feed-footer"><span id="autonomousState">视觉识别：等待中</span><div class="route-actions"><button class="compact-button primary" id="autonomousToggle" type="button">M：解锁半自动转向</button><button class="compact-button primary hidden" id="autoLeftToggle" type="button">N：自动到终点并左转</button></div></div>
+        <div class="feed-footer"><span id="autonomousState">视觉识别：等待中</span><div class="route-actions"><button class="compact-button primary" id="autonomousToggle" type="button">M：解锁半自动转向</button><button class="compact-button primary hidden" id="autoLeftToggle" type="button">N：自动到终点并左转</button><button class="compact-button primary hidden" id="faceLeftTurn" type="button">J：左转人脸居中</button><button class="compact-button primary hidden" id="faceRightTurn" type="button">L：右转人脸居中</button></div></div>
       </article>
       <article class="feed-card hidden" id="highresCard">
         <div class="feed-heading"><div><span class="eyebrow">2 FPS · JPEG 75</span><h2>高清图片预览</h2></div><span class="feed-badge" id="highresFeedMeta">预览关闭</span><button class="compact-button primary" id="highresPreviewToggle" type="button">开启预览</button></div>
@@ -52,7 +52,7 @@
       <article class="cockpit-card"><div class="cockpit-heading"><span>实时流状态</span><strong id="dashboardFlowState">读取中…</strong></div><div class="flow-grid"><div><span>采集 / 发送</span><strong id="dashboardFps">—</strong></div><div><span>帧龄</span><strong id="dashboardFrameAge">—</strong></div><div><span>编码</span><strong id="dashboardEncode">—</strong></div><div><span>发送带宽</span><strong id="dashboardBandwidth">—</strong></div></div><small id="dashboardFlowHint">显示当前低延迟预览链路的关键参数。</small></article>
       <article class="cockpit-card motor-output-card"><div class="cockpit-heading"><span>Arduino 行驶电机实时输出</span><strong id="motorOutputState">等待 OUT 回包</strong></div><div class="motor-direction-grid" aria-label="M1 M2 行驶电机方向输出"><div class="motor-direction forward"><span>↑ 前进</span><strong id="motorForwardOutput">—</strong></div><div class="motor-direction left"><span>← 左转</span><strong id="motorLeftOutput">—</strong></div><div class="motor-direction stop"><span>● 当前 M1 / M2</span><strong id="motorRawOutput">—</strong></div><div class="motor-direction right"><span>右转 →</span><strong id="motorRightOutput">—</strong></div><div class="motor-direction reverse"><span>↓ 后退</span><strong id="motorReverseOutput">—</strong></div></div><small id="motorOutputHint">显示 Arduino 最近回报并接受的 M1（右轮）/ M2（左轮）有符号 PWM；它不是编码器测得的真实轮速。</small></article>
     </section>
-    <p class="workspace-note">左侧为原始控制画面，右侧为同一主进程的路线预判。<strong>M + Q/E/U/I</strong> 保留为半自动排障转向；按 <strong>N</strong> 自动沿白线驶到另一端、左转 90° 并停车。自动过程中再按 N 或按 M 可立即取消并停车。</p>
+    <p class="workspace-note">左侧为原始控制画面，右侧为同一主进程的路线预判。<strong>M + Q/E/U/I</strong> 为半自动排障；<strong>N</strong> 自动循迹；Edge 中按 <strong>J/L</strong> 分别启动左/右 DroidCam 人脸居中转向。</p>
   </section>
 
   <aside class="control-rail">
@@ -123,6 +123,6 @@
   </aside>
 </main>
 <script src="/static/i18n.js"></script>
-<script src="/static/app.js?v=20260726-keyboard-turn-v2"></script>
+<script src="/static/app.js?v=20260726-edge-face-turn-v1"></script>
 </body>
 </html>

@@ -168,7 +168,7 @@ def main() -> int:
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
     cv2.setMouseCallback(WINDOW, on_mouse)
     active, side = False, None
-    status_text = f"DroidCam source={source} ready"
+    status_text = f"DroidCam source={source} ready; Edge J/L control enabled"
     last_send_at = 0.0
     interval = 1.0 / max(1.0, args.send_fps)
 
@@ -209,21 +209,19 @@ def main() -> int:
                 last_send_at = 0.0
 
             now = time.monotonic()
-            if active and now - last_send_at >= interval:
+            if client is not None and now - last_send_at >= interval:
                 last_send_at = now
-                if client is not None:
-                    response = client.send_face_observation(
-                        found=center_x is not None,
-                        frame_width=frame.shape[1],
-                        center_x=center_x,
-                    )
-                    active = bool(response.get("face_turn_active"))
-                    status_text = str(response.get("detail") or response.get("state") or "face observation sent")
-                    if not active:
-                        side = None
-                elif center_x is not None:
-                    offset = (center_x - frame.shape[1] / 2.0) / max(1.0, frame.shape[1] / 2.0)
-                    status_text = f"preview offset={offset:+.3f}"
+                response = client.send_face_observation(
+                    found=center_x is not None,
+                    frame_width=frame.shape[1],
+                    center_x=center_x,
+                )
+                active = bool(response.get("face_turn_active"))
+                side = response.get("face_search_side") if active else None
+                status_text = str(response.get("detail") or response.get("state") or "face observation sent")
+            elif client is None and active and center_x is not None:
+                offset = (center_x - frame.shape[1] / 2.0) / max(1.0, frame.shape[1] / 2.0)
+                status_text = f"preview offset={offset:+.3f}"
     finally:
         if client is not None:
             try:

@@ -45,6 +45,15 @@ class CameraMetricsTests(unittest.TestCase):
         self.assertIn('id="autoLeftToggle"', template)
         self.assertIn("/api/autonomous/auto-left", script)
 
+    def test_edge_j_l_keys_start_droidcam_face_turns_without_claiming_p(self) -> None:
+        script = (Path(__file__).parents[1] / "robot_web" / "static" / "app.js").read_text(encoding="utf-8")
+        keydown = script.split('addEventListener("keydown"', 1)[1].split('addEventListener("keyup"', 1)[0]
+        self.assertIn('event.code === "KeyJ"', keydown)
+        self.assertIn('startFaceTurn("LEFT")', keydown)
+        self.assertIn('event.code === "KeyL"', keydown)
+        self.assertIn('startFaceTurn("RIGHT")', keydown)
+        self.assertLess(keydown.index('event.code === "KeyP"'), keydown.index('event.code === "KeyJ"'))
+
     def test_inflight_wasd_timeout_cannot_clear_a_new_queued_p_event(self) -> None:
         script = (Path(__file__).parents[1] / "robot_web" / "static" / "app.js").read_text(encoding="utf-8")
         send_keys = script.split("async function sendKeys()", 1)[1].split("function setKey(", 1)[0]

@@ -18,6 +18,7 @@ const heldKeys = new Set();
 const heldSteeringKeys = new Set();
 let autonomousToggleBusy = false;
 let autoLeftToggleBusy = false;
+let faceTurnBusy = false;
 
 async function toggleAutonomousDrive() {
   if (autonomousToggleBusy) return;
@@ -50,6 +51,25 @@ async function toggleAutoLeftMission() {
     autoLeftToggleBusy = false;
   }
 }
+async function startFaceTurn(direction) {
+  if (faceTurnBusy) return;
+  faceTurnBusy = true;
+  try {
+    releaseKeys();
+    const response = await requestJson("/api/autonomous/face-turn", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"START", direction}),
+    }, 1200);
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw Error(data.error || "人脸转向启动失败");
+    updateAutonomousUi(data.autonomous || {});
+  } catch (error) {
+    note(error.message);
+  } finally {
+    faceTurnBusy = false;
+  }
+}
 function updateAutonomousUi(autonomous) {
   const available = autonomous.available === true;
   const enabled = autonomous.enabled === true;
@@ -57,12 +77,19 @@ function updateAutonomousUi(autonomous) {
   const endLine = autonomous.mode === "end_line_turn_adaptor";
   const scanlineLabel = autonomous.mode === "scanline_i_four_endpoint_green_white" ? "工字形四端点验证" : (autonomous.mode === "scanline_i_green_white" ? "绿地白线 I 型" : "扫描线 I 型");
   const autoMissionActive = autonomous.auto_mission_active === true;
-  const button = $("#autonomousToggle"), autoLeftButton = $("#autoLeftToggle"), unavailable = $("#routePreviewUnavailable"), image = $("#routePreview");
+  const faceTurnActive = autonomous.face_turn_active === true;
+  const button = $("#autonomousToggle"), autoLeftButton = $("#autoLeftToggle"), faceLeftButton = $("#faceLeftTurn"), faceRightButton = $("#faceRightTurn"), unavailable = $("#routePreviewUnavailable"), image = $("#routePreview");
   button.disabled = !available;
   button.textContent = available ? (endLine ? (enabled && !autoMissionActive ? "M：关闭半自动并停车" : "M：解锁半自动转向") : (enabled ? "M：暂停并停车" : "M：开启自动行驶")) : "路线预判未开启";
   autoLeftButton.classList.toggle("hidden", !endLine);
   autoLeftButton.disabled = !available || !endLine;
   autoLeftButton.textContent = autoMissionActive ? "N：取消自动任务" : "N：自动到终点并左转";
+  for (const faceButton of [faceLeftButton, faceRightButton]) {
+    faceButton.classList.toggle("hidden", !endLine);
+    faceButton.disabled = !available || !endLine;
+  }
+  faceLeftButton.textContent = faceTurnActive && autonomous.face_search_side === "LEFT" ? "J：正在左转搜脸" : "J：左转人脸居中";
+  faceRightButton.textContent = faceTurnActive && autonomous.face_search_side === "RIGHT" ? "L：正在右转搜脸" : "L：右转人脸居中";
   $("#autonomousState").textContent = available ? `${scanlineI ? scanlineLabel : "视觉"}：${autonomous.state || "等待"} · ${autonomous.detail || "—"}` : "视觉识别：本次服务未开启";
   const driveState = autoMissionActive ? "N 自动行驶中" : (enabled ? (endLine ? "M 半自动已解锁" : "行驶中") : "已暂停");
   $("#routePreviewMeta").textContent = available ? `${driveState} · ${autonomous.confidence == null ? "—" : `置信度 ${fixed(autonomous.confidence)}`}` : "未开启";
@@ -90,6 +117,8 @@ function updateAutonomousUi(autonomous) {
 }
 $("#autonomousToggle").onclick = toggleAutonomousDrive;
 $("#autoLeftToggle").onclick = toggleAutoLeftMission;
+$("#faceLeftTurn").onclick = () => startFaceTurn("LEFT");
+$("#faceRightTurn").onclick = () => startFaceTurn("RIGHT");
 $("#applyRouteTuning").onclick = async () => {
   const payload = {};
   const scanlineI = $("#scanlineRouteTuning").classList.contains("hidden") === false;
@@ -576,6 +605,8 @@ addEventListener("keydown", event => { if (event.repeat) return;
   if (!editing(event) && (event.code === "KeyM" || event.key?.toLowerCase() === "m")) { event.preventDefault(); toggleAutonomousDrive(); return; }
   // N is the only full mission key: follow to the far terminal, turn left 90°, stop.
   if (!editing(event) && (event.code === "KeyN" || event.key?.toLowerCase() === "n")) { event.preventDefault(); toggleAutoLeftMission(); return; }
+  if (!editing(event) && (event.code === "KeyJ" || event.key?.toLowerCase() === "j")) { event.preventDefault(); startFaceTurn("LEFT"); return; }
+  if (!editing(event) && (event.code === "KeyL" || event.key?.toLowerCase() === "l")) { event.preventDefault(); startFaceTurn("RIGHT"); return; }
   if (editing(event)) return;
   if (event.code === "Space") { event.preventDefault(); releaseKeys(); return; }
   if (event.key?.toLowerCase() === "z") { event.preventDefault(); centerServo(); return; }
