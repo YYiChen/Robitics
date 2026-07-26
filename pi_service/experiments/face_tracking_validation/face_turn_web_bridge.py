@@ -7,10 +7,12 @@ without duplicating Pi motor-control ownership.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 import time
+from typing import Any, TextIO
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
@@ -53,6 +55,18 @@ def fetch_json(url: str, timeout: float = .4) -> dict:
         return decode_json_object(response.read())
 
 
+def robotics_route_status(payload: dict) -> dict:
+    """Extract route state from the versioned robotics status envelope."""
+
+    status = payload.get("status")
+    if not payload.get("ok") or not isinstance(status, dict):
+        raise ValueError("invalid robotics-v1 status envelope")
+    route = status.get("route")
+    if not isinstance(route, dict):
+        raise ValueError("robotics-v1 status has no route object")
+    return route
+
+
 def robotics_action_payload(command: str, request_id: str) -> dict:
     """Map bridge decisions onto the versioned state-machine action contract."""
 
@@ -81,6 +95,21 @@ def post_command(pi_url: str, command: str, timeout: float = .4) -> dict:
         return decode_json_object(response.read())
 
 
+def payload_age_ms(payload: dict) -> float | None:
+    try:
+        captured = datetime.fromisoformat(
+            str(payload.get("time")).replace("Z", "+00:00")
+        )
+        return (datetime.now(timezone.utc) - captured).total_seconds() * 1000
+    except (TypeError, ValueError):
+        return None
+
+
+def is_fresh_payload(payload: dict, *, max_age_ms: int) -> bool:
+    age_ms = payload_age_ms(payload)
+    return age_ms is not None and 0 <= age_ms <= max_age_ms
+
+
 def is_fresh_and_centred(face: dict, *, minimum_score: float, deadband_normalized: float,
                           max_age_ms: int) -> bool:
     if not face.get("detected") or float(face.get("score", 0.0)) < minimum_score:
@@ -88,12 +117,103 @@ def is_fresh_and_centred(face: dict, *, minimum_score: float, deadband_normalize
     offset = face.get("offset_x_normalized")
     if offset is None or abs(float(offset)) > deadband_normalized:
         return False
-    try:
-        captured = datetime.fromisoformat(str(face.get("time")).replace("Z", "+00:00"))
-        age_ms = (datetime.now(timezone.utc) - captured).total_seconds() * 1000
-    except (TypeError, ValueError):
-        return False
-    return 0 <= age_ms <= max_age_ms
+    return is_fresh_payload(face, max_age_ms=max_age_ms)
+
+
+class FaceTurnBridge:
+    """Translate one face observation source into Pi robotics-v1 lease actions."""
+
+    def __init__(
+        self,
+        *,
+        face_provider: Callable[[], dict],
+        pi_url: str,
+        heartbeat_seconds: float = .18,
+        minimum_score: float = .5,
+        deadband_normalized: float = DEFAULT_FACE_DEADBAND_NORMALIZED,
+        max_age_ms: int = 450,
+        status_provider: Callable[[], dict] | None = None,
+        command_poster: Callable[[str, str], dict] | None = None,
+    ) -> None:
+        self.face_provider = face_provider
+        self.pi_url = pi_url.rstrip("/")
+        self.heartbeat_seconds = heartbeat_seconds
+        self.minimum_score = minimum_score
+        self.deadband_normalized = deadband_normalized
+        self.max_age_ms = max_age_ms
+        self.status_provider = status_provider or (
+            lambda: fetch_json(f"{self.pi_url}/api/robotics/v1/status")
+        )
+        self.command_poster = command_poster or (
+            lambda pi_url, command: post_command(pi_url, command)
+        )
+        self.face_stop_armer = FaceStopArmer()
+        self.was_face_turn_active = False
+
+    def step(self) -> dict[str, Any]:
+        record: dict[str, Any] = {
+            "time": datetime.now(timezone.utc).isoformat()
+        }
+        status = self.status_provider()
+        route = robotics_route_status(status)
+        face_turn_active = route.get("motion_phase") == "FACE_CENTER_TURN"
+        if not face_turn_active:
+            self.face_stop_armer.reset()
+            self.was_face_turn_active = False
+            record.update(action="idle", reason=route.get("motion_phase"))
+            return record
+
+        if not self.was_face_turn_active:
+            self.face_stop_armer.reset()
+            self.was_face_turn_active = True
+        face = self.face_provider()
+        if face.get("error"):
+            raise RuntimeError(f"face_publisher_error:{face['error']}")
+        if not is_fresh_payload(face, max_age_ms=self.max_age_ms):
+            raise RuntimeError("face_publisher_stale")
+        centred = is_fresh_and_centred(
+            face,
+            minimum_score=self.minimum_score,
+            deadband_normalized=self.deadband_normalized,
+            max_age_ms=self.max_age_ms,
+        )
+        if self.face_stop_armer.should_stop(centred):
+            reply = self.command_poster(self.pi_url, "STOP")
+            action = "stop_centered"
+        else:
+            reply = self.command_poster(self.pi_url, "HEARTBEAT")
+            action = "heartbeat"
+        record.update(
+            action=action,
+            face=face,
+            face_centred=centred,
+            face_stop_armed=self.face_stop_armer.armed,
+            reply=reply,
+        )
+        return record
+
+    def run_forever(
+        self,
+        log: TextIO,
+        *,
+        record_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
+        while True:
+            try:
+                record = self.step()
+            except Exception as exc:
+                # Deliberately do not send HEARTBEAT on any camera/network
+                # fault: the Pi-side dead-man timer performs STOP.
+                record = {
+                    "time": datetime.now(timezone.utc).isoformat(),
+                    "action": "no_heartbeat",
+                    "error": str(exc),
+                }
+            if record_callback is not None:
+                record_callback(dict(record))
+            log.write(json.dumps(record, ensure_ascii=False) + "\n")
+            log.flush()
+            time.sleep(self.heartbeat_seconds)
 
 
 def main() -> None:
@@ -115,42 +235,17 @@ def main() -> None:
         "It never starts a turn. It uses /api/robotics/v1/actions only to "
         "heartbeat an active Pi face turn and stop it once centred."
     )
-    face_stop_armer = FaceStopArmer()
-    was_face_turn_active = False
+    bridge = FaceTurnBridge(
+        face_provider=lambda: fetch_json(args.face_url),
+        pi_url=args.pi_url,
+        heartbeat_seconds=args.heartbeat_seconds,
+        minimum_score=args.minimum_score,
+        deadband_normalized=args.deadband_normalized,
+        max_age_ms=args.max_age_ms,
+    )
     try:
         with log_path.open("a", encoding="utf-8") as log:
-            while True:
-                record = {"time": datetime.now(timezone.utc).isoformat()}
-                try:
-                    status = fetch_json(f"{args.pi_url.rstrip('/')}/api/status")
-                    autonomous = status.get("autonomous", {})
-                    face_turn_active = autonomous.get("motion_phase") == "FACE_CENTER_TURN"
-                    if not face_turn_active:
-                        face_stop_armer.reset()
-                        was_face_turn_active = False
-                        record.update(action="idle", reason=autonomous.get("motion_phase"))
-                    else:
-                        if not was_face_turn_active:
-                            face_stop_armer.reset()
-                            was_face_turn_active = True
-                        face = fetch_json(args.face_url)
-                        centred = is_fresh_and_centred(
-                            face,
-                            minimum_score=args.minimum_score,
-                            deadband_normalized=args.deadband_normalized,
-                            max_age_ms=args.max_age_ms,
-                        )
-                        if face_stop_armer.should_stop(centred):
-                            reply, action = post_command(args.pi_url, "STOP"), "stop_centered"
-                        else:
-                            reply, action = post_command(args.pi_url, "HEARTBEAT"), "heartbeat"
-                        record.update(action=action, face=face, face_centred=centred, face_stop_armed=face_stop_armer.armed, reply=reply)
-                except Exception as exc:
-                    # Deliberately do not send HEARTBEAT on any local/network
-                    # fault: the Pi-side 0.6 s dead-man timer performs STOP.
-                    record.update(action="no_heartbeat", error=str(exc))
-                log.write(json.dumps(record, ensure_ascii=False) + "\n"); log.flush()
-                time.sleep(args.heartbeat_seconds)
+            bridge.run_forever(log)
     except KeyboardInterrupt:
         print("Bridge stopped; Pi dead-man timer will stop any active pivot.")
 

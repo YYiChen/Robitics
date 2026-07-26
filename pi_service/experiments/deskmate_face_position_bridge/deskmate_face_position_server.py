@@ -1,8 +1,9 @@
-"""Publish DeskMate-Advance YuNet/SFace face position as control-neutral JSON.
+"""Run the single-process DeskMate face-control stack on the Windows PC.
 
-The process runs on the PC, reads the Pi MJPEG stream through DeskMate's
-OpenCVCamera adapter, and uses DeskMate's OpenCvFaceIdentityAdapter.  It never
-imports robot control code and never sends motor commands.
+One camera owner feeds DeskMate inference and the 5059 annotated relay.  An
+embedded bridge reads the same in-memory observation and only renews or stops
+an already-started Pi face turn through the versioned robotics-v1 API.  It
+never starts a turn and never imports Pi motor-control code.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import threading
 import time
 from typing import Any
 from urllib.parse import urlparse
+from urllib.request import urlopen
 
 import cv2
 import numpy as np
@@ -30,6 +32,10 @@ DESKMATE_SRC = DESKMATE_ROOT / "src"
 DESKMATE_FACE_CONFIG = (
     DESKMATE_ROOT / "configs" / "perception" / "face_identity_session.json"
 )
+FACE_TRACKING_DIR = (
+    PROJECT_ROOT / "pi_service" / "experiments" / "face_tracking_validation"
+)
+LEGACY_BRIDGE_SCRIPT = FACE_TRACKING_DIR / "face_turn_web_bridge.py"
 
 if not DESKMATE_SRC.is_dir():
     raise RuntimeError(
@@ -37,7 +43,9 @@ if not DESKMATE_SRC.is_dir():
         "`git submodule update --init --recursive` from the Robitics root."
     )
 sys.path.insert(0, str(DESKMATE_SRC))
+sys.path.insert(0, str(FACE_TRACKING_DIR))
 
+from face_turn_web_bridge import FaceTurnBridge  # noqa: E402
 from poker_dealer.io.camera import (  # noqa: E402
     CameraConfig,
     CameraReadStatus,
@@ -63,6 +71,10 @@ DEFAULT_PREVIEW_JPEG_QUALITY = 78
 DEFAULT_CENTER_DEADBAND_NORMALIZED = 0.30
 DEFAULT_SERVER_PORT = 5059
 DEFAULT_CAMERA_RETRY_SECONDS = 1.0
+DEFAULT_PI_URL = "http://100.80.46.54:5000"
+DEFAULT_BRIDGE_HEARTBEAT_SECONDS = .18
+DEFAULT_BRIDGE_MINIMUM_SCORE = .5
+DEFAULT_BRIDGE_MAX_AGE_MS = 450
 
 
 def _configured_port(cmdline: list[str]) -> int:
@@ -82,10 +94,14 @@ def _configured_port(cmdline: list[str]) -> int:
     return DEFAULT_SERVER_PORT
 
 
-def _command_runs_this_server(cmdline: list[str], cwd: str | None) -> bool:
-    """Match only another process executing this exact checked-out script."""
+def _command_runs_script(
+    cmdline: list[str],
+    cwd: str | None,
+    expected_script: Path,
+) -> bool:
+    """Match only a process executing one exact checked-out script."""
 
-    expected = Path(__file__).resolve()
+    expected = expected_script.resolve()
     base = Path(cwd).resolve() if cwd else None
     for argument in cmdline[1:]:
         if not argument.lower().endswith(expected.name.lower()):
@@ -101,6 +117,10 @@ def _command_runs_this_server(cmdline: list[str], cwd: str | None) -> bool:
         except OSError:
             continue
     return False
+
+
+def _command_runs_this_server(cmdline: list[str], cwd: str | None) -> bool:
+    return _command_runs_script(cmdline, cwd, Path(__file__))
 
 
 def _is_python_runtime(process_name: str) -> bool:
@@ -158,6 +178,80 @@ def replace_existing_server_instances(
     if alive:
         psutil.wait_procs(alive, timeout=max(0.1, wait_seconds))
     return [process.pid for process in matches]
+
+
+def replace_legacy_bridge_instances(
+    *,
+    wait_seconds: float = 3.0,
+) -> list[int]:
+    """Stop standalone bridges superseded by this embedded single process."""
+
+    try:
+        import psutil
+    except ImportError as exc:
+        raise RuntimeError(
+            "Automatic legacy bridge cleanup requires psutil. "
+            "Install it with `py -3 -m pip install psutil`."
+        ) from exc
+
+    matches = []
+    for process in psutil.process_iter(["pid", "name", "cmdline"]):
+        if process.pid == os.getpid():
+            continue
+        try:
+            process_name = process.name()
+            cmdline = process.cmdline()
+            cwd = process.cwd()
+        except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+            continue
+        if (
+            cmdline
+            and _is_python_runtime(process_name)
+            and _command_runs_script(cmdline, cwd, LEGACY_BRIDGE_SCRIPT)
+        ):
+            matches.append(process)
+
+    for process in matches:
+        try:
+            process.terminate()
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            continue
+    _gone, alive = psutil.wait_procs(matches, timeout=max(0.1, wait_seconds))
+    for process in alive:
+        try:
+            process.kill()
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            continue
+    if alive:
+        psutil.wait_procs(alive, timeout=max(0.1, wait_seconds))
+    return [process.pid for process in matches]
+
+
+def diagnose_network_source(source: str) -> str | None:
+    """Explain common DroidCam HTML responses after OpenCV failed to open."""
+
+    parsed = urlparse(source)
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    try:
+        with urlopen(source, timeout=2.0) as response:
+            content_type = str(response.headers.get("Content-Type", "")).lower()
+            if (
+                content_type.startswith("multipart/")
+                or content_type.startswith("video/")
+                or content_type.startswith("image/")
+            ):
+                return None
+            sample = response.read(4096).decode("utf-8", "replace").lower()
+    except Exception:
+        return None
+    if "droidcam is busy" in sample or "droidcam_busy" in sample:
+        return (
+            "camera_source_busy:droidcam_single_client_in_use; close every "
+            "browser/client viewing the phone /video URL and use "
+            "http://127.0.0.1:5059/preview_feed instead"
+        )
+    return f"camera_source_not_video:content_type={content_type or 'unknown'}"
 
 
 def select_primary_feature(
@@ -380,6 +474,11 @@ class DeskMateFacePositionPublisher:
             "detected": False,
             "error": "starting",
         }
+        self._bridge_latest: dict[str, Any] = {
+            "enabled": False,
+            "action": "not_started",
+            "error": "",
+        }
         self._preview_input: tuple[np.ndarray, FaceFrameEvidence, dict[str, Any]] | None = None
         self._preview_jpeg: bytes | None = None
         self._preview_sequence = 0
@@ -387,7 +486,13 @@ class DeskMateFacePositionPublisher:
 
     def snapshot(self) -> dict[str, Any]:
         with self._condition:
-            return dict(self._latest)
+            snapshot = dict(self._latest)
+            snapshot["bridge"] = dict(self._bridge_latest)
+            return snapshot
+
+    def set_bridge_status(self, record: dict[str, Any]) -> None:
+        with self._condition:
+            self._bridge_latest = {"enabled": True, **record}
 
     def latest_preview(self) -> tuple[bytes | None, int]:
         with self._condition:
@@ -525,7 +630,11 @@ class DeskMateFacePositionPublisher:
                         self._queue_preview(frame.image, evidence, payload)
                         next_preview_at = now + 1.0 / self.preview_fps
         except Exception as exc:
-            self._set_error(f"publisher_error:{type(exc).__name__}:{exc}")
+            diagnosis = diagnose_network_source(self.source)
+            self._set_error(
+                diagnosis
+                or f"publisher_error:{type(exc).__name__}:{exc}"
+            )
         return self.snapshot()
 
 
@@ -587,6 +696,47 @@ def make_handler(publisher: DeskMateFacePositionPublisher):
     return Handler
 
 
+def start_embedded_face_bridge(
+    publisher: DeskMateFacePositionPublisher,
+    *,
+    pi_url: str,
+    heartbeat_seconds: float,
+    minimum_score: float,
+    deadband_normalized: float,
+    max_age_ms: int,
+) -> Path:
+    """Run the Pi lease bridge against the publisher's in-memory snapshot."""
+
+    log_dir = FACE_TRACKING_DIR / "runtime_logs"
+    log_dir.mkdir(exist_ok=True)
+    log_path = log_dir / (
+        "face_control_stack_"
+        f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.jsonl"
+    )
+    bridge = FaceTurnBridge(
+        face_provider=publisher.snapshot,
+        pi_url=pi_url,
+        heartbeat_seconds=heartbeat_seconds,
+        minimum_score=minimum_score,
+        deadband_normalized=deadband_normalized,
+        max_age_ms=max_age_ms,
+    )
+
+    def worker() -> None:
+        with log_path.open("a", encoding="utf-8") as log:
+            bridge.run_forever(
+                log,
+                record_callback=publisher.set_bridge_status,
+            )
+
+    threading.Thread(
+        target=worker,
+        daemon=True,
+        name="deskmate-embedded-face-turn-bridge",
+    ).start()
+    return log_path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="DeskMate YuNet/SFace PC face-position JSON publisher"
@@ -600,6 +750,32 @@ def main() -> None:
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=DEFAULT_SERVER_PORT)
+    parser.add_argument("--pi-url", default=DEFAULT_PI_URL)
+    parser.add_argument(
+        "--disable-pi-bridge",
+        action="store_true",
+        help="publish face data only; do not heartbeat or stop Pi face turns",
+    )
+    parser.add_argument(
+        "--bridge-heartbeat-seconds",
+        type=float,
+        default=DEFAULT_BRIDGE_HEARTBEAT_SECONDS,
+    )
+    parser.add_argument(
+        "--bridge-minimum-score",
+        type=float,
+        default=DEFAULT_BRIDGE_MINIMUM_SCORE,
+    )
+    parser.add_argument(
+        "--bridge-deadband-normalized",
+        type=float,
+        default=DEFAULT_CENTER_DEADBAND_NORMALIZED,
+    )
+    parser.add_argument(
+        "--bridge-max-age-ms",
+        type=int,
+        default=DEFAULT_BRIDGE_MAX_AGE_MS,
+    )
     parser.add_argument(
         "--no-replace-existing",
         action="store_true",
@@ -640,6 +816,14 @@ def main() -> None:
         parser.error("--detector-score-threshold must be in (0, 1]")
     if not 16 <= args.minimum_face_size_px <= 512:
         parser.error("--minimum-face-size-px must be in [16, 512]")
+    if not .05 <= args.bridge_heartbeat_seconds <= 2:
+        parser.error("--bridge-heartbeat-seconds must be in [0.05, 2]")
+    if not 0 < args.bridge_minimum_score <= 1:
+        parser.error("--bridge-minimum-score must be in (0, 1]")
+    if not 0 < args.bridge_deadband_normalized <= 1:
+        parser.error("--bridge-deadband-normalized must be in (0, 1]")
+    if not 100 <= args.bridge_max_age_ms <= 5000:
+        parser.error("--bridge-max-age-ms must be in [100, 5000]")
 
     publisher = DeskMateFacePositionPublisher(
         args.source,
@@ -660,15 +844,38 @@ def main() -> None:
                 "Replaced previous DeskMate face server process(es): "
                 + ", ".join(str(pid) for pid in replaced_pids)
             )
+        if not args.disable_pi_bridge:
+            legacy_bridge_pids = replace_legacy_bridge_instances()
+            if legacy_bridge_pids:
+                print(
+                    "Replaced standalone face bridge process(es): "
+                    + ", ".join(str(pid) for pid in legacy_bridge_pids)
+                )
 
     publisher.start()
+    bridge_log_path = None
+    if not args.disable_pi_bridge:
+        bridge_log_path = start_embedded_face_bridge(
+            publisher,
+            pi_url=args.pi_url,
+            heartbeat_seconds=args.bridge_heartbeat_seconds,
+            minimum_score=args.bridge_minimum_score,
+            deadband_normalized=args.bridge_deadband_normalized,
+            max_age_ms=args.bridge_max_age_ms,
+        )
     server = ThreadingHTTPServer((args.host, args.port), make_handler(publisher))
     server.daemon_threads = True
     print(
         f"DeskMate face JSON: http://{args.host}:{args.port}/api/face/latest\n"
         f"Annotated preview: http://{args.host}:{args.port}/preview_feed\n"
         f"source={args.source}\n"
-        "PC inference only; no robot, motor, Arduino, or route-control imports."
+        + (
+            f"Embedded Pi bridge: {args.pi_url} "
+            f"(log={bridge_log_path})\n"
+            if bridge_log_path is not None
+            else "Embedded Pi bridge: disabled\n"
+        )
+        + "One camera owner; this process never starts a turn or imports motor code."
     )
     try:
         server.serve_forever(poll_interval=0.2)

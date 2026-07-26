@@ -2,8 +2,8 @@
 
 本目录保留早期5058 MediaPipe纯观测实验，但正式车控不再使用该检测器。当前唯一车控
 检测器是相邻目录 `deskmate_face_position_bridge/deskmate_face_position_server.py`
-调用的DeskMate YuNet/SFace；本目录的 `face_turn_web_bridge.py` 仅负责将该检测结果
-转换成Pi正式动作API的心跳和停车。
+调用的DeskMate YuNet/SFace。正式运行时，该文件同时内嵌本目录可复用的
+`FaceTurnBridge`，直接读取内存快照并转换成Pi正式动作API的心跳和停车。
 
 ## 树莓派运行
 
@@ -21,8 +21,8 @@ python3 -m unittest test_face_detector -v
 
 只保留这一套车控链路：电脑上的 `deskmate_face_position_server.py` 使用
 DeskMate YuNet/SFace做唯一一次推理；
-`face_turn_web_bridge.py` 只读取其 JSON，并在网页或状态机已经启动 J/L 转向后，
-通过正式的 `/api/robotics/v1/actions` 向 Pi 发送
+`deskmate_face_position_server.py` 内嵌的桥接线程在网页或状态机已经启动J/L转向后，
+通过正式的 `/api/robotics/v1/status` 和 `/api/robotics/v1/actions` 向Pi发送
 `face_turn_heartbeat` 或 `face_turn_stop`。每次心跳使用独立 `request_id`，
 确保Pi的幂等缓存不会吞掉后续续租。
 历史5058探测程序不参与电机控制，也不会和YuNet/SFace同时向Pi发动作。
@@ -31,17 +31,10 @@ DeskMate YuNet/SFace做唯一一次推理；
 
 ```powershell
 cd C:\Users\32126\Desktop\Robitics
-py -3 .\pi_service\experiments\deskmate_face_position_bridge\deskmate_face_position_server.py --source http://100.93.97.117:4747/video --port 5059
+py -3 .\pi_service\experiments\deskmate_face_position_bridge\deskmate_face_position_server.py --source http://100.93.97.117:4747/video --port 5059 --pi-url http://100.80.46.54:5000
 ```
 
-再在第二个终端启动桥接：
-
-```powershell
-cd C:\Users\32126\Desktop\Robitics\pi_service\experiments\face_tracking_validation
-py -3 face_turn_web_bridge.py --face-url http://127.0.0.1:5059/api/face/latest --pi-url http://100.80.46.54:5000
-```
-
-此后在 5000 网页先按 M，再按 J 或 L；状态机也可用
+不再需要第二个终端或独立桥接进程。此后在5000网页先按M，再按J或L；状态机也可用
 `face_turn_start` 动作进入相同状态。只有 Pi 已进入 `FACE_CENTER_TURN` 时桥接才会工作：
 人脸未居中时持续 `HEARTBEAT`，人脸居中后发送 `STOP`。检测流或网络异常时不续租，Pi 会按安全超时停车。
 

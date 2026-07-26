@@ -672,7 +672,7 @@ async function flushFaceVisionTurnQueue() {
         2500,
       );
       updateAutonomousUi(result.detail || {});
-      note(`${command === "START_LEFT" ? "J 人脸持续左转" : "L 人脸持续右转"}已启动：电脑端 face_turn_web_bridge.py 将持续续租，只在人脸居中时停车；桥接停止后 Pi 会在 3 秒内安全停车。`);
+      note(`${command === "START_LEFT" ? "J 人脸持续左转" : "L 人脸持续右转"}已启动：电脑端 5059 内嵌桥接将持续续租，只在人脸居中时停车；5059 停止后 Pi 会在 3 秒内安全停车。`);
     } catch (error) {
       note(`人脸转向请求失败：${error.message}`);
     } finally {

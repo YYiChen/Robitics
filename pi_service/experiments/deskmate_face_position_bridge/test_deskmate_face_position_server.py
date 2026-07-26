@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -16,11 +17,15 @@ from deskmate_face_position_server import (
     DEFAULT_MINIMUM_FACE_SIZE_PX,
     DEFAULT_SERVER_PORT,
     DEFAULT_SOURCE,
+    LEGACY_BRIDGE_SCRIPT,
+    DeskMateFacePositionPublisher,
+    _command_runs_script,
     _command_runs_this_server,
     _configured_port,
     _is_python_runtime,
     annotate_face_preview,
     camera_config,
+    diagnose_network_source,
     face_identity_config,
     face_payload,
     select_primary_feature,
@@ -84,6 +89,56 @@ class DeskMateFacePositionServerTests(unittest.TestCase):
         self.assertTrue(_is_python_runtime("python3.12"))
         self.assertFalse(_is_python_runtime("py.exe"))
         self.assertFalse(_is_python_runtime("pwsh.exe"))
+
+    def test_legacy_bridge_match_is_exact(self) -> None:
+        command = [
+            "python.exe",
+            "pi_service/experiments/face_tracking_validation/"
+            "face_turn_web_bridge.py",
+        ]
+        self.assertTrue(
+            _command_runs_script(
+                command,
+                str(PROJECT_ROOT),
+                LEGACY_BRIDGE_SCRIPT,
+            )
+        )
+        self.assertFalse(
+            _command_runs_script(
+                ["python.exe", "face_turn_web_bridge.py"],
+                str(PROJECT_ROOT),
+                LEGACY_BRIDGE_SCRIPT,
+            )
+        )
+
+    def test_droidcam_busy_html_has_actionable_error(self) -> None:
+        class HtmlResponse:
+            headers = {"Content-Type": "text/html; charset=UTF-8"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _size):
+                return b"<h5>DroidCam is Busy</h5>"
+
+        with patch(
+            "deskmate_face_position_server.urlopen",
+            return_value=HtmlResponse(),
+        ):
+            error = diagnose_network_source(DEFAULT_SOURCE)
+        self.assertIn("camera_source_busy", error)
+        self.assertIn("5059/preview_feed", error)
+
+    def test_health_snapshot_includes_embedded_bridge_state(self) -> None:
+        publisher = DeskMateFacePositionPublisher(DEFAULT_SOURCE)
+        self.assertEqual(publisher.snapshot()["bridge"]["action"], "not_started")
+        publisher.set_bridge_status({"action": "idle", "reason": "FOLLOW"})
+        bridge = publisher.snapshot()["bridge"]
+        self.assertTrue(bridge["enabled"])
+        self.assertEqual(bridge["action"], "idle")
 
     def test_submodule_assets_verify_and_official_models_load(self) -> None:
         config = FaceIdentityConfig.from_json(DESKMATE_FACE_CONFIG)

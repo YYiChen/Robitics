@@ -6,11 +6,14 @@ from types import SimpleNamespace
 
 from face_turn_web_bridge import (
     DEFAULT_FACE_DEADBAND_NORMALIZED,
+    FaceTurnBridge,
     FaceStopArmer,
     decode_json_object,
     is_fresh_and_centred,
+    is_fresh_payload,
     post_command,
     robotics_action_payload,
+    robotics_route_status,
 )
 
 
@@ -57,6 +60,7 @@ class FaceTurnWebBridgeTests(unittest.TestCase):
         face["offset_x_normalized"] = 0.0
         face["time"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
         self.assertFalse(is_fresh_and_centred(face, minimum_score=.5, deadband_normalized=.08, max_age_ms=450))
+        self.assertFalse(is_fresh_payload(face, max_age_ms=450))
 
     def test_bridge_uses_versioned_robotics_actions(self):
         self.assertEqual(
@@ -75,6 +79,19 @@ class FaceTurnWebBridgeTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             robotics_action_payload("START_LEFT", "start-1")
+
+    def test_bridge_requires_versioned_robotics_status_envelope(self):
+        route = robotics_route_status(
+            {
+                "ok": True,
+                "status": {"route": {"motion_phase": "FOLLOW"}},
+            }
+        )
+        self.assertEqual(route["motion_phase"], "FOLLOW")
+        with self.assertRaises(ValueError):
+            robotics_route_status(
+                {"autonomous": {"motion_phase": "FOLLOW"}}
+            )
 
     def test_post_command_uses_formal_endpoint_and_unique_heartbeat_ids(self):
         requests = []
@@ -113,6 +130,101 @@ class FaceTurnWebBridgeTests(unittest.TestCase):
                 "face-bridge-heartbeat-bbb",
             ],
         )
+
+    def test_embedded_bridge_heartbeats_then_stops_after_face_returns(self):
+        face = {
+            "time": datetime.now(timezone.utc).isoformat(),
+            "detected": False,
+            "score": 0.0,
+            "offset_x_normalized": None,
+            "error": "",
+        }
+        commands = []
+        bridge = FaceTurnBridge(
+            face_provider=lambda: dict(face),
+            pi_url="http://pi:5000",
+            status_provider=lambda: {
+                "ok": True,
+                "status": {
+                    "route": {"motion_phase": "FACE_CENTER_TURN"}
+                },
+            },
+            command_poster=lambda pi_url, command: commands.append(
+                (pi_url, command)
+            )
+            or {"ok": True},
+        )
+
+        first = bridge.step()
+        self.assertEqual(first["action"], "heartbeat")
+        self.assertTrue(first["face_stop_armed"])
+
+        face.update(
+            time=datetime.now(timezone.utc).isoformat(),
+            detected=True,
+            score=.9,
+            offset_x_normalized=.05,
+        )
+        second = bridge.step()
+        self.assertEqual(second["action"], "stop_centered")
+        self.assertEqual(
+            commands,
+            [
+                ("http://pi:5000", "HEARTBEAT"),
+                ("http://pi:5000", "STOP"),
+            ],
+        )
+
+    def test_embedded_bridge_never_heartbeats_bad_or_stale_publisher(self):
+        commands = []
+        face = {
+            "time": datetime.now(timezone.utc).isoformat(),
+            "detected": False,
+            "error": "camera_busy",
+        }
+        bridge = FaceTurnBridge(
+            face_provider=lambda: dict(face),
+            pi_url="http://pi:5000",
+            status_provider=lambda: {
+                "ok": True,
+                "status": {
+                    "route": {"motion_phase": "FACE_CENTER_TURN"}
+                },
+            },
+            command_poster=lambda pi_url, command: commands.append(
+                (pi_url, command)
+            )
+            or {"ok": True},
+        )
+        with self.assertRaisesRegex(RuntimeError, "face_publisher_error"):
+            bridge.step()
+        self.assertEqual(commands, [])
+
+        face["error"] = ""
+        face["time"] = (
+            datetime.now(timezone.utc) - timedelta(seconds=2)
+        ).isoformat()
+        with self.assertRaisesRegex(RuntimeError, "face_publisher_stale"):
+            bridge.step()
+        self.assertEqual(commands, [])
+
+    def test_embedded_bridge_is_idle_until_state_machine_starts_turn(self):
+        commands = []
+        bridge = FaceTurnBridge(
+            face_provider=lambda: self.fail("idle bridge must not read a face"),
+            pi_url="http://pi:5000",
+            status_provider=lambda: {
+                "ok": True,
+                "status": {"route": {"motion_phase": "FOLLOW"}},
+            },
+            command_poster=lambda pi_url, command: commands.append(
+                (pi_url, command)
+            )
+            or {"ok": True},
+        )
+        record = bridge.step()
+        self.assertEqual(record["action"], "idle")
+        self.assertEqual(commands, [])
 
 
 if __name__ == "__main__":
