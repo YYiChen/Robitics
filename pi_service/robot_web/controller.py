@@ -75,7 +75,6 @@ class RobotController(CardControlMixin, ServoControlMixin):
         self._deal_request_lock = threading.Lock()
         self._last_deal_request_token = ""
         self._last_deal_request_result: dict | None = None
-        self._card_event_listeners: list = []
         self.reply = self.error = ""; self.last_rx = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -200,7 +199,8 @@ class RobotController(CardControlMixin, ServoControlMixin):
         with self.lock:
             # Compatibility endpoint for terminal/curl diagnostics.  The web
             # interface itself uses update_keys so releasing a key stops now.
-            self.held_keys.clear(); self.direct_drive = None; self.direct_drive_owner = None; self.direct_drive_expires_at = 0.0
+            self.held_keys.clear(); self.direct_drive = None
+            self.direct_drive_owner = None; self.direct_drive_expires_at = 0.0
             self.action, self.last_client_seen = action, time.monotonic()
         return action
 
@@ -229,7 +229,11 @@ class RobotController(CardControlMixin, ServoControlMixin):
             self.held_keys.clear()
             self.direct_drive = (right, left)
             self.direct_drive_owner = str(owner)
-            self.direct_drive_expires_at = now + max(0.0, float(lease_seconds)) if self.direct_drive_owner == "autonomous" else 0.0
+            self.direct_drive_expires_at = (
+                now + max(0.0, float(lease_seconds))
+                if self.direct_drive_owner == "autonomous"
+                else 0.0
+            )
             self.action, self.last_client_seen = "PID", now
         return right, left
     @staticmethod
@@ -260,14 +264,14 @@ class RobotController(CardControlMixin, ServoControlMixin):
                 self.steering_direction, self.last_steering_seen = 0, now
                 action = self.action
             else:
-                # An empty browser heartbeat keeps the manual dead-man connection
-                # alive but must not erase a route tracker's M1/M2 command.  A real
-                # WASD key press still explicitly takes ownership from autonomy.
+                # An empty browser heartbeat must not erase a route tracker's
+                # short autonomous lease. A real WASD key still takes control.
                 if keys or self.direct_drive_owner != "autonomous":
                     self.direct_drive = None
                     self.direct_drive_owner = None
                     self.direct_drive_expires_at = 0.0
-                self.held_keys, self.action, self.last_client_seen = keys, self._action_from_keys(keys), now
+                self.held_keys = keys
+                self.action, self.last_client_seen = self._action_from_keys(keys), now
                 if self.direct_drive is not None:
                     self.action = "PID"
                 self.steering_direction, self.last_steering_seen = steering, now
@@ -295,7 +299,8 @@ class RobotController(CardControlMixin, ServoControlMixin):
         return result
     def stop_now(self) -> None:
         with self.lock:
-            self.held_keys.clear(); self.direct_drive = None; self.direct_drive_owner = None; self.direct_drive_expires_at = 0.0
+            self.held_keys.clear(); self.direct_drive = None
+            self.direct_drive_owner = None; self.direct_drive_expires_at = 0.0
             self.action = "STOP"; self.steering_direction = 0
         self._write("STOP")
 
@@ -306,7 +311,8 @@ class RobotController(CardControlMixin, ServoControlMixin):
         puts the controller in STOP and waits in _connect for boot to finish.
         """
         with self.lock:
-            self.held_keys.clear(); self.direct_drive = None; self.direct_drive_owner = None; self.direct_drive_expires_at = 0.0
+            self.held_keys.clear(); self.direct_drive = None
+            self.direct_drive_owner = None; self.direct_drive_expires_at = 0.0
             self.action, self.last_client_seen = "STOP", 0.0; self.steering_direction = 0
             self.last_rx = 0.0; self.error = ""
         self._close_serial(send_stop=True)
@@ -334,25 +340,6 @@ class RobotController(CardControlMixin, ServoControlMixin):
                 self._card_reply_condition.notify_all()
         for name, value in parse_protocol_line(text, self.motor_output).items():
             setattr(self, name, value)
-        if text in {"FEED:DONE", "DEAL:DONE"}:
-            with self.lock:
-                listeners = tuple(self._card_event_listeners)
-            for listener in listeners:
-                try:
-                    listener(text)
-                except Exception:
-                    # Telemetry/checkpoint listeners must never break serial RX.
-                    pass
-
-    def add_card_event_listener(self, listener) -> None:
-        with self.lock:
-            if listener not in self._card_event_listeners:
-                self._card_event_listeners.append(listener)
-
-    def remove_card_event_listener(self, listener) -> None:
-        with self.lock:
-            if listener in self._card_event_listeners:
-                self._card_event_listeners.remove(listener)
     def _run(self) -> None:
         next_motor, next_query, next_servo_query = 0.0, 0.0, 0.0
         while not self._stop.wait(SERVO_TICK_SECONDS):
@@ -369,7 +356,11 @@ class RobotController(CardControlMixin, ServoControlMixin):
                     self.direct_drive_expires_at = 0.0
                     self.action = "STOP"
                 action = self.action if client_is_current else "STOP"
-                direct_drive = self.direct_drive if (client_is_current and autonomous_drive_is_current) else None
+                direct_drive = (
+                    self.direct_drive
+                    if client_is_current and autonomous_drive_is_current
+                    else None
+                )
                 if action == "STOP": self.held_keys.clear(); self.action = "STOP"
                 cfg = Config(**asdict(self.config))
             self._sync_steering(now, cfg)

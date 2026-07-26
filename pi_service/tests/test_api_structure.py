@@ -27,10 +27,17 @@ class ApiStructureTests(unittest.TestCase):
             "/api/autonomous/roundtrip/start",
             "/api/autonomous/roundtrip/return",
             "/api/autonomous/roundtrip/stop",
-            "/api/autonomous/follow-to-end", "/api/autonomous/return",
+            "/api/autonomous/follow-to-end",
+            "/api/robotics/v1/capabilities",
+            "/api/robotics/v1/status",
+            "/api/robotics/v1/gate",
+            "/api/robotics/v1/config",
+            "/api/robotics/v1/actions",
+            "/api/robotics/v1/requests/<request_id>",
         }
         self.assertEqual(set(found), expected)
-        self.assertEqual(len(found), len(set(found)))
+        self.assertEqual(found.count("/api/robotics/v1/config"), 2)
+        self.assertEqual(len(found), len(set(found)) + 1)
 
     def test_app_is_assembly_not_endpoint_implementation(self) -> None:
         app_source = (
@@ -39,7 +46,7 @@ class ApiStructureTests(unittest.TestCase):
         self.assertNotRegex(app_source, r'@app\.(?:get|post)\(')
         for registrar in (
             "register_camera_api", "register_control_api",
-            "register_route_api", "register_status_api",
+            "register_route_api", "register_robotics_api", "register_status_api",
         ):
             self.assertIn(registrar, app_source)
 

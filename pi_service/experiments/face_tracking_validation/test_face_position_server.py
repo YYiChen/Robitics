@@ -1,10 +1,13 @@
 import unittest
 
 from face_detector import FaceDetectionResult
-from face_position_server import capture_source, face_payload
+from face_position_server import DEFAULT_FACE_SOURCE, capture_source, face_payload
 
 
 class FacePositionProtocolTests(unittest.TestCase):
+    def test_default_source_is_the_current_face_camera(self):
+        self.assertEqual(DEFAULT_FACE_SOURCE, "http://10.157.23.223:4747/video")
+
     def test_numeric_source_selects_local_camera(self):
         self.assertEqual(capture_source("0"), 0)
         self.assertEqual(capture_source("http://camera/video"), "http://camera/video")

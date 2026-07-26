@@ -1,4 +1,4 @@
-# Haar 人脸灵敏度探索（隔离，不控制小车）
+# MediaPipe 人脸转向（隔离验证）
 
 此实验只读取已经运行的 5000 相机流，在 5058 画出人脸框并记录 JSONL。核心检测器使用
 MediaPipe Tasks 的 BlazeFace short-range 模型；它不导入 `robot_web.controller`，不发送 HTTP
@@ -16,20 +16,30 @@ python3 -m unittest test_face_detector -v
 
 浏览器打开：`http://127.0.0.1:5058`。
 
-## 电脑端位置数据服务（给后续 Pi 功能复用）
+## 唯一的人脸转向链路
 
-MediaPipe 必须运行在安装了它的电脑上，而非当前 Python 3.13 的树莓派。电脑读取 Pi 的
-相机流后，可通过 HTTP 发布人脸相对相机的位置；它只发布 JSON，不控制小车：
+只保留这一套链路：电脑上的 `face_position_server.py` 使用 MediaPipe BlazeFace 做唯一一次推理；
+`face_turn_web_bridge.py` 只读取其 JSON，并在网页 J/L 已启动后向 Pi 发送心跳或居中停车。
+它们不是两套检测器，且没有使用 DeskMate 的 BD05/M9 模型。
+
+当前车控人脸摄像头固定为 `http://10.157.23.223:4747/video`。先在一个终端启动检测：
 
 ```powershell
 cd C:\Users\32126\Desktop\Robitics\pi_service\experiments\face_tracking_validation
-py -3 face_position_server.py --source http://10.241.149.131:4747/video --port 5059
+py -3 face_position_server.py --port 5059
 ```
 
-数据地址为 `http://<电脑局域网IP>:5059/api/face/latest`，典型返回字段包括
-`detected`、`offset_x`、`offset_y`、归一化偏移、框尺寸和置信度。正 `offset_x` 表示人脸在
-相机画面右侧，负值表示左侧。未来 Pi 若接入此地址，也必须把它当作只读传感器；电机门控仍由
-Pi 的 M 键和现有安全逻辑负责。
+再在第二个终端启动桥接：
+
+```powershell
+py -3 face_turn_web_bridge.py --face-url http://127.0.0.1:5059/api/face/latest --pi-url http://100.80.46.54:5000
+```
+
+此后在 5000 网页先按 M，再按 J 或 L。只有 Pi 已进入 `FACE_CENTER_TURN` 时桥接才会工作：
+人脸未居中时持续 `HEARTBEAT`，人脸居中后发送 `STOP`。检测流或网络异常时不续租，Pi 会按安全超时停车。
+
+数据地址为 `http://127.0.0.1:5059/api/face/latest`，字段包括 `detected`、`offset_x`、
+归一化偏移、框尺寸和置信度。正 `offset_x` 表示人脸在画面右侧，负值表示左侧。
 
 ## 电脑端双相机综合分析
 
@@ -55,4 +65,4 @@ py -3 multi_camera_face_position_server.py `
 3. `runtime_logs/face_probe.jsonl` 保存每帧 `detected`、框宽/面积、中心坐标和处理时间。
 4. 将“连续检出率明显下降前的最远距离”作为探索结果；不要把框宽直接当作精确距离。
 
-这不是路线、停车或转向功能。结束时按 `Ctrl+C` 即可；5000 主服务与电机状态不受影响。
+旧的 `face_track_turn.py` 直接检测并控车，与本链路重复，已移除，避免两个进程同时对 Pi 发人脸转向命令。

@@ -23,7 +23,7 @@ class FastLineConfig:
     green_hue_min: int = 32
     green_hue_max: int = 96
     green_saturation_min: int = 95
-    green_dilate_radius_px: int = 22
+    green_dilate_radius_px: int = 10
     green_support_inner_px: int = 3
     green_support_outer_px: int = 30
     green_support_min_ratio: float = .25
@@ -91,7 +91,8 @@ def _green_supported(green: np.ndarray, y: int, left: int, right: int, config: F
     )
 
 
-def analyse_fast_line(frame: np.ndarray, previous_center_x: float | None = None, config: FastLineConfig = FastLineConfig()) -> GatedLineObservation:
+def analyse_fast_line(frame: np.ndarray, previous_center_x: float | None = None, config: FastLineConfig = FastLineConfig(),
+                      cached_course_mask: np.ndarray | None = None) -> GatedLineObservation:
     height, width = frame.shape[:2]
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     green = (
@@ -99,7 +100,10 @@ def analyse_fast_line(frame: np.ndarray, previous_center_x: float | None = None,
         & (hsv[:, :, 0] <= config.green_hue_max)
         & (hsv[:, :, 1] >= config.green_saturation_min)
     )
-    if config.green_gate_enabled:
+    if cached_course_mask is not None:
+        lower_green = green
+        course = cached_course_mask
+    elif config.green_gate_enabled:
         lower_green = _bottom_connected_green(green, config)
         radius = max(1, int(config.green_dilate_radius_px))
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))

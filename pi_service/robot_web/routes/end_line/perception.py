@@ -101,17 +101,12 @@ class EndLineStopPlanner:
         self._line_lost_frames = 0
         self._stopped: EndLineDecision | None = None
 
-    def step(self, *, line_valid: bool, red_detected: bool) -> EndLineDecision:
+    def step(self, *, line_valid: bool) -> EndLineDecision:
         if self._stopped is not None:
             return self._stopped
         self._line_lost_frames = 0 if line_valid else self._line_lost_frames + 1
         if self._line_lost_frames >= self.config.line_lost_confirm_frames:
-            if red_detected:
-                self._stopped = EndLineDecision(EndLineState.STOPPED_LINE_END, True, "white_line_lost_after_red_direction_seen")
-            else:
-                self._stopped = EndLineDecision(EndLineState.STOPPED_UNSAFE_LINE_LOST, True, "white_line_lost_without_recent_red_direction")
-        elif red_detected:
-            return EndLineDecision(EndLineState.RED_DIRECTION_LOCKED, False, "red_direction_recorded_keep_following")
+            self._stopped = EndLineDecision(EndLineState.STOPPED_UNSAFE_LINE_LOST, True, "white_line_lost")
         else:
             return EndLineDecision(EndLineState.FOLLOW_LINE, False, "following_single_white_line")
         return self._stopped

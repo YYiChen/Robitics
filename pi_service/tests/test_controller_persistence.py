@@ -132,7 +132,10 @@ class ControllerPersistenceTests(unittest.TestCase):
                 time.sleep(.01)
                 first = controller.deal_from_key_request(request)
             second = controller.deal_from_key_request(request)
+            queried = controller.deal_request_status("p-1")
             self.assertEqual(first, second)
+            self.assertEqual(queried, second)
+            self.assertIsNone(controller.deal_request_status("unknown-token"))
             self.assertEqual(first["state"], "partial")
             self.assertEqual(first["feed"]["state"], "error")
             self.assertEqual(first["deal"]["state"], "legacy")
@@ -276,19 +279,6 @@ class ControllerPersistenceTests(unittest.TestCase):
                 self.assertEqual(controller.action, "STOP")
             finally:
                 controller.stop()
-
-    def test_deal_done_notifies_checkpoint_listeners(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            controller = RobotController("unused", Path(directory) / "drive_config.json")
-            events: list[str] = []
-            listener = events.append
-            controller.add_card_event_listener(listener)
-
-            controller._parse("OK:DEAL,200,1000")
-            controller._parse("DEAL:DONE")
-
-            self.assertEqual(events, ["DEAL:DONE"])
-            controller.remove_card_event_listener(listener)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,6 @@ from camera import CameraStreamer
 from configuration import DEFAULT_CONFIG_PATH, UnifiedConfigStore
 from controller import RobotController
 from end_line_turn_adaptor import EndLineTurnAdaptorRouteTracker
-from routes.end_line.return_route import ReturnRouteRecorder
 
 
 class UnifiedConfigurationTests(unittest.TestCase):
@@ -118,38 +117,6 @@ class UnifiedConfigurationTests(unittest.TestCase):
             self.assertEqual(status["tuning"]["turn_90_step_seconds"], 0.45)
             self.assertEqual(store.read_section("routes.end_line")["straight_pwm"], 93)
             self.assertNotIn("drive", json.loads(store.local_path.read_text(encoding="utf-8")))
-
-    def test_return_requires_recording_and_starts_with_safe_turn_phase(self) -> None:
-        class Gate:
-            def enabled(self) -> bool:
-                return True
-
-        class Controller:
-            speed = None
-
-            def add_card_event_listener(self, listener) -> None:
-                self.listener = listener
-
-            def stop_now(self) -> None:
-                pass
-
-        with tempfile.TemporaryDirectory() as directory:
-            recorder = ReturnRouteRecorder(Path(directory) / "return.json")
-            recorder.start_recording()
-            recorder.record(
-                80, 90, line_center_x=320, confidence=1.0, now=1.0
-            )
-            tracker = EndLineTurnAdaptorRouteTracker(
-                Controller(), object(), object(), Gate(),
-                return_recorder=recorder,
-            )
-
-            status = tracker.request_return()
-
-            self.assertEqual(status["state"], "RETURN_TURN")
-            self.assertEqual(tracker._motion_phase, "RETURN_TURN")
-            self.assertTrue(tracker._return_turn_pulse_active)
-            self.assertEqual(status["return_route"]["samples"], 1)
 
 
 if __name__ == "__main__":

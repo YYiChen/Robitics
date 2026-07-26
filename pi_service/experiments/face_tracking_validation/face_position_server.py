@@ -17,6 +17,11 @@ import cv2
 from face_detector import FaceDetectionResult, FaceDetector
 
 
+# Canonical camera for browser J/L face turning.  MediaPipe runs on this PC;
+# the Pi receives only the final heartbeat/stop commands from the bridge.
+DEFAULT_FACE_SOURCE = "http://10.157.23.223:4747/video"
+
+
 def capture_source(source: str) -> str | int:
     """Treat a decimal CLI source such as ``0`` as a local Windows camera."""
     return int(source) if source.strip().isdigit() else source
@@ -125,7 +130,7 @@ def make_handler(publisher: FacePositionPublisher):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Computer-side MediaPipe face-position JSON publisher")
-    parser.add_argument("--source", default="http://10.241.149.131:4747/video", help="MJPEG URL, or a local camera index such as 0 for DroidCam")
+    parser.add_argument("--source", default=DEFAULT_FACE_SOURCE, help="MJPEG URL, or a local camera index such as 0 for DroidCam")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=5059)
     args = parser.parse_args()

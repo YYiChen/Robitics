@@ -1,10 +1,27 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+import json
 
-from face_turn_web_bridge import DEFAULT_FACE_DEADBAND_NORMALIZED, FaceStopArmer, is_fresh_and_centred
+from face_turn_web_bridge import (
+    DEFAULT_FACE_DEADBAND_NORMALIZED,
+    FaceStopArmer,
+    decode_json_object,
+    is_fresh_and_centred,
+)
 
 
 class FaceTurnWebBridgeTests(unittest.TestCase):
+    def test_decodes_direct_and_pi_legacy_double_encoded_json(self):
+        payload = {"autonomous": {"motion_phase": "FOLLOW"}}
+        direct = json.dumps(payload).encode("utf-8")
+        double_encoded = json.dumps(json.dumps(payload)).encode("utf-8")
+        self.assertEqual(decode_json_object(direct), payload)
+        self.assertEqual(decode_json_object(double_encoded), payload)
+
+    def test_rejects_non_object_json(self):
+        with self.assertRaises(ValueError):
+            decode_json_object(b"[]")
+
     def test_default_stop_zone_is_twenty_percent(self):
         self.assertEqual(DEFAULT_FACE_DEADBAND_NORMALIZED, .20)
 
