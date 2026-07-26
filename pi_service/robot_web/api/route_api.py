@@ -91,6 +91,30 @@ def register_route_api(app, route_preview, route_tracker) -> None:
         except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
 
+    @app.post("/api/autonomous/roundtrip/start")
+    def autonomous_roundtrip_start():
+        if not isinstance(route_tracker, EndLineTurnAdaptorRouteTracker):
+            return jsonify(ok=False, error="当前路线模式不支持双人脸往返序列"), 409
+        try:
+            return jsonify(ok=True, autonomous=route_tracker.request_roundtrip_start((request.get_json(silent=True) or {}).get("sweep_side", "")))
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+
+    @app.post("/api/autonomous/roundtrip/return")
+    def autonomous_roundtrip_return():
+        if not isinstance(route_tracker, EndLineTurnAdaptorRouteTracker):
+            return jsonify(ok=False, error="当前路线模式不支持双人脸往返序列"), 409
+        try:
+            return jsonify(ok=True, autonomous=route_tracker.request_roundtrip_return())
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+
+    @app.post("/api/autonomous/roundtrip/stop")
+    def autonomous_roundtrip_stop():
+        if not isinstance(route_tracker, EndLineTurnAdaptorRouteTracker):
+            return jsonify(ok=False, error="当前路线模式不支持双人脸往返序列"), 409
+        return jsonify(ok=True, autonomous=route_tracker.request_roundtrip_stop())
+
     @app.post("/api/autonomous/follow-to-end")
     def autonomous_follow_to_end():
         if not isinstance(route_tracker, EndLineTurnAdaptorRouteTracker):

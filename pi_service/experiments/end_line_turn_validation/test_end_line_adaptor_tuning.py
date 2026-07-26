@@ -48,6 +48,26 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
             self.assertEqual(status["state"], "LINE_TURN_STOPPED")
             self.assertIsNone(status["vision_turn_target"])
 
+    def test_roundtrip_face_stop_advances_to_white_line_hold(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tracker = EndLineTurnAdaptorRouteTracker(None, None, None, _Gate(True), tuning_path=Path(directory) / "tuning.json")
+            tracker.request_roundtrip_start("LEFT")
+            tracker._roundtrip.endpoint_reached()
+            tracker._schedule_roundtrip_turn(now=0.0)
+            tracker.request_face_center_turn("START_LEFT")
+            status = tracker.request_face_center_turn("STOP")
+            self.assertEqual(status["roundtrip"]["phase"], "TURN_LINE_MIDDLE")
+            self.assertEqual(status["roundtrip"]["expected_target"], "WHITE_LINE")
+            self.assertEqual(tracker._motion_phase, "ROUNDTRIP_HOLD")
+
+    def test_stale_face_stop_cannot_cancel_line_turn(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tracker = EndLineTurnAdaptorRouteTracker(None, None, None, _Gate(True), tuning_path=Path(directory) / "tuning.json")
+            tracker.request_line_center_turn("START_LEFT")
+            status = tracker.request_face_center_turn("STOP")
+            self.assertEqual(tracker._motion_phase, "LINE_CENTER_TURN")
+            self.assertEqual(status["vision_turn_target"], "WHITE_LINE")
+
     def test_update_is_visible_immediate_and_persisted(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "tuning.json"

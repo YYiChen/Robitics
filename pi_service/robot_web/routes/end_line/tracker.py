@@ -10,6 +10,7 @@ import time
 
 from .line_following import FastLineConfig, analyse_fast_line, pwm_for_line
 from .perception import EndLineConfig, EndLineStopPlanner, RedEndBandDetector
+from .roundtrip import LandmarkTarget, RoundtripPhase, TwoFaceRoundtripPlanner
 from .turn_profiles import TurnProfile, load_turn_profile, save_turn_profile
 
 
@@ -61,6 +62,7 @@ FACE_TURN_COOLDOWN_SECONDS = 2.0
 FACE_TURN_MAX_SECONDS = 15.0
 FACE_TURN_LINE_CENTER_DEADBAND_NORMALIZED = .10
 FACE_TURN_LINE_CENTER_CONFIRM_FRAMES = 3
+ROUNDTRIP_LANDMARK_HOLD_SECONDS = 2.0
 
 
 class EndLineTurnAdaptorRouteTracker:
@@ -104,6 +106,9 @@ class EndLineTurnAdaptorRouteTracker:
         self._face_turn_line_departed = False
         self._face_turn_line_center_streak = 0
         self._vision_turn_target = None
+        self._roundtrip = TwoFaceRoundtripPlanner()
+        self._roundtrip_pending_turn = None
+        self._roundtrip_hold_until = 0.0
         # This deployment is deliberately keyboard-only: M arms turn commands
         # but must never make the vehicle start following the white line.
         self._manual_only = True
@@ -141,6 +146,7 @@ class EndLineTurnAdaptorRouteTracker:
             else str(self._tuning_path)
         )
         result.update({"enabled": self.gate.enabled(), "tuning": self._tuning_values(), "tuning_path": tuning_path})
+        result["roundtrip"] = self._roundtrip.status_dict()
         return result
 
     def toggle_drive(self) -> dict:
@@ -158,6 +164,9 @@ class EndLineTurnAdaptorRouteTracker:
             self._face_turn_line_departed = False
             self._face_turn_line_center_streak = 0
             self._vision_turn_target = None
+            self._roundtrip.reset()
+            self._roundtrip_pending_turn = None
+            self._roundtrip_hold_until = 0.0
         self._set_status(
             enabled=enabled,
             detail="按键转向已解锁，等待 Q/E/U/I/J/L/H/K" if enabled else "已暂停，电机已停止",
@@ -221,7 +230,7 @@ class EndLineTurnAdaptorRouteTracker:
         if command in {"START_LEFT", "START_RIGHT"}:
             if not self.gate.enabled():
                 raise ValueError("请先按 M 开启自动电机门控，再启动人脸居中转向")
-            if self._motion_phase not in {"FOLLOW", "MANUAL_COMPLETE", "TURN_COMPLETE", "FACE_CENTER_TURN"}:
+            if self._motion_phase not in {"FOLLOW", "MANUAL_COMPLETE", "TURN_COMPLETE", "FACE_CENTER_TURN", "ROUNDTRIP_HOLD"}:
                 raise ValueError("当前已有其他转向动作，请等待完成或按 M 停止")
             self._manual_only = True
             self._stop_motor()
@@ -248,6 +257,12 @@ class EndLineTurnAdaptorRouteTracker:
                 raise ValueError("当前没有进行中的人脸居中转向")
             self._face_turn_deadline = time.monotonic() + FACE_TURN_HEARTBEAT_SECONDS
         elif command == "STOP":
+            if self._motion_phase != "FACE_CENTER_TURN":
+                return self.status_dict()
+            completes_roundtrip = (
+                self._roundtrip.expected_turn() is not None
+                and self._roundtrip.expected_turn().target == LandmarkTarget.FACE
+            )
             self._stop_motor()
             self._motion_phase, self._face_turn_side, self._face_turn_deadline = "MANUAL_COMPLETE", None, 0.0
             self._face_turn_started = self._face_turn_phase_until = 0.0
@@ -263,9 +278,95 @@ class EndLineTurnAdaptorRouteTracker:
                 face_search_side=None,
                 vision_turn_target=None,
             )
+            if completes_roundtrip:
+                self._complete_roundtrip_target(LandmarkTarget.FACE)
         else:
             raise ValueError("人脸转向只支持 START_LEFT、START_RIGHT、HEARTBEAT、STOP")
         return self.status_dict()
+
+    def request_roundtrip_start(self, sweep_side: str) -> dict:
+        """Follow outbound, visit two faces, and finish aligned for return."""
+        if not self.gate.enabled():
+            raise ValueError("请先按 M 开启自动电机门控，再启动双人脸序列")
+        if self._motion_phase not in {"FOLLOW", "MANUAL_COMPLETE", "TURN_COMPLETE"}:
+            raise ValueError("当前已有动作，请先停止或等待完成")
+        self._roundtrip.start(sweep_side)
+        self._manual_only = False
+        self._planner.reset()
+        self._last_red_side, self._last_red_seen_frame = None, -10_000
+        self._roundtrip_pending_turn = None
+        self._roundtrip_hold_until = 0.0
+        self._motion_phase = "FOLLOW"
+        self._set_status(
+            state="ROUNDTRIP_FOLLOW_OUTBOUND",
+            detail=f"双人脸序列已启动：先巡线到端点，再向 {self._roundtrip.sweep_side} 扫描",
+            roundtrip=self._roundtrip.status_dict(),
+        )
+        return self.status_dict()
+
+    def request_roundtrip_return(self) -> dict:
+        if not self.gate.enabled():
+            raise ValueError("请先按 M 开启自动电机门控，再启动返程")
+        self._roundtrip.start_return()
+        self._manual_only = False
+        self._planner.reset()
+        self._motion_phase = "FOLLOW"
+        self._set_status(
+            state="ROUNDTRIP_FOLLOW_RETURN",
+            detail="白线已对准，开始返程巡线；到另一端自动停车",
+            roundtrip=self._roundtrip.status_dict(),
+        )
+        return self.status_dict()
+
+    def request_roundtrip_stop(self) -> dict:
+        self._stop_motor()
+        self._roundtrip.reset()
+        self._roundtrip_pending_turn = None
+        self._roundtrip_hold_until = 0.0
+        self._vision_turn_target = None
+        self._motion_phase = "MANUAL_COMPLETE"
+        self._face_turn_side, self._face_turn_deadline = None, 0.0
+        self._manual_only = True
+        self._set_status(
+            state="ROUNDTRIP_STOPPED",
+            detail="双人脸序列已停止",
+            face_turn_active=False,
+            line_turn_active=False,
+            vision_turn_target=None,
+            roundtrip=self._roundtrip.status_dict(),
+        )
+        return self.status_dict()
+
+    def _schedule_roundtrip_turn(self, now: float | None = None) -> None:
+        instruction = self._roundtrip.expected_turn()
+        if instruction is None:
+            raise ValueError(f"{self._roundtrip.phase.value} 没有待执行转向")
+        current = time.monotonic() if now is None else now
+        self._stop_motor()
+        self._roundtrip_pending_turn = instruction
+        self._roundtrip_hold_until = current + ROUNDTRIP_LANDMARK_HOLD_SECONDS
+        self._motion_phase = "ROUNDTRIP_HOLD"
+        self._manual_only = True
+        self._set_status(
+            state="ROUNDTRIP_HOLD",
+            detail=f"停车稳定 {ROUNDTRIP_LANDMARK_HOLD_SECONDS:.1f}s，随后 {instruction.side} 转向寻找 {instruction.target.value}",
+            roundtrip=self._roundtrip.status_dict(),
+        )
+
+    def _complete_roundtrip_target(self, target: LandmarkTarget) -> None:
+        self._roundtrip.target_reached(target)
+        if self._roundtrip.phase == RoundtripPhase.READY_RETURN:
+            self._stop_motor()
+            self._motion_phase = "MANUAL_COMPLETE"
+            self._manual_only = True
+            self._roundtrip_pending_turn = None
+            self._set_status(
+                state="ROUNDTRIP_READY_RETURN",
+                detail="人脸 1、白线中位、人脸 2、返程白线均已完成；等待网页“开始返程”",
+                roundtrip=self._roundtrip.status_dict(),
+            )
+        else:
+            self._schedule_roundtrip_turn()
 
     def request_line_center_turn(self, command: str) -> dict:
         """H/K: pivot until the starting line is left and then reacquired.
@@ -279,7 +380,7 @@ class EndLineTurnAdaptorRouteTracker:
         if command in {"START_LEFT", "START_RIGHT"}:
             if not self.gate.enabled():
                 raise ValueError("请先按 M 开启自动电机门控，再启动白线居中转向")
-            if self._motion_phase not in {"FOLLOW", "MANUAL_COMPLETE", "TURN_COMPLETE", "LINE_CENTER_TURN"}:
+            if self._motion_phase not in {"FOLLOW", "MANUAL_COMPLETE", "TURN_COMPLETE", "LINE_CENTER_TURN", "ROUNDTRIP_HOLD"}:
                 raise ValueError("当前已有其他转向动作，请等待完成或按 M 停止")
             self._manual_only = True
             self._stop_motor()
@@ -302,6 +403,8 @@ class EndLineTurnAdaptorRouteTracker:
                 vision_turn_target=self._vision_turn_target,
             )
         elif command == "STOP":
+            if self._motion_phase != "LINE_CENTER_TURN":
+                return self.status_dict()
             self._stop_motor()
             self._motion_phase, self._face_turn_side, self._face_turn_deadline = "MANUAL_COMPLETE", None, 0.0
             self._face_turn_started = self._face_turn_phase_until = 0.0
@@ -516,22 +619,47 @@ class EndLineTurnAdaptorRouteTracker:
                 state, motor, commanded, detail = decision.state.value, "PAUSED", None, decision.reason
                 if self.gate.enabled():
                     recent_red = self._last_red_side is not None and frame_index - self._last_red_seen_frame <= self._line_config.red_direction_memory_frames
+                    roundtrip_hold_active = self._motion_phase == "ROUNDTRIP_HOLD"
+                    if roundtrip_hold_active and now >= self._roundtrip_hold_until:
+                        instruction = self._roundtrip_pending_turn
+                        if instruction is None:
+                            self.request_roundtrip_stop()
+                        else:
+                            self._roundtrip_pending_turn = None
+                            command = f"START_{instruction.side}"
+                            if instruction.target == LandmarkTarget.FACE:
+                                self.request_face_center_turn(command)
+                            else:
+                                self.request_line_center_turn(command)
+                        roundtrip_hold_active = self._motion_phase == "ROUNDTRIP_HOLD"
                     face_turn_active = self._motion_phase == "FACE_CENTER_TURN"
                     line_turn_active = self._motion_phase == "LINE_CENTER_TURN"
                     vision_turn_active = face_turn_active or line_turn_active
+                    route_action_active = vision_turn_active or roundtrip_hold_active
                     line_return_centered = line_turn_active and self._observe_line_turn_reacquisition(result, image.shape[1])
-                    if face_turn_active and now >= self._face_turn_deadline:
+                    if roundtrip_hold_active:
+                        self._stop_motor()
+                        state = "ROUNDTRIP_HOLD"
+                        motor = f"STOP_ROUNDTRIP_HOLD_{max(0.0, self._roundtrip_hold_until - now):.2f}s"
+                        detail = "停车稳定后再开始下一段视觉转向"
+                    elif face_turn_active and now >= self._face_turn_deadline:
                         self._stop_motor()
                         self._motion_phase, self._face_turn_side = "MANUAL_COMPLETE", None
                         self._vision_turn_target = None
                         state, motor, detail = "FACE_TURN_HEARTBEAT_TIMEOUT", "STOP_FACE_HEARTBEAT_TIMEOUT", "PC 人脸心跳超时，安全停车"
                         self._set_status(state=state, detail=detail, face_turn_active=False, line_turn_active=False, face_search_side=None, vision_turn_target=None)
                     elif line_return_centered:
+                        completes_roundtrip = (
+                            self._roundtrip.expected_turn() is not None
+                            and self._roundtrip.expected_turn().target == LandmarkTarget.WHITE_LINE
+                        )
                         self._stop_motor()
                         self._motion_phase, self._face_turn_side = "MANUAL_COMPLETE", None
                         self._vision_turn_target = None
                         state, motor, detail = "LINE_TURN_CENTERED", "STOP_WHITE_LINE_CENTERED", "白线离开后重新居中，连续确认后停车"
                         self._set_status(state=state, detail=detail, face_turn_active=False, line_turn_active=False, face_search_side=None, vision_turn_target=None)
+                        if completes_roundtrip:
+                            self._complete_roundtrip_target(LandmarkTarget.WHITE_LINE)
                     elif vision_turn_active and now - self._face_turn_started >= FACE_TURN_MAX_SECONDS:
                         self._stop_motor()
                         self._motion_phase, self._face_turn_side = "MANUAL_COMPLETE", None
@@ -559,7 +687,7 @@ class EndLineTurnAdaptorRouteTracker:
                             target_name = "FACE" if face_turn_active else "LINE"
                             state, motor, detail = f"{target_name}_CENTER_COOLDOWN", f"STOP_{target_name}_COOLDOWN_{FACE_TURN_COOLDOWN_SECONDS:.2f}s", "cooldown and capture-stabilisation pause"
                     manual_active = self._motion_phase.startswith("MANUAL")
-                    if vision_turn_active:
+                    if route_action_active:
                         pass
                     elif manual_active:
                         if red.detected and red.angle_degrees is not None and red.angle_degrees >= self._red_alignment_min_angle:
@@ -605,7 +733,7 @@ class EndLineTurnAdaptorRouteTracker:
                     elif self._motion_phase == "BRAKE_HOLD":
                         self._motion_phase, self._action_until = "PIVOT", now + self._turn_90.step_seconds
                     manual_active = self._motion_phase.startswith("MANUAL")
-                    if vision_turn_active:
+                    if route_action_active:
                         # The continuous vision pivot already issued its command
                         # above.  Do not fall through into the manual-only
                         # parking branch and immediately cancel that command.
@@ -628,12 +756,23 @@ class EndLineTurnAdaptorRouteTracker:
                         state, motor = "TURN_COMPLETE", "STOP_90_COMPLETE"
                     elif decision.stop:
                         self._stop_motor()
-                        self._manual_only = True
-                        if recent_red:
+                        if self._roundtrip.phase in {RoundtripPhase.FOLLOW_OUTBOUND, RoundtripPhase.FOLLOW_RETURN}:
+                            returning = self._roundtrip.phase == RoundtripPhase.FOLLOW_RETURN
+                            self._roundtrip.endpoint_reached()
+                            if returning:
+                                self._manual_only = True
+                                self._motion_phase = "MANUAL_COMPLETE"
+                                state, motor, detail = "ROUNDTRIP_COMPLETE", "STOP_RETURN_ENDPOINT", "返程已到达另一端，完整序列结束"
+                            else:
+                                self._schedule_roundtrip_turn(now)
+                                state, motor, detail = "ROUNDTRIP_ENDPOINT_HOLD", "STOP_OUTBOUND_ENDPOINT", "已到出发端点，停车稳定后寻找第一张人脸"
+                        elif recent_red:
+                            self._manual_only = True
                             self._pending_turn_side = self._last_red_side
                             state, motor = "END_REACHED", f"STOP_END_OF_LINE_RED_{self._pending_turn_side}"
                             detail = f"到达端点，红线方向={self._pending_turn_side}，已回到手动模式等待 Q/E 转向"
                         else:
+                            self._manual_only = True
                             state, motor = "END_REACHED_NO_RED", "STOP_END_OF_LINE"
                             detail = "到达端点，无红线方向记录，已回到手动模式"
                     else:

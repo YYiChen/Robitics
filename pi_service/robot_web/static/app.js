@@ -501,6 +501,30 @@ async function lineVisionTurn(command) {
     note(`${command === "START_LEFT" ? "H 白线持续左转" : "K 白线持续右转"}已启动：忽略起始居中的白线，离开后再次连续 3 帧居中才停车；15 秒未找到会安全停车。`);
   } catch (error) { note(error.message); }
 }
+async function roundtripRequest(path, body, successText) {
+  releaseKeys(false);
+  try {
+    const options = {method:"POST"};
+    if (body) {
+      options.headers = {"Content-Type":"application/json"};
+      options.body = JSON.stringify(body);
+    }
+    const response = await requestJson(`/api/autonomous/roundtrip/${path}`, options, 1200);
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw Error(data.error || "双人脸序列请求失败");
+    updateAutonomousUi(data.autonomous || {});
+    note(successText);
+  } catch (error) { note(error.message); }
+}
+function startRoundtrip(sweepSide) {
+  return roundtripRequest("start", {sweep_side:sweepSide}, `${sweepSide === "LEFT" ? "左扫" : "右扫"}序列已启动：先沿白线到端点，再按 人脸→白线→人脸→反向白线 执行；人脸阶段需要电脑桥接持续运行。`);
+}
+function startRoundtripReturn() {
+  return roundtripRequest("return", null, "返程已启动：沿当前居中的白线行驶，到另一端后自动停车。");
+}
+function stopRoundtrip() {
+  return roundtripRequest("stop", null, "双人脸往返序列已停止。");
+}
 async function followToEnd() {
   releaseKeys();
   try {
@@ -592,6 +616,11 @@ for (const button of document.querySelectorAll("[data-face-turn]")) {
 for (const button of document.querySelectorAll("[data-line-turn]")) {
   button.addEventListener("click", () => lineVisionTurn(button.dataset.lineTurn));
 }
+for (const button of document.querySelectorAll("[data-roundtrip-start]")) {
+  button.addEventListener("click", () => startRoundtrip(button.dataset.roundtripStart));
+}
+for (const button of document.querySelectorAll("[data-roundtrip-return]")) button.addEventListener("click", startRoundtripReturn);
+for (const button of document.querySelectorAll("[data-roundtrip-stop]")) button.addEventListener("click", stopRoundtrip);
 for (const button of document.querySelectorAll("[data-feed]")) button.addEventListener("click", feedCards);
 for (const button of document.querySelectorAll("[data-deal]")) button.addEventListener("click", dealCard);
 for (const button of document.querySelectorAll("[data-servo-center]")) button.addEventListener("click", centerServo);
@@ -617,7 +646,9 @@ addEventListener("keydown", event => { if (event.repeat) return;
   const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, true); }
 });
 addEventListener("keyup", event => { if (editing(event)) return; if (event.code === "KeyP" || event.key?.toLowerCase() === "p") { event.preventDefault(); return; } const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, false); } });
-addEventListener("blur", releaseKeys); addEventListener("beforeunload", () => navigator.sendBeacon("/api/stop")); setInterval(sendKeys, 180);
+// Losing browser focus must release held WASD/QE keys, but must not cancel a
+// landmark sequence that is intentionally continuing under Pi/PC vision.
+addEventListener("blur", () => releaseKeys(false)); addEventListener("beforeunload", () => navigator.sendBeacon("/api/stop")); setInterval(sendKeys, 180);
 async function sendHeartbeat() { try { await requestJson("/api/heartbeat", {method:"POST", keepalive:true}, 500); } catch (_) {} }
 setInterval(sendHeartbeat, 180);
 $("#stopButton").onclick = releaseKeys;
