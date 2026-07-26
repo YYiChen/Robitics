@@ -10,7 +10,7 @@ import threading
 import time
 
 from .line_following import FastLineConfig, analyse_fast_line, pwm_for_line
-from .perception import EndLineConfig, EndLineStopPlanner
+from .perception import EndLineConfig, EndLineStopPlanner, RedEndBandObservation
 from .roundtrip import LandmarkTarget, RoundtripPhase, TwoFaceRoundtripPlanner
 from .turn_profiles import TurnProfile, load_turn_profile, save_turn_profile
 
@@ -104,6 +104,10 @@ class EndLineTurnAdaptorRouteTracker:
             self._turn_90 = load_turn_profile(TURN_90_PATH, TurnProfile(200, 1.25), steps=2)
             self._turn_180 = load_turn_profile(TURN_180_PATH, TurnProfile(200, 1.25), steps=4)
         self._planner = EndLineStopPlanner(self._line_config)
+        self._last_red_side, self._last_red_seen_frame = None, -10_000
+        self._red_alignment_min_angle = 75.0
+        self._red_alignment_confirm_frames = 3
+        self._red_alignment_streak = 0
         self._motion_phase, self._action_until, self._pending_turn_side = "FOLLOW", 0.0, None
         self._manual_degrees, self._manual_profile = None, None
         self._manual_max_steps, self._manual_steps_started = 0, 0
@@ -641,6 +645,7 @@ class EndLineTurnAdaptorRouteTracker:
                         self._cached_green_mask = line_analysis.green_mask.copy()
                         self._cached_course_mask = line_analysis.course_mask.copy()
                     result = line_analysis.result
+                    red = RedEndBandObservation(False)
                     decision = planner.step(line_valid=result.valid)
                 if result.center_x is not None:
                     self._last_center_x = result.center_x
@@ -802,7 +807,7 @@ class EndLineTurnAdaptorRouteTracker:
                     self._stop_motor()
                     with self._tuning_lock:
                         self._planner.reset()
-                        decision = self._planner.step(line_valid=result.valid, red_detected=red.detected)
+                        decision = self._planner.step(line_valid=result.valid)
                     state, motor, detail = "PAUSED", "STOP_PRESS_M_TO_ARM", "按 M 解锁后，再按 Q/E/U/I 转向"
                 overlay = image.copy()
                 contours, _hierarchy = cv2.findContours(line_analysis.course_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
