@@ -31,6 +31,21 @@ py -3 face_position_server.py --source http://100.80.46.54:5000/video_feed --por
 相机画面右侧，负值表示左侧。未来 Pi 若接入此地址，也必须把它当作只读传感器；电机门控仍由
 Pi 的 M 键和现有安全逻辑负责。
 
+## 电脑端双相机综合分析
+
+电脑会并行分析 Pi 相机和手机 IP Webcam；两路偏移均保留，综合结果选择当前人脸框更大的
+主观测，**不会错误地平均两个相机的像素偏移**。手机与电脑需在同一局域网：
+
+```powershell
+py -3 multi_camera_face_position_server.py `
+  --pi-source http://100.80.46.54:5000/video_feed `
+  --phone-source http://10.50.77.86:8080/video `
+  --port 5060
+```
+
+读取 `http://10.50.77.205:5060/api/faces/latest`：`sources.pi` 与 `sources.phone` 是各自原始
+检测；`fused` 是选择出的主观测和选择原因。若未来要算真实空间坐标，需要额外完成双相机标定。
+
 ## 怎么测“最远可检出距离”
 
 1. 面向镜头站立，从近到远每次移动 0.5 米；不要让人脸偏向或被遮挡。
