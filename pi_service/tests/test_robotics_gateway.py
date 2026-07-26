@@ -24,11 +24,11 @@ class FakeTracker:
             "line_lost_confirm_frames": 3,
             "brake_hold_seconds": 0.18,
             "face_turn_pwm": 255,
-            "face_turn_pulse_seconds": 0.2,
+            "face_turn_pulse_seconds": 0.5,
             "face_turn_cooldown_seconds": 2.0,
             "face_turn_max_seconds": 15.0,
-            "face_turn_line_center_deadband_normalized": 0.1,
-            "face_turn_line_center_confirm_frames": 3,
+            "face_turn_line_center_deadband_normalized": 0.3,
+            "face_turn_line_center_confirm_frames": 2,
         }
 
     def status_dict(self):
@@ -61,7 +61,14 @@ class FakeTracker:
 
     def update_tuning(self, payload):
         self.calls.append(("config", dict(payload)))
-        self.tuning.update(payload)
+        frozen = {
+            "face_turn_pulse_seconds",
+            "face_turn_line_center_deadband_normalized",
+            "face_turn_line_center_confirm_frames",
+        }
+        self.tuning.update(
+            {key: value for key, value in payload.items() if key not in frozen}
+        )
         return self.status_dict()
 
 
@@ -200,7 +207,7 @@ class RoboticsGatewayTests(unittest.TestCase):
             }
         )
         self.assertEqual(
-            result["visual_turn"]["face_turn_line_center_deadband_normalized"], 0.15
+            result["visual_turn"]["face_turn_line_center_deadband_normalized"], 0.3
         )
         with self.assertRaisesRegex(ValueError, "unknown line_follow fields"):
             self.gateway.update_config({"line_follow": {"red_excess_min": 20}})

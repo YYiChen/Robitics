@@ -81,7 +81,7 @@ function updateAutonomousUi(autonomous) {
     const supported = Object.prototype.hasOwnProperty.call(tuning, key);
     if (supported && document.activeElement !== input && !routeTuningDirtyInputs.has(input)) input.value = tuning[key];
     input.closest("label")?.classList.toggle("hidden", endLine && !supported);
-    input.disabled = !available || routeTuningBusy;
+    input.disabled = input.hasAttribute("data-frozen") || !available || routeTuningBusy;
   }
   $("#scanlineRouteTuning").classList.toggle("hidden", !scanlineI);
   $("#endLineRouteTuning").classList.toggle("hidden", !endLine);
@@ -106,6 +106,7 @@ $("#applyRouteTuning").onclick = async () => {
   const endLine = $("#endLineRouteTuning").classList.contains("hidden") === false;
   const inputs = [...document.querySelectorAll(scanlineI ? "[data-scanline-tuning]" : (endLine ? "[data-end-line-tuning]" : "[data-route-tuning]"))];
   for (const input of inputs) {
+    if (input.hasAttribute("data-frozen")) continue;
     const value = Number(input.value);
     if (!Number.isFinite(value) || !input.checkValidity()) {
       note(`${input.closest("label")?.childNodes[0]?.textContent?.trim() || "参数"}不是有效数值`);
@@ -130,7 +131,7 @@ $("#applyRouteTuning").onclick = async () => {
   } finally {
     routeTuningBusy = false;
     button.disabled = false;
-    for (const input of inputs) input.disabled = false;
+    for (const input of inputs) input.disabled = input.hasAttribute("data-frozen");
   }
 };
 

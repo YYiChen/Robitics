@@ -33,6 +33,27 @@ class RouteTuningUiContractTests(unittest.TestCase):
         self.assertIn('id="feedPwm" type="number" value="150" disabled', template)
         self.assertIn('id="dealSeconds" type="number" value="0.4" disabled', template)
 
+    def test_visual_turn_pulse_and_white_line_gate_are_frozen(self) -> None:
+        template = (
+            Path(__file__).parents[1] / "robot_web" / "templates" / "index.html"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'data-end-line-tuning="face_turn_pulse_seconds" data-frozen '
+            'type="number" value="0.5" disabled',
+            template,
+        )
+        self.assertIn(
+            'data-end-line-tuning="face_turn_line_center_confirm_frames" '
+            'data-frozen type="number" value="2" disabled',
+            template,
+        )
+        self.assertIn(
+            'data-end-line-tuning="face_turn_line_center_deadband_normalized" '
+            'data-frozen type="number" value="0.3" disabled',
+            template,
+        )
+        self.assertIn('input.hasAttribute("data-frozen")', self.source)
+
 
 if __name__ == "__main__":
     unittest.main()

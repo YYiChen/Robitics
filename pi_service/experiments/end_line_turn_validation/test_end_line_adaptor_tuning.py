@@ -32,7 +32,6 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
             self.assertFalse(tracker._observe_line_turn_reacquisition(centred, 640))
             self.assertFalse(tracker._observe_line_turn_reacquisition(lost, 640))
             self.assertFalse(tracker._observe_line_turn_reacquisition(centred, 640))
-            self.assertFalse(tracker._observe_line_turn_reacquisition(centred, 640))
             self.assertTrue(tracker._observe_line_turn_reacquisition(centred, 640))
 
     def test_line_turn_is_separate_from_face_turn_and_needs_no_heartbeat(self):
@@ -99,18 +98,20 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
                 self.assertEqual(status["tuning"]["red_alignment_confirm_frames"], 3)
                 self.assertEqual(status["tuning"]["turn_90_max_steps"], 5)
                 self.assertEqual(status["tuning"]["face_turn_pwm"], 231)
-                self.assertEqual(status["tuning"]["face_turn_pulse_seconds"], .35)
+                self.assertEqual(status["tuning"]["face_turn_pulse_seconds"], .5)
                 self.assertEqual(status["tuning"]["face_turn_cooldown_seconds"], 1.2)
                 self.assertEqual(status["tuning"]["face_turn_max_seconds"], 24.0)
-                self.assertEqual(status["tuning"]["face_turn_line_center_confirm_frames"], 4)
-                self.assertEqual(status["tuning"]["face_turn_line_center_deadband_normalized"], .16)
+                self.assertEqual(status["tuning"]["face_turn_line_center_confirm_frames"], 2)
+                self.assertEqual(status["tuning"]["face_turn_line_center_deadband_normalized"], .3)
                 self.assertTrue(path.exists())
                 reloaded = EndLineTurnAdaptorRouteTracker(None, None, None, _Gate(), tuning_path=path)
                 self.assertEqual(reloaded.status_dict()["tuning"]["straight_pwm"], 91)
                 self.assertEqual(reloaded.status_dict()["tuning"]["face_turn_pwm"], 231)
-                self.assertEqual(reloaded.status_dict()["tuning"]["face_turn_line_center_confirm_frames"], 4)
+                self.assertEqual(reloaded.status_dict()["tuning"]["face_turn_pulse_seconds"], .5)
+                self.assertEqual(reloaded.status_dict()["tuning"]["face_turn_line_center_confirm_frames"], 2)
+                self.assertEqual(reloaded.status_dict()["tuning"]["face_turn_line_center_deadband_normalized"], .3)
 
-    def test_line_center_gate_uses_saved_web_tuning_without_resetting_other_actions(self):
+    def test_line_center_gate_uses_frozen_deadband_and_confirmation_frames(self):
         with tempfile.TemporaryDirectory() as directory:
             tracker = EndLineTurnAdaptorRouteTracker(
                 None, None, None, _Gate(True),
@@ -120,10 +121,19 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
                 "face_turn_line_center_deadband_normalized": .05,
                 "face_turn_line_center_confirm_frames": 1,
             })
+            self.assertEqual(
+                tracker.status_dict()["tuning"]["face_turn_line_center_deadband_normalized"],
+                .3,
+            )
+            self.assertEqual(
+                tracker.status_dict()["tuning"]["face_turn_line_center_confirm_frames"],
+                2,
+            )
             tracker.request_line_center_turn("START_LEFT")
-            off_centre = SimpleNamespace(valid=True, center_x=400.0)
+            off_centre = SimpleNamespace(valid=True, center_x=430.0)
             near_centre = SimpleNamespace(valid=True, center_x=330.0)
             self.assertFalse(tracker._observe_line_turn_reacquisition(off_centre, 640))
+            self.assertFalse(tracker._observe_line_turn_reacquisition(near_centre, 640))
             self.assertTrue(tracker._observe_line_turn_reacquisition(near_centre, 640))
 
     def test_rejects_invalid_correction_range(self):
@@ -169,7 +179,7 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
                 adaptor_module.FACE_TURN_PULSE_SECONDS,
                 places=3,
             )
-            self.assertEqual(status["tuning"]["face_turn_pulse_seconds"], .20)
+            self.assertEqual(status["tuning"]["face_turn_pulse_seconds"], .50)
             self.assertEqual(status["tuning"]["face_turn_cooldown_seconds"], 2.0)
             self.assertEqual(status["tuning"]["face_turn_heartbeat_seconds"], 3.0)
             self.assertEqual(status["tuning"]["face_turn_max_seconds"], 15.0)

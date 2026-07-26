@@ -64,11 +64,16 @@ FACE_TURN_HEARTBEAT_SECONDS = 3.0
 # to overcome the vehicle's static wheel friction, independently of the short
 # duration used by the Q/E preset turn.
 FACE_TURN_PWM = 255
-FACE_TURN_PULSE_SECONDS = .20
+FACE_TURN_PULSE_SECONDS = .50
 FACE_TURN_COOLDOWN_SECONDS = 2.0
 FACE_TURN_MAX_SECONDS = 15.0
-FACE_TURN_LINE_CENTER_DEADBAND_NORMALIZED = .10
-FACE_TURN_LINE_CENTER_CONFIRM_FRAMES = 3
+FACE_TURN_LINE_CENTER_DEADBAND_NORMALIZED = .30
+FACE_TURN_LINE_CENTER_CONFIRM_FRAMES = 2
+FROZEN_VISUAL_TURN_TUNING = {
+    "face_turn_pulse_seconds": FACE_TURN_PULSE_SECONDS,
+    "face_turn_line_center_deadband_normalized": FACE_TURN_LINE_CENTER_DEADBAND_NORMALIZED,
+    "face_turn_line_center_confirm_frames": FACE_TURN_LINE_CENTER_CONFIRM_FRAMES,
+}
 ROUNDTRIP_LANDMARK_HOLD_SECONDS = 2.0
 
 
@@ -528,6 +533,9 @@ class EndLineTurnAdaptorRouteTracker:
                             values[key] = converted
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             pass
+        # These three timing/white-line gates are a validated vehicle preset.
+        # Persisted files and API payloads must not override them.
+        values.update(FROZEN_VISUAL_TURN_TUNING)
         process_fps, straight_pwm, fast_config, line_config = self._configs_from_values(values)
         return (process_fps, straight_pwm, fast_config, line_config,
                 values["turn_interstep_pause_seconds"], values["red_alignment_min_angle"],
@@ -567,6 +575,7 @@ class EndLineTurnAdaptorRouteTracker:
             if not minimum <= value <= maximum:
                 raise ValueError(f"{key} 必须在 {minimum} 到 {maximum} 之间")
             current[key] = value
+        current.update(FROZEN_VISUAL_TURN_TUNING)
         if current["minimum_correction_pwm"] > current["maximum_correction_pwm"]:
             raise ValueError("最小修正 PWM 不能大于最大修正 PWM")
         if current["green_hue_min"] > current["green_hue_max"]:
