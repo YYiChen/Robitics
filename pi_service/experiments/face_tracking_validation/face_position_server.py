@@ -17,6 +17,11 @@ import cv2
 from face_detector import FaceDetectionResult, FaceDetector
 
 
+def capture_source(source: str) -> str | int:
+    """Treat a decimal CLI source such as ``0`` as a local Windows camera."""
+    return int(source) if source.strip().isdigit() else source
+
+
 def face_payload(result: FaceDetectionResult, *, frame: int, processing_ms: float,
                  source_fps: float, source: str, error: str = "") -> dict:
     """Stable wire format for a future Pi-side consumer."""
@@ -45,6 +50,7 @@ def face_payload(result: FaceDetectionResult, *, frame: int, processing_ms: floa
 class FacePositionPublisher:
     def __init__(self, source: str) -> None:
         self.source = source
+        self._capture_source = capture_source(source)
         self._lock = threading.Lock()
         self._latest = {"detected": False, "source": source, "error": "starting"}
 
@@ -66,7 +72,7 @@ class FacePositionPublisher:
         try:
             while True:
                 if capture is None or not capture.isOpened():
-                    capture = cv2.VideoCapture(self.source)
+                    capture = cv2.VideoCapture(self._capture_source)
                     if not capture.isOpened():
                         self._set_error("cannot_open_video_source")
                         time.sleep(1.0)
@@ -119,7 +125,7 @@ def make_handler(publisher: FacePositionPublisher):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Computer-side MediaPipe face-position JSON publisher")
-    parser.add_argument("--source", default="http://100.80.46.54:5000/video_feed")
+    parser.add_argument("--source", default="http://100.80.46.54:5000/video_feed", help="MJPEG URL, or a local camera index such as 0 for DroidCam")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=5059)
     args = parser.parse_args()
