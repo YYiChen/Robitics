@@ -236,6 +236,47 @@ class ControllerPersistenceTests(unittest.TestCase):
             self.assertEqual(commands, ["SV,42", "SVF,90"])
             with self.assertRaises(ValueError): controller.set_servo_angle(181)
 
+    def test_empty_browser_heartbeat_does_not_cancel_autonomous_drive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = RobotController("unused", Path(directory) / "drive_config.json")
+            controller.set_direct_drive(80, 90)
+
+            action = controller.update_keys({"keys": [], "steering": 0})
+
+            self.assertEqual(action, "PID")
+            self.assertEqual(controller.direct_drive, (80, 90))
+            self.assertEqual(controller.direct_drive_owner, "autonomous")
+            controller.update_keys({"keys": ["w"], "steering": 0})
+            self.assertIsNone(controller.direct_drive)
+            self.assertIsNone(controller.direct_drive_owner)
+            self.assertEqual(controller.action, "F")
+
+    def test_explicit_browser_stop_cancels_autonomous_drive_immediately(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = RobotController("unused", Path(directory) / "drive_config.json")
+            commands: list[str] = []
+            controller._write = commands.append
+            controller.set_direct_drive(80, 90)
+
+            self.assertEqual(controller.update_keys({"keys": [], "stop": True}), "STOP")
+            self.assertIsNone(controller.direct_drive)
+            self.assertIsNone(controller.direct_drive_owner)
+            self.assertEqual(commands, ["STOP"])
+
+    def test_autonomous_drive_expires_without_tracker_renewal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = RobotController("unused", Path(directory) / "drive_config.json")
+            controller._write = lambda command: True
+            controller.start()
+            try:
+                controller.set_direct_drive(80, 90, lease_seconds=.01)
+                time.sleep(.15)
+                self.assertIsNone(controller.direct_drive)
+                self.assertIsNone(controller.direct_drive_owner)
+                self.assertEqual(controller.action, "STOP")
+            finally:
+                controller.stop()
+
 
 if __name__ == "__main__":
     unittest.main()

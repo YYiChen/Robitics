@@ -35,12 +35,28 @@ class CameraMetricsTests(unittest.TestCase):
 
     def test_inflight_wasd_timeout_cannot_clear_a_new_queued_p_event(self) -> None:
         script = (Path(__file__).parents[1] / "robot_web" / "static" / "app.js").read_text(encoding="utf-8")
-        send_keys = script.split("async function sendKeys()", 1)[1].split("function setKey(", 1)[0]
+        send_keys = script.split("async function sendKeys(", 1)[1].split("function setKey(", 1)[0]
         self.assertIn("const dealRequestSent = pendingDealRequest", send_keys)
         self.assertIn("if (dealRequestSent)", send_keys)
         self.assertIn("pendingDealRequest?.token === dealRequestSent.token", send_keys)
         catch_body = send_keys.split("catch (error)", 1)[1]
         self.assertNotIn("if (pendingDealRequest) {", catch_body)
+
+    def test_idle_browser_does_not_flood_manual_key_endpoint(self) -> None:
+        script = (Path(__file__).parents[1] / "robot_web" / "static" / "app.js").read_text(encoding="utf-8")
+        after_blur = script.split('addEventListener("blur"', 1)[1]
+        interval = after_blur.split("setInterval(() => {", 1)[1].split("}, 180);", 1)[0]
+        self.assertIn("heldKeys.size > 0", interval)
+        self.assertIn("heldSteeringKeys.size > 0", interval)
+        self.assertIn("pendingDealRequest", interval)
+        self.assertNotEqual(interval.strip(), "sendKeys();")
+
+    def test_repeated_face_turn_requests_are_serialized_and_deduplicated(self) -> None:
+        script = (Path(__file__).parents[1] / "robot_web" / "static" / "app.js").read_text(encoding="utf-8")
+        face_turn = script.split("async function flushFaceVisionTurnQueue()", 1)[1].split("async function lineVisionTurn", 1)[0]
+        self.assertIn("if (faceTurnSending) return", face_turn)
+        self.assertIn("queuedFaceTurnCommand", face_turn)
+        self.assertIn("command === faceTurnInFlightCommand", face_turn)
 
     def test_p_event_carries_independent_m3_and_m4_presets(self) -> None:
         script = (Path(__file__).parents[1] / "robot_web" / "static" / "app.js").read_text(encoding="utf-8")

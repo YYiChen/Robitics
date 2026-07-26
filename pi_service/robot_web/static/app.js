@@ -1,7 +1,8 @@
 const $ = selector => document.querySelector(selector);
 const video = $("#video"), webrtcVideo = $("#webrtcVideo"), highresVideo = $("#highresVideo"), save = $("#save");
 const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:false});
-let folder, aborter, count = 0, profiles = {}, configLoaded = false, keysSending = false, keysQueued = false;
+let folder, aborter, count = 0, profiles = {}, configLoaded = false, keysSending = false, keysQueued = false, stopQueued = false;
+let faceTurnSending = false, faceTurnInFlightCommand = null, queuedFaceTurnCommand = null;
 let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, highresProfileDirty = false, highresProfileBusy = false, highresFpsDirty = false, highresFpsBusy = false, exposureDirty = false, exposureBusy = false, colorCorrectionDirty = false, colorCorrectionBusy = false, videoRetryTimer;
 let servoBusy = false, queuedServoAngle = null, steeringCenterAngle = 90, steeringReversed = true;
 let feedBusy = false, dealBusy = false;
@@ -403,19 +404,23 @@ function animateServoIndicator(now) {
   }
   requestAnimationFrame(animateServoIndicator);
 }
-async function sendKeys() {
+async function sendKeys(stop = false) {
+  if (stop) stopQueued = true;
   if (keysSending) { keysQueued = true; return; }
   keysSending = true;
   do {
     keysQueued = false;
+    const stopRequested = stopQueued;
+    stopQueued = false;
     // Capture which P event is actually carried by this particular HTTP
     // request. A previous WASD heartbeat may already be in flight when P is
     // pressed; its timeout must never clear the newly queued P event.
     const dealRequestSent = pendingDealRequest;
     try {
       const payload = {keys:[...heldKeys], steering:steeringDirection()};
+      if (stopRequested) payload.stop = true;
       if (dealRequestSent) payload.deal_request = dealRequestSent;
-      const response = await requestJson("/api/keys", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload), keepalive:true}, dealRequestSent ? 3500 : 1000);
+      const response = await requestJson("/api/keys", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload), keepalive:true}, dealRequestSent ? 3500 : 1800);
       const data = await response.json();
       if (!response.ok || !data.ok) throw Error(data.error || "动作发送失败");
       $("#action").textContent = data.action;
@@ -451,7 +456,7 @@ async function sendKeys() {
         note(`行驶命令失败：${error.message}`);
       }
     }
-  } while (keysQueued);
+  } while (keysQueued || stopQueued);
   keysSending = false;
 }
 function setKey(key, pressed) { if (pressed) heldKeys.add(key); else heldKeys.delete(key); sendKeys(); }
@@ -466,7 +471,14 @@ function stopVisionTurns() {
   stopFaceVisionTurn();
   stopLineVisionTurn();
 }
-function releaseKeys(stopVision = true) { heldKeys.clear(); heldSteeringKeys.clear(); syncVisualSteeringDirection(); sendKeys(); if (stopVision) stopVisionTurns(); }
+function releaseKeys(stopVision = true) {
+  const hadManualInput = heldKeys.size > 0 || heldSteeringKeys.size > 0;
+  heldKeys.clear();
+  heldSteeringKeys.clear();
+  syncVisualSteeringDirection();
+  if (stopVision || hadManualInput) sendKeys(stopVision);
+  if (stopVision) stopVisionTurns();
+}
 async function manualVisionTurn(command) {
   releaseKeys();
   try {
@@ -477,17 +489,34 @@ async function manualVisionTurn(command) {
     note(`${command} 已触发：仅按配置的分段时间转动，全部段完成即停车；红线仅作画面诊断。空格或 M 可停止。`);
   } catch (error) { note(error.message); }
 }
-async function faceVisionTurn(command) {
+async function flushFaceVisionTurnQueue() {
+  if (faceTurnSending) return;
+  faceTurnSending = true;
+  while (queuedFaceTurnCommand) {
+    const command = queuedFaceTurnCommand;
+    queuedFaceTurnCommand = null;
+    faceTurnInFlightCommand = command;
+    try {
+      const response = await requestJson("/api/autonomous/face-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command})}, 2500);
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw Error(data.error || "人脸转向请求失败");
+      updateAutonomousUi(data.autonomous || {});
+      note(`${command === "START_LEFT" ? "J 人脸持续左转" : "L 人脸持续右转"}已启动：电脑端 face_turn_web_bridge.py 将持续续租，只在人脸居中时停车；桥接停止后 Pi 会在 3 秒内安全停车。`);
+    } catch (error) {
+      note(`人脸转向请求失败：${error.message}`);
+    } finally {
+      faceTurnInFlightCommand = null;
+    }
+  }
+  faceTurnSending = false;
+}
+function faceVisionTurn(command) {
   // Do not issue the generic async STOP before START: a delayed STOP could
   // otherwise arrive at the Pi after START and cancel the new face turn.
   releaseKeys(false);
-  try {
-    const response = await requestJson("/api/autonomous/face-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command})}, 1200);
-    const data = await response.json();
-    if (!response.ok || !data.ok) throw Error(data.error || "人脸转向请求失败");
-    updateAutonomousUi(data.autonomous || {});
-    note(`${command === "START_LEFT" ? "J 人脸持续左转" : "L 人脸持续右转"}已启动：电脑端 face_turn_web_bridge.py 将持续续租，只在人脸居中时停车；桥接停止后 Pi 会在 3 秒内安全停车。`);
-  } catch (error) { note(error.message); }
+  if (command === faceTurnInFlightCommand || command === queuedFaceTurnCommand) return;
+  queuedFaceTurnCommand = command;
+  flushFaceVisionTurnQueue();
 }
 async function lineVisionTurn(command) {
   // As with J/L, avoid sending an asynchronous stale STOP immediately before
@@ -648,7 +677,10 @@ addEventListener("keydown", event => { if (event.repeat) return;
 addEventListener("keyup", event => { if (editing(event)) return; if (event.code === "KeyP" || event.key?.toLowerCase() === "p") { event.preventDefault(); return; } const key = keyboardKeys[event.key] || keyboardKeys[event.key?.toLowerCase()]; if (key) { event.preventDefault(); setKey(key, false); } });
 // Losing browser focus must release held WASD/QE keys, but must not cancel a
 // landmark sequence that is intentionally continuing under Pi/PC vision.
-addEventListener("blur", () => releaseKeys(false)); addEventListener("beforeunload", () => navigator.sendBeacon("/api/stop")); setInterval(sendKeys, 180);
+addEventListener("blur", () => releaseKeys(false)); addEventListener("beforeunload", () => navigator.sendBeacon("/api/stop"));
+setInterval(() => {
+  if (heldKeys.size > 0 || heldSteeringKeys.size > 0 || pendingDealRequest) sendKeys();
+}, 180);
 async function sendHeartbeat() { try { await requestJson("/api/heartbeat", {method:"POST", keepalive:true}, 500); } catch (_) {} }
 setInterval(sendHeartbeat, 180);
 $("#stopButton").onclick = releaseKeys;
