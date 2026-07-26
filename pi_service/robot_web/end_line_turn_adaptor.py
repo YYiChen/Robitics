@@ -69,17 +69,31 @@ FACE_TURN_MAX_SECONDS = 15.0
 class EndLineTurnAdaptorRouteTracker:
     route_mode = "end_line_turn_adaptor"
 
-    def __init__(self, controller, camera, publisher, gate, tuning_path: Path = TUNING_PATH) -> None:
+    def __init__(
+        self,
+        controller,
+        camera,
+        publisher,
+        gate,
+        tuning_path: Path = TUNING_PATH,
+        config_store=None,
+    ) -> None:
         self.controller, self.camera, self.publisher, self.gate = controller, camera, publisher, gate
         self._stop, self._thread, self._lock, self._tuning_lock = threading.Event(), None, threading.RLock(), threading.RLock()
         self._last_center_x, self._motor_active = None, False
         self._tuning_path = tuning_path
+        self.config_store = config_store
         (self._process_fps, self._straight_pwm, self._fast_config, self._line_config,
          self._turn_interstep_pause_seconds, self._red_alignment_min_angle,
          self._red_alignment_confirm_frames, self._turn_90_max_steps,
          self._turn_180_max_steps) = self._load_tuning()
-        self._turn_90 = load_turn_profile(TURN_90_PATH, TurnProfile(200, 1.25), steps=2)
-        self._turn_180 = load_turn_profile(TURN_180_PATH, TurnProfile(200, 1.25), steps=4)
+        if self.config_store is not None:
+            stored = self._read_tuning_data()
+            self._turn_90 = TurnProfile(int(stored.get("turn_90_pwm", 200)), float(stored.get("turn_90_step_seconds", 1.25)))
+            self._turn_180 = TurnProfile(int(stored.get("turn_180_pwm", 200)), float(stored.get("turn_180_step_seconds", 1.25)))
+        else:
+            self._turn_90 = load_turn_profile(TURN_90_PATH, TurnProfile(200, 1.25), steps=2)
+            self._turn_180 = load_turn_profile(TURN_180_PATH, TurnProfile(200, 1.25), steps=4)
         self._planner = EndLineStopPlanner(self._line_config)
         self._red_detector = RedEndBandDetector(self._line_config)
         self._last_red_side, self._last_red_seen_frame = None, -10_000
@@ -121,7 +135,12 @@ class EndLineTurnAdaptorRouteTracker:
     def status_dict(self) -> dict:
         with self._lock:
             result = dict(self._status)
-        result.update({"enabled": self.gate.enabled(), "tuning": self._tuning_values(), "tuning_path": str(self._tuning_path)})
+        tuning_path = (
+            f"{self.config_store.local_path}#routes.end_line"
+            if self.config_store is not None
+            else str(self._tuning_path)
+        )
+        result.update({"enabled": self.gate.enabled(), "tuning": self._tuning_values(), "tuning_path": tuning_path})
         return result
 
     def toggle_drive(self) -> dict:
@@ -158,8 +177,13 @@ class EndLineTurnAdaptorRouteTracker:
         # web save so a profile copied/edited on the Pi is effective on the
         # very next Q/E/U/I press without restarting the web process.
         with self._tuning_lock:
-            self._turn_90 = load_turn_profile(TURN_90_PATH, self._turn_90, steps=2)
-            self._turn_180 = load_turn_profile(TURN_180_PATH, self._turn_180, steps=4)
+            if self.config_store is not None:
+                stored = self._read_tuning_data()
+                self._turn_90 = TurnProfile(int(stored.get("turn_90_pwm", self._turn_90.pwm)), float(stored.get("turn_90_step_seconds", self._turn_90.step_seconds)))
+                self._turn_180 = TurnProfile(int(stored.get("turn_180_pwm", self._turn_180.pwm)), float(stored.get("turn_180_step_seconds", self._turn_180.step_seconds)))
+            else:
+                self._turn_90 = load_turn_profile(TURN_90_PATH, self._turn_90, steps=2)
+                self._turn_180 = load_turn_profile(TURN_180_PATH, self._turn_180, steps=4)
             commands = {"LEFT_90": ("LEFT", 90, self._turn_90, self._turn_90_max_steps), "RIGHT_90": ("RIGHT", 90, self._turn_90, self._turn_90_max_steps), "LEFT_180": ("LEFT", 180, self._turn_180, self._turn_180_max_steps), "RIGHT_180": ("RIGHT", 180, self._turn_180, self._turn_180_max_steps)}
         try:
             side, degrees, profile, steps = commands[str(command).upper()]
@@ -252,7 +276,7 @@ class EndLineTurnAdaptorRouteTracker:
             **asdict(EndLineConfig()),
         }
         try:
-            stored = json.loads(self._tuning_path.read_text(encoding="utf-8")) if self._tuning_path.exists() else {}
+            stored = self._read_tuning_data()
             if isinstance(stored, dict):
                 for key, value in stored.items():
                     if key in TUNING_RULES:
@@ -267,6 +291,14 @@ class EndLineTurnAdaptorRouteTracker:
                 values["turn_interstep_pause_seconds"], values["red_alignment_min_angle"],
                 values["red_alignment_confirm_frames"], values["turn_90_max_steps"],
                 values["turn_180_max_steps"])
+
+    def _read_tuning_data(self) -> dict:
+        if self.config_store is not None:
+            return self.config_store.read_section("routes.end_line")
+        if not self._tuning_path.exists():
+            return {}
+        stored = json.loads(self._tuning_path.read_text(encoding="utf-8"))
+        return stored if isinstance(stored, dict) else {}
 
     @staticmethod
     def _configs_from_values(values: dict) -> tuple[float, int, FastLineConfig, EndLineConfig]:
@@ -296,14 +328,17 @@ class EndLineTurnAdaptorRouteTracker:
         if current["green_support_inner_px"] >= current["green_support_outer_px"]:
             raise ValueError("绿布双侧内侧距离必须小于外侧距离")
         process_fps, straight_pwm, fast_config, line_config = self._configs_from_values(current)
-        self._tuning_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self._tuning_path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        temporary.replace(self._tuning_path)
         turn_90 = TurnProfile(current["turn_90_pwm"], current["turn_90_step_seconds"])
         turn_180 = TurnProfile(current["turn_180_pwm"], current["turn_180_step_seconds"])
-        save_turn_profile(TURN_90_PATH, turn_90)
-        save_turn_profile(TURN_180_PATH, turn_180)
+        if self.config_store is not None:
+            self.config_store.write_section("routes.end_line", current)
+        else:
+            self._tuning_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self._tuning_path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            temporary.replace(self._tuning_path)
+            save_turn_profile(TURN_90_PATH, turn_90)
+            save_turn_profile(TURN_180_PATH, turn_180)
         with self._tuning_lock:
             self._process_fps, self._straight_pwm = process_fps, straight_pwm
             self._fast_config, self._line_config = fast_config, line_config

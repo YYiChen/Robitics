@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "drive": {
+    "target_speed": 30.0
+  },
+  "camera": {
+    "highres_fps": 2.0
+  },
+  "routes": {
+    "end_line": {
+      "straight_pwm": 85
+    }
+  }
+}

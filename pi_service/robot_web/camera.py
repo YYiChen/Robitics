@@ -69,8 +69,10 @@ class CameraStreamer:
         fps: float | None = None,
         mode_key: str | None = None,
         config_path: Path | None = None,
+        config_store=None,
     ) -> None:
         self.config_path = Path(config_path or Path(__file__).with_name("camera_config.json")).expanduser()
+        self.config_store = config_store if config_path is None else None
         saved = self._load_saved_settings()
         saved_mode = saved["mode"]
         self.mode_key = mode_key if mode_key in CAMERA_MODES else saved_mode
@@ -130,7 +132,11 @@ class CameraStreamer:
             "color_correction": dict(DEFAULT_COLOR_CORRECTION),
         }
         try:
-            data = json.loads(self.config_path.read_text(encoding="utf-8"))
+            data = (
+                self.config_store.read_section("camera")
+                if self.config_store is not None
+                else json.loads(self.config_path.read_text(encoding="utf-8"))
+            )
             if not isinstance(data, dict): return defaults
             mode = data.get("mode")
             if mode in CAMERA_MODES: defaults["mode"] = mode
@@ -153,8 +159,6 @@ class CameraStreamer:
         return defaults
 
     def _save_settings(self) -> None:
-        self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.config_path.with_name(f".{self.config_path.name}.tmp")
         payload = {
             "mode": self.mode_key,
             "stream_profile": self.stream_profile_key,
@@ -170,6 +174,11 @@ class CameraStreamer:
                 "shutter_denominator": self.shutter_denominator,
             },
         }
+        if self.config_store is not None:
+            self.config_store.write_section("camera", payload)
+            return
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.config_path.with_name(f".{self.config_path.name}.tmp")
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         temporary.replace(self.config_path)
 

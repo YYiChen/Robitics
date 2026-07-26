@@ -80,9 +80,18 @@ def legacy_scalar_profiles(config: Config) -> dict[str, dict[str, int]]:
 
 
 class RobotController:
-    def __init__(self, port: str, config_path: Path | None = None, legacy_config_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        port: str,
+        config_path: Path | None = None,
+        legacy_config_path: Path | None = None,
+        config_store=None,
+    ) -> None:
         default_path = Path(__file__).with_name("drive_config.json")
         self.port, self.config_path, self.lock = port, Path(config_path or default_path).expanduser(), threading.RLock()
+        # Explicit paths remain the compatibility/testing contract.  The
+        # assembled formal service passes the unified store instead.
+        self.config_store = config_store if config_path is None else None
         self.legacy_config_path = (
             Path(legacy_config_path).expanduser()
             if legacy_config_path is not None
@@ -130,6 +139,18 @@ class RobotController:
             return None, f"无法读取配置文件 {path}: {exc}"
 
     def _load_config(self) -> tuple[Config, bool, str, str]:
+        if self.config_store is not None:
+            try:
+                data = self.config_store.read_section("drive")
+                config = Config()
+                for key in ("speed_mode", "target_speed", "kp", "ki", "kd", "straight_pwm", "pivot_pwm", "curve_outer_pwm", "curve_inner_pwm", "servo_center_angle", "servo_speed_dps", "servo_acceleration_dps2", "servo_qe_reversed"):
+                    if key in data:
+                        setattr(config, key, type(getattr(config, key))(data[key]))
+                raw_profiles = data.get("profiles")
+                config.profiles = normalize_profiles(raw_profiles) if isinstance(raw_profiles, dict) else legacy_scalar_profiles(config)
+                return config, False, "unified_config:drive", ""
+            except (TypeError, ValueError, OSError) as exc:
+                return Config(), False, "code_defaults", f"无法读取统一 drive 配置: {exc}"
         config, error = self._read_config(self.config_path)
         if config is not None:
             return config, False, "drive_config", ""
@@ -142,6 +163,10 @@ class RobotController:
 
     def _save_config(self, snapshot: dict | None = None) -> None:
         data = snapshot if snapshot is not None else asdict(self.config)
+        if self.config_store is not None:
+            self.config_store.write_section("drive", data)
+            self.config_source, self.config_error = "unified_config:drive", ""
+            return
         payload = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         # Serialize writes and flush the file before replacing the live copy.

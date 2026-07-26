@@ -31,6 +31,10 @@ project-management directory unless the user explicitly requests one.
 - Persisted vehicle and camera configuration is deployment state. Do not
   overwrite, migrate, or stage it unless the target explicitly owns that
   configuration contract.
+- Formal configuration sections belong in `config/defaults.json`; deployment
+  overrides and UI writes belong in ignored `config/local.json`. Do not add a
+  new production JSON store without documenting why it cannot use that
+  sectioned contract.
 
 If work requires changing a file outside `pi_service/`, stop and tell the user
 why the local boundary is insufficient before making that change.

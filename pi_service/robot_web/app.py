@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from flask import Flask, Response, jsonify, request, render_template
 from camera import CameraStreamer
+from configuration import UnifiedConfigStore, migrate_formal_legacy_config
 from controller import RobotController
 from dual_stream_camera import DualStreamCamera
 from oled_status import OledStatusService
@@ -266,8 +267,10 @@ def main() -> None:
     parser.add_argument("--oled-address", type=lambda value: int(value, 0), default=0x3C)
     parser.add_argument("--oled-i2c-port", type=int, default=1)
     args = parser.parse_args()
+    config_store = UnifiedConfigStore()
+    migrate_formal_legacy_config(config_store)
     camera = (
-        CameraStreamer()
+        CameraStreamer(config_store=config_store)
         if args.video_backend == "mjpeg"
         else DualStreamCamera(
             video_width=args.webrtc_width, video_height=args.webrtc_height,
@@ -276,10 +279,11 @@ def main() -> None:
             highres_width=args.highres_width, highres_height=args.highres_height,
             webrtc_port=args.webrtc_port, webrtc_path=args.webrtc_path,
             udp_output=args.webrtc_udp_output,
+            config_store=config_store,
         )
     )
     config_path = Path(args.drive_config).expanduser() if args.drive_config else None
-    camera.start(); controller = RobotController(args.port, config_path=config_path); controller.start()
+    camera.start(); controller = RobotController(args.port, config_path=config_path, config_store=config_store); controller.start()
     oled = None if args.disable_oled else OledStatusService(controller, camera, address=args.oled_address, i2c_port=args.oled_i2c_port)
     if oled: oled.start()
     route_preview = RoutePreviewPublisher() if args.enable_autonomous_route else None
@@ -287,7 +291,10 @@ def main() -> None:
     route_tracker = None
     if route_preview is not None and route_gate is not None:
         if args.route_mode == "end_line_turn_adaptor":
-            route_tracker = EndLineTurnAdaptorRouteTracker(controller, camera, route_preview, route_gate)
+            route_tracker = EndLineTurnAdaptorRouteTracker(
+                controller, camera, route_preview, route_gate,
+                config_store=config_store,
+            )
         elif args.route_mode == "pc_vision_adaptor":
             # Default: Pi owns low-latency M1/M2 control; desktop reports only
             # authenticated high-level visual events through the adaptor API.

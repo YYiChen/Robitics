@@ -153,17 +153,37 @@ Pi or vehicle validation.
 
 ## Configuration and Runtime Data
 
-Deployment-specific state includes:
+Formal runtime configuration now has one sectioned contract:
 
-- `robot_web/drive_config.json`;
-- legacy `robot_web/robot_config.json`;
-- camera configuration;
+- `config/defaults.json` is the tracked shape and safe source default;
+- `config/local.json` is the ignored Pi-specific override and the only file
+  written by the formal web service;
+- `config/local.example.json` shows the override structure without carrying
+  deployed tuning;
+- the owned sections are `drive`, `camera`, and `routes.end_line`.
+
+On startup, the formal service imports existing values from
+`robot_web/drive_config.json`, legacy `robot_web/robot_config.json`,
+`robot_web/camera_config.json`, and the current end-line tuning/profile JSON
+files only when the matching section is absent from `config/local.json`.
+Existing unified sections always win. Keep those legacy files during the first
+Pi rollout and compare the generated local override before retiring them.
+
+Configuration precedence is:
+
+1. an explicit CLI option such as `--drive-config`;
+2. `config/local.json`;
+3. `config/defaults.json`;
+4. in-code validation defaults for missing or invalid fields.
+
+Other deployment-specific state includes:
+
 - `logs/`, `run/`, and all experiment `runtime_logs/`;
 - downloaded `vendor/` contents.
 
-Preserve working Pi configuration during code synchronization. The committed
-`drive_config.example.json` is a reference, not authorization to overwrite a
-tuned vehicle.
+Never put credentials in either configuration file. Preserve
+`config/local.json` during code synchronization; copying tracked source files
+must not replace a tuned vehicle.
 
 Runtime logs are useful evidence but are not source code. Move selected evidence
 into a deliberately named artifact or report only when a target explicitly

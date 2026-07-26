@@ -46,6 +46,7 @@ class DualStreamCamera:
         webrtc_path: str = "cam",
         udp_output: str = "udp://127.0.0.1:1234?pkt_size=1316",
         config_path: Path | None = None,
+        config_store=None,
     ) -> None:
         self.video_width, self.video_height = int(video_width), int(video_height)
         self.video_fps, self.video_bitrate = float(video_fps), int(video_bitrate)
@@ -57,6 +58,7 @@ class DualStreamCamera:
         self.port, self.path = int(webrtc_port), str(webrtc_path).strip("/") or "cam"
         self.udp_output = str(udp_output)
         self.config_path = Path(config_path or Path(__file__).with_name("camera_config.json"))
+        self.config_store = config_store if config_path is None else None
         self.highres_profile_key, self.highres_fps = self._load_highres_settings()
         self.status, self.error = "未启动", ""
         self._picam2 = self._cv2 = self._encoder = self._output = None
@@ -85,7 +87,11 @@ class DualStreamCamera:
     def _load_highres_settings(self) -> tuple[str, float]:
         profile_key, highres_fps = "medium_1640", DEFAULT_HIGHRES_FPS
         try:
-            saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+            saved = (
+                self.config_store.read_section("camera")
+                if self.config_store is not None
+                else json.loads(self.config_path.read_text(encoding="utf-8"))
+            )
             profile = saved.get("highres_profile")
             if profile in HIGHRES_PROFILES:
                 profile_key = profile
@@ -97,13 +103,20 @@ class DualStreamCamera:
     def _save_highres_settings(self) -> None:
         payload: dict = {}
         try:
-            saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+            saved = (
+                self.config_store.read_section("camera")
+                if self.config_store is not None
+                else json.loads(self.config_path.read_text(encoding="utf-8"))
+            )
             if isinstance(saved, dict):
                 payload = saved
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             pass
         payload["highres_profile"] = self.highres_profile_key
         payload["highres_fps"] = self.highres_fps
+        if self.config_store is not None:
+            self.config_store.write_section("camera", payload)
+            return
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.config_path.with_name(f".{self.config_path.name}.tmp")
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
