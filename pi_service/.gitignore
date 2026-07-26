@@ -1,0 +1,17 @@
+# Local Python/runtime state
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Service and experiment output
+logs/
+run/
+runtime_logs/
+captures/
+
+# Downloaded runtime dependencies
+vendor/
+
+# Deployment-specific controller configuration
+robot_web/drive_config.json
+robot_web/robot_config.json
