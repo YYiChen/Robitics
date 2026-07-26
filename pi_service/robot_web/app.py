@@ -91,6 +91,14 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
             return jsonify(ok=True, autonomous=route_tracker.request_manual_turn((request.get_json(silent=True) or {}).get("command", "")))
         except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
+    @app.post("/api/autonomous/follow-to-end")
+    def autonomous_follow_to_end():
+        if not isinstance(route_tracker, EndLineTurnAdaptorRouteTracker):
+            return jsonify(ok=False, error="当前路线模式不支持 N 自动巡线"), 409
+        try:
+            return jsonify(ok=True, autonomous=route_tracker.request_follow_to_end())
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
     @app.get("/api/camera/highres/latest")
     def latest_highres_image():
         unavailable = highres_available()

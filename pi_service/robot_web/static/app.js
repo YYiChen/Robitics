@@ -467,6 +467,16 @@ async function manualVisionTurn(command) {
     note(`${command} 已触发：仅按配置的分段时间转动，全部段完成即停车；红线仅作画面诊断。空格或 M 可停止。`);
   } catch (error) { note(error.message); }
 }
+async function followToEnd() {
+  releaseKeys();
+  try {
+    const response = await requestJson("/api/autonomous/follow-to-end", {method:"POST"}, 1200);
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw Error(data.error || "N 自动巡线失败");
+    updateAutonomousUi(data.autonomous || {});
+    note("N 已触发：沿白线行驶至尽头，到达后自动回到手动模式等待 Q/E 转向。");
+  } catch (error) { note(error.message); }
+}
 function timedMotorSettings(prefix) {
   const power = Number($(`#${prefix}Pwm`).value);
   const direction = Number($(`#${prefix}Direction`).value);
@@ -555,6 +565,7 @@ addEventListener("keydown", event => { if (event.repeat) return;
   if (editing(event)) return;
   if (event.code === "Space") { event.preventDefault(); releaseKeys(); return; }
   if (event.key?.toLowerCase() === "z") { event.preventDefault(); centerServo(); return; }
+  if (!editing(event) && (event.code === "KeyN" || event.key?.toLowerCase() === "n")) { event.preventDefault(); followToEnd(); return; }
   const turnKey = event.key?.toLowerCase();
   // KeyboardEvent.code keeps Q/E/U/I stable when a Chinese IME is active.
   const manualTurn = {q:"LEFT_90", e:"RIGHT_90", u:"LEFT_180", i:"RIGHT_180"}[turnKey] || {KeyQ:"LEFT_90", KeyE:"RIGHT_90", KeyU:"LEFT_180", KeyI:"RIGHT_180"}[event.code];

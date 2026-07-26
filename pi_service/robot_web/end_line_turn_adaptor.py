@@ -125,6 +125,19 @@ class EndLineTurnAdaptorRouteTracker:
         self._set_status(enabled=enabled, detail="按键转向已解锁，等待 Q/E/U/I" if enabled else "已暂停，电机已停止")
         return self.status_dict()
 
+    def request_follow_to_end(self) -> dict:
+        """N key: follow white line until it ends, then stop and return to manual."""
+        if not self.gate.enabled():
+            raise ValueError("请先按 M 开启自动电机门控，再触发 N 巡线")
+        if self._motion_phase not in {"FOLLOW", "MANUAL_COMPLETE", "TURN_COMPLETE"}:
+            raise ValueError("当前已有转向动作，请等待其完成或按 M 停止")
+        self._manual_only = False
+        self._planner.reset()
+        self._last_red_side, self._last_red_seen_frame = None, -10_000
+        self._motion_phase, self._action_until, self._pending_turn_side = "FOLLOW", 0.0, None
+        self._set_status(state="FOLLOWING_TO_END", detail="N 已触发，沿白线行驶至尽头")
+        return self.status_dict()
+
     def request_manual_turn(self, command: str) -> dict:
         """M-gated turn; profiles are refreshed from disk for every key press."""
         # The JSON files are the source of truth.  Reload here as well as on
@@ -367,19 +380,22 @@ class EndLineTurnAdaptorRouteTracker:
                         state, motor = "TURN_COMPLETE", "STOP_90_COMPLETE"
                     elif decision.stop:
                         self._stop_motor()
+                        self._manual_only = True
                         if recent_red:
                             self._pending_turn_side = self._last_red_side
-                            self._motion_phase, self._action_until = "BRAKE_HOLD", now + self._line_config.brake_hold_seconds
-                            state, motor = "LINE_END_STOP", f"STOP_LINE_LOST_TURN_{self._pending_turn_side}"
+                            state, motor = "END_REACHED", f"STOP_END_OF_LINE_RED_{self._pending_turn_side}"
+                            detail = f"到达端点，红线方向={self._pending_turn_side}，已回到手动模式等待 Q/E 转向"
                         else:
-                            state, motor = "STOPPED_NO_DIRECTION", "STOP_LINE_LOST_NO_RECENT_RED"
+                            state, motor = "END_REACHED_NO_RED", "STOP_END_OF_LINE"
+                            detail = "到达端点，无红线方向记录，已回到手动模式"
                     else:
                         precision = red.detected
                         active_fast_config = replace(fast_config, correction_gain=260.0, deadband=.015) if precision else fast_config
                         commanded = pwm_for_line(result, image.shape[1], straight_pwm, active_fast_config)
                         if commanded is None:
                             self._stop_motor()
-                            state, motor = "STOPPED_UNSAFE_LINE_LOST", "STOP_NO_NEAR_WHITE_LINE"
+                            self._manual_only = True
+                            state, motor, detail = "LINE_LOST_RETURNED", "STOP_LINE_LOST", "白线丢失，已回到手动模式"
                         else:
                             self.controller.set_direct_drive(*commanded)
                             self._motor_active = True
