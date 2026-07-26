@@ -5,12 +5,14 @@ from __future__ import annotations
 from collections import OrderedDict
 from datetime import datetime, timezone
 import json
+import re
 import threading
 from typing import Any, Mapping
 
 
 ROBOTICS_API_VERSION = "1.0"
 MAX_REMEMBERED_REQUESTS = 128
+REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
 
 LINE_FOLLOW_TUNING_KEYS = (
     "process_fps",
@@ -48,6 +50,7 @@ class RoboticsGateway:
         "face_turn_stop",
         "line_recenter_start",
         "line_recenter_stop",
+        "preset_turn",
         "dispense_one",
         "stop",
     )
@@ -85,7 +88,15 @@ class RoboticsGateway:
             "available": route_available and controller_available,
             "route_available": route_available,
             "controller_available": controller_available,
-            "actions": list(self.ACTIONS),
+            "actions": [
+                action
+                for action in self.ACTIONS
+                if action != "preset_turn"
+                or (
+                    self.route_tracker is not None
+                    and hasattr(self.route_tracker, "request_manual_turn")
+                )
+            ],
             "motor_gate": "explicit_boolean",
             "request_idempotency": True,
             "dispense_completion_evidence": "arduino_command_ack_only",
@@ -162,16 +173,15 @@ class RoboticsGateway:
             "request_id",
             "action",
             "direction",
+            "degrees",
             "feed_pwm",
             "feed_duration_ms",
             "deal_pwm",
             "deal_duration_ms",
         }
         self._reject_unknown(payload, allowed, "action")
-        request_id = str(payload.get("request_id", "")).strip()
+        request_id = self._normalize_request_id(payload.get("request_id"))
         action = str(payload.get("action", "")).strip().lower()
-        if not request_id or len(request_id) > 160:
-            raise ValueError("request_id must contain 1 to 160 characters")
         if action not in self.ACTIONS:
             raise ValueError(f"unsupported action: {action}")
         fingerprint = json.dumps(dict(payload), sort_keys=True, separators=(",", ":"))
@@ -198,9 +208,7 @@ class RoboticsGateway:
     def request_result(self, request_id: object) -> dict[str, Any] | None:
         """Resolve a timed-out call without reissuing its physical action."""
 
-        normalized = str(request_id or "").strip()
-        if not normalized or len(normalized) > 160:
-            raise ValueError("request_id must contain 1 to 160 characters")
+        normalized = self._normalize_request_id(request_id)
         with self._lock:
             remembered = self._remembered.get(normalized)
             if remembered is None:
@@ -222,11 +230,21 @@ class RoboticsGateway:
         self, action: str, request_id: str, payload: Mapping[str, Any]
     ) -> dict[str, Any]:
         direction = str(payload.get("direction", "")).strip().upper()
-        if action in {"face_turn_start", "line_recenter_start"}:
+        if action in {"face_turn_start", "line_recenter_start", "preset_turn"}:
             if direction not in {"LEFT", "RIGHT"}:
                 raise ValueError(f"{action} requires direction LEFT or RIGHT")
         elif direction:
             raise ValueError(f"{action} does not accept direction")
+        degrees = payload.get("degrees")
+        if action == "preset_turn":
+            try:
+                degrees = int(degrees)
+            except (TypeError, ValueError):
+                raise ValueError("preset_turn requires degrees 90 or 180") from None
+            if degrees not in {90, 180}:
+                raise ValueError("preset_turn requires degrees 90 or 180")
+        elif degrees is not None:
+            raise ValueError(f"{action} does not accept degrees")
 
         detail: Any
         if action == "follow_line_to_end":
@@ -241,6 +259,12 @@ class RoboticsGateway:
             detail = self.route_tracker.request_line_center_turn(f"START_{direction}")
         elif action == "line_recenter_stop":
             detail = self.route_tracker.request_line_center_turn("STOP")
+        elif action == "preset_turn":
+            if not hasattr(self.route_tracker, "request_manual_turn"):
+                raise RuntimeError("preset turn is not available for this route")
+            detail = self.route_tracker.request_manual_turn(
+                f"{direction}_{degrees}"
+            )
         elif action == "dispense_one":
             request = {"token": request_id}
             for key, default in CARD_DEFAULTS.items():
@@ -297,6 +321,16 @@ class RoboticsGateway:
             raise RuntimeError("end-line robotics route is not available")
 
     @staticmethod
+    def _normalize_request_id(value: object) -> str:
+        normalized = str(value or "").strip()
+        if not REQUEST_ID_PATTERN.fullmatch(normalized):
+            raise ValueError(
+                "request_id must be 1 to 160 URL-safe characters "
+                "(letters, digits, dot, underscore, colon or hyphen)"
+            )
+        return normalized
+
+    @staticmethod
     def _reject_unknown(
         payload: Mapping[str, Any], allowed: set[str], label: str
     ) -> None:
@@ -310,6 +344,7 @@ class RoboticsGateway:
 __all__ = [
     "CARD_DEFAULTS",
     "LINE_FOLLOW_TUNING_KEYS",
+    "REQUEST_ID_PATTERN",
     "ROBOTICS_API_VERSION",
     "RoboticsGateway",
     "VISUAL_TURN_TUNING_KEYS",

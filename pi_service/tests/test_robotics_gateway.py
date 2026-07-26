@@ -51,6 +51,10 @@ class FakeTracker:
         self.calls.append(("line", command))
         return {"state": command}
 
+    def request_manual_turn(self, command):
+        self.calls.append(("preset", command))
+        return {"state": command}
+
     def request_roundtrip_stop(self):
         self.calls.append(("stop", None))
         return {"state": "STOPPED"}
@@ -135,6 +139,27 @@ class RoboticsGatewayTests(unittest.TestCase):
         self.assertEqual(len(self.controller.deal_calls), 2)
         self.assertEqual(retried, original)
 
+    def test_preset_turn_is_validated_and_idempotent(self) -> None:
+        payload = {
+            "request_id": "preset-1",
+            "action": "preset_turn",
+            "direction": "LEFT",
+            "degrees": 180,
+        }
+        first = self.gateway.execute(payload)
+        second = self.gateway.execute(payload)
+        self.assertEqual(first, second)
+        self.assertEqual(self.tracker.calls.count(("preset", "LEFT_180")), 1)
+        with self.assertRaisesRegex(ValueError, "degrees 90 or 180"):
+            self.gateway.execute(
+                {
+                    "request_id": "preset-invalid",
+                    "action": "preset_turn",
+                    "direction": "RIGHT",
+                    "degrees": 45,
+                }
+            )
+
     def test_grouped_config_updates_only_owned_tuning(self) -> None:
         result = self.gateway.update_config(
             {
@@ -149,7 +174,6 @@ class RoboticsGatewayTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "unknown line_follow fields"):
             self.gateway.update_config({"line_follow": {"red_excess_min": 20}})
-
 
 if __name__ == "__main__":
     unittest.main()

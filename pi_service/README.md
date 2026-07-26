@@ -234,8 +234,8 @@ endpoints:
 - `GET capabilities`, `GET status` and `GET config` are read-only;
 - `POST gate` sets the motor gate explicitly with `{"enabled": true|false}`;
 - `POST actions` accepts idempotent semantic requests for line following,
-  face-turn start/heartbeat/stop, white-line recentering, one-card mechanism
-  requests and stop;
+  face-turn start/heartbeat/stop, white-line recentering, preset 90/180-degree
+  turns, one-card mechanism requests and stop;
 - `POST config` updates only the grouped line-follow and visual-turn settings
   already owned by `routes.end_line`.
 

@@ -5,6 +5,7 @@ const FACE_PREVIEW_BASE = "http://127.0.0.1:5059";
 const auxVideo = $("#auxVideo"), auxContext = auxVideo.getContext("2d", {alpha:false});
 let folder, aborter, count = 0, profiles = {}, configLoaded = false, keysSending = false, keysQueued = false, stopQueued = false;
 let faceTurnSending = false, faceTurnInFlightCommand = null, queuedFaceTurnCommand = null;
+let activeFaceTurnCommand = null, stopRequestInFlight = null;
 let cameraModeDirty = false, cameraModeBusy = false, streamProfileDirty = false, streamProfileBusy = false, highresProfileDirty = false, highresProfileBusy = false, highresFpsDirty = false, highresFpsBusy = false, exposureDirty = false, exposureBusy = false, colorCorrectionDirty = false, colorCorrectionBusy = false, videoRetryTimer;
 let servoBusy = false, queuedServoAngle = null, steeringCenterAngle = 90, steeringReversed = true;
 let feedBusy = false, dealBusy = false;
@@ -20,9 +21,16 @@ const keyboardKeys = {w:"w", a:"a", s:"s", d:"d", x:"x", c:"c", ArrowUp:"w", Arr
 const heldKeys = new Set();
 const heldSteeringKeys = new Set();
 let autonomousToggleBusy = false;
+let autonomousGateEnabled = false;
 let facePreviewRetryTimer = null;
 let routeTuningBusy = false;
 const routeTuningDirtyInputs = new Set();
+let browserHeartbeatBusy = false;
+let statusRefreshTimer = null;
+let faceStatusRefreshTimer = null;
+
+const STATUS_REFRESH_INTERVAL_MS = 500;
+const FACE_STATUS_REFRESH_INTERVAL_MS = 500;
 
 async function toggleAutonomousDrive() {
   if (autonomousToggleBusy) return;
@@ -30,10 +38,19 @@ async function toggleAutonomousDrive() {
   try {
     // Never leave a manual key held when handing control to the route tracker.
     releaseKeys();
-    const response = await requestJson("/api/autonomous/toggle", {method:"POST"}, 1000);
+    const desiredEnabled = !autonomousGateEnabled;
+    const response = await requestJson(
+      "/api/robotics/v1/gate",
+      {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({enabled:desiredEnabled}),
+      },
+      1500,
+    );
     const data = await response.json();
-    if (!response.ok || !data.ok) throw Error(data.error || "自动行驶切换失败");
-    updateAutonomousUi(data.autonomous || {});
+    if (!response.ok || !data.ok) throw Error(data.error || "自动行驶门控设置失败");
+    updateAutonomousUi(data.gate?.route || {});
   } catch (error) {
     note(error.message);
   } finally {
@@ -43,8 +60,12 @@ async function toggleAutonomousDrive() {
 function updateAutonomousUi(autonomous) {
   const available = autonomous.available === true;
   const enabled = autonomous.enabled === true;
+  autonomousGateEnabled = enabled;
   const scanlineI = autonomous.mode === "scanline_i" || autonomous.mode === "scanline_i_green_white" || autonomous.mode === "scanline_i_four_endpoint_green_white";
   const endLine = autonomous.mode === "end_line_turn_adaptor";
+  activeFaceTurnCommand = autonomous.motion_phase === "FACE_CENTER_TURN" && autonomous.face_search_side
+    ? `START_${String(autonomous.face_search_side).toUpperCase()}`
+    : null;
   const scanlineLabel = autonomous.mode === "scanline_i_four_endpoint_green_white" ? "工字形四端点验证" : (autonomous.mode === "scanline_i_green_white" ? "绿地白线 I 型" : "扫描线 I 型");
   const button = $("#autonomousToggle"), unavailable = $("#routePreviewUnavailable"), image = $("#routePreview");
   button.disabled = !available;
@@ -114,8 +135,75 @@ $("#applyRouteTuning").onclick = async () => {
 };
 
 async function requestJson(url, options = {}, timeoutMs = 500) {
-  const abort = new AbortController(), timer = setTimeout(() => abort.abort(), timeoutMs);
-  try { return await fetch(url, {...options, signal:abort.signal}); } finally { clearTimeout(timer); }
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), timeoutMs);
+  try {
+    return await fetch(url, {...options, signal:abort.signal});
+  } catch (error) {
+    if (abort.signal.aborted) {
+      const timeout = new Error(`请求 ${url} 超过 ${timeoutMs} ms；结果未知，请先查询状态，不要盲目重发`);
+      timeout.name = "RequestTimeoutError";
+      timeout.cause = error;
+      throw timeout;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function newRequestId(prefix) {
+  const suffix = globalThis.crypto?.randomUUID
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}-${suffix}`;
+}
+
+const waitMs = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+
+async function recoverRoboticsResult(requestId) {
+  for (const delayMs of [120, 280, 600]) {
+    await waitMs(delayMs);
+    try {
+      const response = await requestJson(
+        `/api/robotics/v1/requests/${encodeURIComponent(requestId)}`,
+        {cache:"no-store"},
+        900,
+      );
+      if (response.status === 404) continue;
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw Error(data.error || `请求状态查询失败（HTTP ${response.status}）`);
+      return data.result;
+    } catch (error) {
+      if (error.name !== "RequestTimeoutError" && delayMs === 600) throw error;
+    }
+  }
+  return null;
+}
+
+async function roboticsAction(action, fields = {}, timeoutMs = 1800) {
+  const requestId = newRequestId(action);
+  const payload = {request_id:requestId, action, ...fields};
+  try {
+    const response = await requestJson(
+      "/api/robotics/v1/actions",
+      {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(payload),
+      },
+      timeoutMs,
+    );
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) throw Error(data.error || `${action} 请求失败（HTTP ${response.status}）`);
+    return data.result;
+  } catch (error) {
+    const outcomeMayBeUnknown = error.name === "RequestTimeoutError" || error instanceof TypeError;
+    if (!outcomeMayBeUnknown) throw error;
+    const recovered = await recoverRoboticsResult(requestId);
+    if (recovered) return recovered;
+    throw error;
+  }
 }
 
 const note = text => { save.textContent = text; };
@@ -334,6 +422,11 @@ async function refreshFaceDetectionStatus() {
     $("#facePreviewUnavailable").classList.remove("hidden");
   }
 }
+async function runFaceStatusRefresh() {
+  clearTimeout(faceStatusRefreshTimer);
+  await refreshFaceDetectionStatus();
+  faceStatusRefreshTimer = setTimeout(runFaceStatusRefresh, FACE_STATUS_REFRESH_INTERVAL_MS);
+}
 for (const tab of document.querySelectorAll(".section-tab")) {
   tab.addEventListener("click", () => {
     const panelId = tab.dataset.panel;
@@ -532,15 +625,16 @@ async function sendKeys(stop = false) {
 }
 function setKey(key, pressed) { if (pressed) heldKeys.add(key); else heldKeys.delete(key); sendKeys(); }
 function setSteeringKey(key, pressed) { if (pressed) heldSteeringKeys.add(key); else heldSteeringKeys.delete(key); syncVisualSteeringDirection(); sendKeys(); }
-function stopFaceVisionTurn() {
-  requestJson("/api/autonomous/face-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command:"STOP"})}, 800).catch(() => {});
-}
-function stopLineVisionTurn() {
-  requestJson("/api/autonomous/line-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command:"STOP"})}, 800).catch(() => {});
-}
 function stopVisionTurns() {
-  stopFaceVisionTurn();
-  stopLineVisionTurn();
+  if (stopRequestInFlight) return stopRequestInFlight;
+  stopRequestInFlight = roboticsAction("stop", {}, 1000)
+    .catch(() => {
+      // The controller and route tracker retain their local timeout stops.
+    })
+    .finally(() => {
+      stopRequestInFlight = null;
+    });
+  return stopRequestInFlight;
 }
 function releaseKeys(stopVision = true) {
   const hadManualInput = heldKeys.size > 0 || heldSteeringKeys.size > 0;
@@ -551,12 +645,15 @@ function releaseKeys(stopVision = true) {
   if (stopVision) stopVisionTurns();
 }
 async function manualVisionTurn(command) {
-  releaseKeys();
+  releaseKeys(false);
   try {
-    const response = await requestJson("/api/autonomous/manual-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command})}, 1200);
-    const data = await response.json();
-    if (!response.ok || !data.ok) throw Error(data.error || "转向请求失败");
-    updateAutonomousUi(data.autonomous || {});
+    const [direction, degrees] = command.split("_");
+    const result = await roboticsAction(
+      "preset_turn",
+      {direction, degrees:Number(degrees)},
+      1800,
+    );
+    updateAutonomousUi(result.detail || {});
     note(`${command} 已触发：仅按配置的分段时间转动，全部段完成即停车；红线仅作画面诊断。空格或 M 可停止。`);
   } catch (error) { note(error.message); }
 }
@@ -568,10 +665,12 @@ async function flushFaceVisionTurnQueue() {
     queuedFaceTurnCommand = null;
     faceTurnInFlightCommand = command;
     try {
-      const response = await requestJson("/api/autonomous/face-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command})}, 2500);
-      const data = await response.json();
-      if (!response.ok || !data.ok) throw Error(data.error || "人脸转向请求失败");
-      updateAutonomousUi(data.autonomous || {});
+      const result = await roboticsAction(
+        "face_turn_start",
+        {direction:command.endsWith("LEFT") ? "LEFT" : "RIGHT"},
+        2500,
+      );
+      updateAutonomousUi(result.detail || {});
       note(`${command === "START_LEFT" ? "J 人脸持续左转" : "L 人脸持续右转"}已启动：电脑端 face_turn_web_bridge.py 将持续续租，只在人脸居中时停车；桥接停止后 Pi 会在 3 秒内安全停车。`);
     } catch (error) {
       note(`人脸转向请求失败：${error.message}`);
@@ -585,7 +684,7 @@ function faceVisionTurn(command) {
   // Do not issue the generic async STOP before START: a delayed STOP could
   // otherwise arrive at the Pi after START and cancel the new face turn.
   releaseKeys(false);
-  if (command === faceTurnInFlightCommand || command === queuedFaceTurnCommand) return;
+  if (command === activeFaceTurnCommand || command === faceTurnInFlightCommand || command === queuedFaceTurnCommand) return;
   queuedFaceTurnCommand = command;
   flushFaceVisionTurnQueue();
 }
@@ -594,10 +693,12 @@ async function lineVisionTurn(command) {
   // the new H/K request.
   releaseKeys(false);
   try {
-    const response = await requestJson("/api/autonomous/line-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command})}, 1200);
-    const data = await response.json();
-    if (!response.ok || !data.ok) throw Error(data.error || "白线转向请求失败");
-    updateAutonomousUi(data.autonomous || {});
+    const result = await roboticsAction(
+      "line_recenter_start",
+      {direction:command.endsWith("LEFT") ? "LEFT" : "RIGHT"},
+      1800,
+    );
+    updateAutonomousUi(result.detail || {});
     note(`${command === "START_LEFT" ? "H 白线持续左转" : "K 白线持续右转"}已启动：忽略起始居中的白线，离开后再次连续 3 帧居中才停车；15 秒未找到会安全停车。`);
   } catch (error) { note(error.message); }
 }
@@ -626,12 +727,10 @@ function stopRoundtrip() {
   return roundtripRequest("stop", null, "双人脸往返序列已停止。");
 }
 async function followToEnd() {
-  releaseKeys();
+  releaseKeys(false);
   try {
-    const response = await requestJson("/api/autonomous/follow-to-end", {method:"POST"}, 1200);
-    const data = await response.json();
-    if (!response.ok || !data.ok) throw Error(data.error || "N 自动巡线失败");
-    updateAutonomousUi(data.autonomous || {});
+    const result = await roboticsAction("follow_line_to_end", {}, 1800);
+    updateAutonomousUi(result.detail || {});
     note("N 已触发：沿白线行驶至尽头，到达后自动回到手动模式等待 Q/E 转向。");
   } catch (error) { note(error.message); }
 }
@@ -752,7 +851,17 @@ addEventListener("blur", () => releaseKeys(false)); addEventListener("beforeunlo
 setInterval(() => {
   if (heldKeys.size > 0 || heldSteeringKeys.size > 0 || pendingDealRequest) sendKeys();
 }, 180);
-async function sendHeartbeat() { try { await requestJson("/api/heartbeat", {method:"POST", keepalive:true}, 500); } catch (_) {} }
+async function sendHeartbeat() {
+  if (browserHeartbeatBusy) return;
+  browserHeartbeatBusy = true;
+  try {
+    await requestJson("/api/heartbeat", {method:"POST", keepalive:true}, 500);
+  } catch (_) {
+    // The controller's local timeout remains the safety authority.
+  } finally {
+    browserHeartbeatBusy = false;
+  }
+}
 setInterval(sendHeartbeat, 180);
 $("#stopButton").onclick = releaseKeys;
 
@@ -923,7 +1032,7 @@ function updateMotorOutputUi(rawOutput, arduinoOnline) {
   $("#motorRawOutput").textContent = `M1 ${motion.right >= 0 ? "+" : ""}${motion.right} · M2 ${motion.left >= 0 ? "+" : ""}${motion.left}`;
   $("#motorOutputState").textContent = arduinoOnline ? "Arduino OUT 回包" : "Arduino 已离线（保留最近值）";
 }
-async function refreshStatus() { try { const statusStartedAt = performance.now(); const response = await fetch("/api/status", {cache:"no-store"}), data = await response.json(), robot = data.robot, system = data.system || {}, oled = data.oled || {}, capabilities = data.capabilities || {}; statusRttMs = performance.now() - statusStartedAt;
+async function refreshStatus() { try { const statusStartedAt = performance.now(); const response = await requestJson("/api/status", {cache:"no-store"}, 1500), data = await response.json(), robot = data.robot, system = data.system || {}, oled = data.oled || {}, capabilities = data.capabilities || {}; statusRttMs = performance.now() - statusStartedAt;
     updateAutonomousUi(data.autonomous || {});
     const camera = data.camera || {};
     setVideoTransport(camera);
@@ -1016,8 +1125,13 @@ async function refreshStatus() { try { const statusStartedAt = performance.now()
     $("#status").textContent = [`后端: ${data.api_version || "旧版本，需同步 app.py"}`, `系统指标: ${systemMetricsSupported ? (system.error || "正常") : "当前后端未提供 system/capabilities"}`, `高清帧率: ${highresFpsSupported ? `${fixed(highres.target_fps)} FPS，可调整` : "当前后端不支持，需同步 camera.py"}`, `卡牌电机协议: ${robot.card_motor_protocol || "旧后端未报告"}`, `卡牌命令回包: ${robot.card_command_reply || "尚未触发"}`, `驱动配置: ${robot.config_source || "旧后端未报告"}`, `配置路径: ${robot.config_path || "旧后端未报告"}`, `配置读取错误: ${robot.config_error || "无"}`, `Arduino: ${robot.arduino_online ? "在线" : robot.serial ? "无响应" : "离线"}`, `串口: ${robot.serial ? "已打开" : "未打开"}`, `最近回包: ${age}`, `动作: ${robot.action}`, `按键: ${robot.keys?.join("+") || "—"}`, `回复: ${robot.reply || "—"}`, `错误: ${robot.error || "—"}`].join("\n");
   } catch (error) { $("#status").textContent = `网页后端连接失败：${error}`; $("#arduinoState").innerHTML = dot(false, "网页服务异常"); }
 }
+async function runStatusRefresh() {
+  clearTimeout(statusRefreshTimer);
+  await refreshStatus();
+  statusRefreshTimer = setTimeout(runStatusRefresh, STATUS_REFRESH_INTERVAL_MS);
+}
 addEventListener("beforeunload", stopWebrtc);
 requestAnimationFrame(animateServoIndicator);
 connectFacePreview();
-refreshFaceDetectionStatus(); setInterval(refreshFaceDetectionStatus, 500);
-refreshStatus(); setInterval(refreshStatus, 200);
+runFaceStatusRefresh();
+runStatusRefresh();
