@@ -456,7 +456,10 @@ async function sendKeys() {
 }
 function setKey(key, pressed) { if (pressed) heldKeys.add(key); else heldKeys.delete(key); sendKeys(); }
 function setSteeringKey(key, pressed) { if (pressed) heldSteeringKeys.add(key); else heldSteeringKeys.delete(key); syncVisualSteeringDirection(); sendKeys(); }
-function releaseKeys() { heldKeys.clear(); heldSteeringKeys.clear(); syncVisualSteeringDirection(); sendKeys(); }
+function stopFaceVisionTurn() {
+  requestJson("/api/autonomous/face-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command:"STOP"})}, 800).catch(() => {});
+}
+function releaseKeys() { heldKeys.clear(); heldSteeringKeys.clear(); syncVisualSteeringDirection(); sendKeys(); stopFaceVisionTurn(); }
 async function manualVisionTurn(command) {
   releaseKeys();
   try {
