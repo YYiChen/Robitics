@@ -19,7 +19,6 @@ from .protocol import VisionEvent, parse_event
 
 
 SERVICE_ROOT = Path(__file__).resolve().parents[3]
-EXPERIMENT = SERVICE_ROOT / "experiments" / "pc_vision_adaptor_validation"
 
 # A PC overlay is only a diagnostic view.  Keep its freshness honest: if the
 # PC cannot update it for three seconds, show the live Pi fallback instead.
@@ -81,7 +80,7 @@ class PcVisionAdaptorRouteTracker:
         self._motor_active = False
 
     def _open_run_log(self) -> None:
-        log_dir = EXPERIMENT / "runtime_logs"
+        log_dir = SERVICE_ROOT / "runtime_logs" / "pc_adaptor"
         log_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self._run_log = (log_dir / f"pc_vision_adaptor_{stamp}.jsonl").open("a", encoding="utf-8")

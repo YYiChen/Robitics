@@ -14,10 +14,10 @@ from .turn_profiles import TurnProfile, load_turn_profile, save_turn_profile
 
 
 SERVICE_ROOT = Path(__file__).resolve().parents[3]
-EXPERIMENT = SERVICE_ROOT / "experiments" / "end_line_turn_validation"
-TUNING_PATH = EXPERIMENT / "end_line_web_tuning.json"
-TURN_90_PATH = EXPERIMENT / "turn_90.json"
-TURN_180_PATH = EXPERIMENT / "turn_180.json"
+LEGACY_EXPERIMENT = SERVICE_ROOT / "experiments" / "end_line_turn_validation"
+TUNING_PATH = LEGACY_EXPERIMENT / "end_line_web_tuning.json"
+TURN_90_PATH = LEGACY_EXPERIMENT / "turn_90.json"
+TURN_180_PATH = LEGACY_EXPERIMENT / "turn_180.json"
 TUNING_RULES = {
     "process_fps": (float, 5.0, 60.0),
     "straight_pwm": (int, 0, 255),
@@ -382,7 +382,7 @@ class EndLineTurnAdaptorRouteTracker:
         return self.status_dict()
 
     def _open_log(self) -> None:
-        directory = EXPERIMENT / "runtime_logs"
+        directory = SERVICE_ROOT / "runtime_logs" / "end_line"
         directory.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self._run_log = (directory / f"end_line_turn_{stamp}.jsonl").open("a", encoding="utf-8")
