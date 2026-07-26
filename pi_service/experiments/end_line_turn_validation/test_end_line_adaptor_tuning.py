@@ -24,16 +24,29 @@ class _Gate:
 
 
 class EndLineAdaptorTuningTests(unittest.TestCase):
-    def test_face_turn_line_stop_arms_only_after_departure(self):
+    def test_line_turn_stop_arms_only_after_departure(self):
         with tempfile.TemporaryDirectory() as directory:
             tracker = EndLineTurnAdaptorRouteTracker(None, None, None, _Gate(True), tuning_path=Path(directory) / "tuning.json")
             centred = SimpleNamespace(valid=True, center_x=320.0)
             lost = SimpleNamespace(valid=False, center_x=None)
-            self.assertFalse(tracker._observe_face_turn_line(centred, 640))
-            self.assertFalse(tracker._observe_face_turn_line(lost, 640))
-            self.assertFalse(tracker._observe_face_turn_line(centred, 640))
-            self.assertFalse(tracker._observe_face_turn_line(centred, 640))
-            self.assertTrue(tracker._observe_face_turn_line(centred, 640))
+            self.assertFalse(tracker._observe_line_turn_reacquisition(centred, 640))
+            self.assertFalse(tracker._observe_line_turn_reacquisition(lost, 640))
+            self.assertFalse(tracker._observe_line_turn_reacquisition(centred, 640))
+            self.assertFalse(tracker._observe_line_turn_reacquisition(centred, 640))
+            self.assertTrue(tracker._observe_line_turn_reacquisition(centred, 640))
+
+    def test_line_turn_is_separate_from_face_turn_and_needs_no_heartbeat(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tracker = EndLineTurnAdaptorRouteTracker(None, None, None, _Gate(True), tuning_path=Path(directory) / "tuning.json")
+            status = tracker.request_line_center_turn("START_RIGHT")
+            self.assertEqual(status["state"], "LINE_CENTER_TURN")
+            self.assertEqual(status["vision_turn_target"], "WHITE_LINE")
+            self.assertEqual(tracker._motion_phase, "LINE_CENTER_TURN")
+            self.assertEqual(tracker._face_turn_side, "RIGHT")
+            self.assertEqual(tracker._face_turn_deadline, 0.0)
+            status = tracker.request_line_center_turn("STOP")
+            self.assertEqual(status["state"], "LINE_TURN_STOPPED")
+            self.assertIsNone(status["vision_turn_target"])
 
     def test_update_is_visible_immediate_and_persisted(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -74,7 +87,11 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
             self.assertEqual(status["state"], "MANUAL_STEP")
             self.assertEqual(tracker._pending_turn_side, "LEFT")
             self.assertEqual(tracker._manual_degrees, 90)
-            self.assertEqual(tracker._manual_profile, TurnProfile(137, 1.7))
+            # The Pi compatibility shim may load the same dataclass through a
+            # second module name, so compare the profile contract rather than
+            # relying on exact Python class identity.
+            self.assertEqual(tracker._manual_profile.pwm, 137)
+            self.assertEqual(tracker._manual_profile.step_seconds, 1.7)
             self.assertEqual((tracker._manual_max_steps, tracker._manual_steps_started), (4, 1))
 
     def test_face_turn_requires_m_and_uses_pi_deadman_deadline(self):
@@ -85,6 +102,7 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
             tracker.gate.value = True
             status = tracker.request_face_center_turn("START_LEFT")
             self.assertEqual(status["state"], "FACE_CENTER_TURN")
+            self.assertEqual(status["vision_turn_target"], "FACE")
             self.assertEqual(tracker._face_turn_side, "LEFT")
             self.assertEqual(adaptor_module.FACE_TURN_PWM, 255)
             self.assertTrue(tracker._face_turn_pulse_active)

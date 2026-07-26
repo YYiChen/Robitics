@@ -459,7 +459,14 @@ function setSteeringKey(key, pressed) { if (pressed) heldSteeringKeys.add(key); 
 function stopFaceVisionTurn() {
   requestJson("/api/autonomous/face-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command:"STOP"})}, 800).catch(() => {});
 }
-function releaseKeys(stopFace = true) { heldKeys.clear(); heldSteeringKeys.clear(); syncVisualSteeringDirection(); sendKeys(); if (stopFace) stopFaceVisionTurn(); }
+function stopLineVisionTurn() {
+  requestJson("/api/autonomous/line-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command:"STOP"})}, 800).catch(() => {});
+}
+function stopVisionTurns() {
+  stopFaceVisionTurn();
+  stopLineVisionTurn();
+}
+function releaseKeys(stopVision = true) { heldKeys.clear(); heldSteeringKeys.clear(); syncVisualSteeringDirection(); sendKeys(); if (stopVision) stopVisionTurns(); }
 async function manualVisionTurn(command) {
   releaseKeys();
   try {
@@ -479,7 +486,19 @@ async function faceVisionTurn(command) {
     const data = await response.json();
     if (!response.ok || !data.ok) throw Error(data.error || "人脸转向请求失败");
     updateAutonomousUi(data.autonomous || {});
-    note(`${command === "START_LEFT" ? "J 人脸持续左转" : "L 人脸持续右转"}已启动：电脑端 face_turn_web_bridge.py 将持续续租，检测到人脸居中才停车；桥接停止后 Pi 会在 0.6 秒内安全停车。`);
+    note(`${command === "START_LEFT" ? "J 人脸持续左转" : "L 人脸持续右转"}已启动：电脑端 face_turn_web_bridge.py 将持续续租，只在人脸居中时停车；桥接停止后 Pi 会在 3 秒内安全停车。`);
+  } catch (error) { note(error.message); }
+}
+async function lineVisionTurn(command) {
+  // As with J/L, avoid sending an asynchronous stale STOP immediately before
+  // the new H/K request.
+  releaseKeys(false);
+  try {
+    const response = await requestJson("/api/autonomous/line-turn", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command})}, 1200);
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw Error(data.error || "白线转向请求失败");
+    updateAutonomousUi(data.autonomous || {});
+    note(`${command === "START_LEFT" ? "H 白线持续左转" : "K 白线持续右转"}已启动：忽略起始居中的白线，离开后再次连续 3 帧居中才停车；15 秒未找到会安全停车。`);
   } catch (error) { note(error.message); }
 }
 async function followToEnd() {
@@ -570,6 +589,9 @@ for (const button of document.querySelectorAll("[data-steering]")) {
 for (const button of document.querySelectorAll("[data-face-turn]")) {
   button.addEventListener("click", () => faceVisionTurn(button.dataset.faceTurn));
 }
+for (const button of document.querySelectorAll("[data-line-turn]")) {
+  button.addEventListener("click", () => lineVisionTurn(button.dataset.lineTurn));
+}
 for (const button of document.querySelectorAll("[data-feed]")) button.addEventListener("click", feedCards);
 for (const button of document.querySelectorAll("[data-deal]")) button.addEventListener("click", dealCard);
 for (const button of document.querySelectorAll("[data-servo-center]")) button.addEventListener("click", centerServo);
@@ -586,6 +608,8 @@ addEventListener("keydown", event => { if (event.repeat) return;
   if (!editing(event) && (event.code === "KeyN" || event.key?.toLowerCase() === "n")) { event.preventDefault(); followToEnd(); return; }
   if (!editing(event) && (event.code === "KeyJ" || event.key?.toLowerCase() === "j")) { event.preventDefault(); faceVisionTurn("START_LEFT"); return; }
   if (!editing(event) && (event.code === "KeyL" || event.key?.toLowerCase() === "l")) { event.preventDefault(); faceVisionTurn("START_RIGHT"); return; }
+  if (!editing(event) && (event.code === "KeyH" || event.key?.toLowerCase() === "h")) { event.preventDefault(); lineVisionTurn("START_LEFT"); return; }
+  if (!editing(event) && (event.code === "KeyK" || event.key?.toLowerCase() === "k")) { event.preventDefault(); lineVisionTurn("START_RIGHT"); return; }
   const turnKey = event.key?.toLowerCase();
   // KeyboardEvent.code keeps Q/E/U/I stable when a Chinese IME is active.
   const manualTurn = {q:"LEFT_90", e:"RIGHT_90", u:"LEFT_180", i:"RIGHT_180"}[turnKey] || {KeyQ:"LEFT_90", KeyE:"RIGHT_90", KeyU:"LEFT_180", KeyI:"RIGHT_180"}[event.code];
