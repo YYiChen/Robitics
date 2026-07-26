@@ -155,8 +155,12 @@ def main() -> None:
     last_turn_at = 0.0
     pi_armed = False
     fps_time = time.monotonic()
+    centering_direction: str | None = None
 
-    print("\nStarting loop. Press ESC to quit.\n")
+    print("\nStarting loop.")
+    print("  J = center-left (keep turning left until face centered)")
+    print("  L = center-right (keep turning right until face centered)")
+    print("  ESC = quit\n")
 
     while True:
         ok, frame = cap.read()
@@ -207,31 +211,52 @@ def main() -> None:
         cv2.putText(frame, status_text, (8, frame.shape[0] - 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
 
-        # ── Turn trigger ──────────────────────────────────────────────
-        if pi and face.detected and face.offset_x is not None:
-            if abs(face.offset_x) > args.deadband_px and now - last_turn_at > args.cooldown_seconds:
+        # ── Keyboard & turn logic ─────────────────────────────────────
+        key = cv2.waitKey(1) & 0xFF
+
+        # J = center-left: keep turning left in small pulses until face centered
+        # L = center-right: same to the right
+        # ESC = quit
+        if key == ord("j"):
+            centering_direction = "LEFT_90"
+        elif key == ord("l"):
+            centering_direction = "RIGHT_90"
+        elif key == 27:  # ESC
+            break
+        else:
+            key = None  # ignore other keys
+
+        if centering_direction is not None and pi and face.detected and face.offset_x is not None:
+            # Keep pulsing until face is within deadband, then stop
+            if abs(face.offset_x) <= args.deadband_px:
+                centering_direction = None
+                print(f"  [frame {frame_idx}] CENTERED (offX={face.offset_x:.0f})")
+            elif now - last_turn_at > args.cooldown_seconds:
                 if not pi_armed:
                     pi_armed = pi.toggle_m()
                     if not pi_armed:
                         cv2.putText(frame, "PI NOT REACHABLE", (12, 56),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 if pi_armed:
-                    direction = "LEFT_90" if face.offset_x < 0 else "RIGHT_90"
-                    ok = pi.send_turn(direction)
+                    ok = pi.send_turn(centering_direction)
                     if ok:
                         last_turn_at = now
-                        print(f"  [frame {frame_idx}] -> {direction} (offX={face.offset_x:.0f}, fps={fps:.0f})")
+                        print(f"  [frame {frame_idx}] {centering_direction} pulse (offX={face.offset_x:.0f})")
                     else:
-                        # Pi rejected (turn in progress). Back off to avoid
-                        # flooding Pi with requests it cannot accept yet.
-                        last_turn_at = now  # prevent immediate retry
-                        print(f"  [frame {frame_idx}] -> {direction} REJECTED (offX={face.offset_x:.0f})")
-                        cv2.putText(frame, f"Pi busy, retry in {args.cooldown_seconds:.0f}s", (12, 56),
+                        last_turn_at = now
+                        print(f"  [frame {frame_idx}] {centering_direction} REJECTED (offX={face.offset_x:.0f})")
+                        cv2.putText(frame, f"Pi busy...", (12, 56),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 165, 255), 2)
 
-        cv2.imshow("Face → Pi Turn (ESC quit)", frame)
-        if cv2.waitKey(1) & 0xFF == 27:
-            break
+        # Status overlay
+        cv2.putText(frame, "J=center-left  L=center-right  ESC=quit", (12, frame.shape[0] - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+        if centering_direction:
+            color = (0, 255, 0) if centering_direction == "LEFT_90" else (255, 0, 255)
+            cv2.putText(frame, f"CENTERING: {centering_direction}", (12, 48),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+        cv2.imshow("Face -> Pi Turn (J/L center, ESC quit)", frame)
 
     cap.release()
     cv2.destroyAllWindows()
