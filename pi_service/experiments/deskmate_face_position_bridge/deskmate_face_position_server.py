@@ -8,6 +8,7 @@ imports robot control code and never sends motor commands.
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -49,11 +50,13 @@ from poker_dealer.perception.identity import (  # noqa: E402
 )
 
 
-# DroidCam phone 192.168.137.157 is connected through the Windows client.
-# While the client is active its HTTP /video endpoint reports "DroidCam is
-# Busy"; OpenCV must read the registered local virtual camera instead.
-DEFAULT_SOURCE = "1"
+# The direct DroidCam MJPEG source is preferred. If the Windows DroidCam client
+# owns the phone, this endpoint returns a "DroidCam is Busy" HTML page instead
+# of video; close that client or explicitly select its local virtual camera.
+DEFAULT_SOURCE = "http://100.93.97.117:4747/video"
 DEFAULT_LOCAL_BACKEND = "msmf"
+DEFAULT_DETECTOR_SCORE_THRESHOLD = 0.75
+DEFAULT_MINIMUM_FACE_SIZE_PX = 40
 DEFAULT_PREVIEW_FPS = 10.0
 DEFAULT_PREVIEW_JPEG_QUALITY = 78
 DEFAULT_CENTER_DEADBAND_NORMALIZED = 0.20
@@ -240,6 +243,20 @@ def camera_config(
     )
 
 
+def face_identity_config(
+    *,
+    detector_score_threshold: float = DEFAULT_DETECTOR_SCORE_THRESHOLD,
+    minimum_face_size_px: int = DEFAULT_MINIMUM_FACE_SIZE_PX,
+) -> FaceIdentityConfig:
+    """Apply car-following detection thresholds without editing the submodule."""
+
+    base = FaceIdentityConfig.from_json(DESKMATE_FACE_CONFIG)
+    detector_options = dict(base.detector_options)
+    detector_options["score_threshold"] = detector_score_threshold
+    detector_options["minimum_face_size_px"] = minimum_face_size_px
+    return replace(base, detector_options=detector_options)
+
+
 class DeskMateFacePositionPublisher:
     """Own the camera/model loop and expose only an immutable latest snapshot."""
 
@@ -249,10 +266,14 @@ class DeskMateFacePositionPublisher:
         *,
         local_backend: str = DEFAULT_LOCAL_BACKEND,
         preview_fps: float = DEFAULT_PREVIEW_FPS,
+        detector_score_threshold: float = DEFAULT_DETECTOR_SCORE_THRESHOLD,
+        minimum_face_size_px: int = DEFAULT_MINIMUM_FACE_SIZE_PX,
     ) -> None:
         self.source = source
         self.local_backend = local_backend
         self.preview_fps = preview_fps
+        self.detector_score_threshold = detector_score_threshold
+        self.minimum_face_size_px = minimum_face_size_px
         self._condition = threading.Condition()
         self._latest: dict[str, Any] = {
             "time": datetime.now(timezone.utc).isoformat(),
@@ -350,7 +371,10 @@ class DeskMateFacePositionPublisher:
         successful_frames = 0
         next_preview_at = 0.0
         try:
-            config = FaceIdentityConfig.from_json(DESKMATE_FACE_CONFIG)
+            config = face_identity_config(
+                detector_score_threshold=self.detector_score_threshold,
+                minimum_face_size_px=self.minimum_face_size_px,
+            )
             model = OpenCvFaceIdentityAdapter(config)
             with OpenCVCamera(
                 camera_config(self.source, local_backend=self.local_backend)
@@ -478,6 +502,18 @@ def main() -> None:
         help="maximum annotated preview FPS; inference remains unthrottled",
     )
     parser.add_argument(
+        "--detector-score-threshold",
+        type=float,
+        default=DEFAULT_DETECTOR_SCORE_THRESHOLD,
+        help="YuNet detection threshold for this car-following experiment",
+    )
+    parser.add_argument(
+        "--minimum-face-size-px",
+        type=int,
+        default=DEFAULT_MINIMUM_FACE_SIZE_PX,
+        help="minimum usable face-box side length",
+    )
+    parser.add_argument(
         "--probe-frames",
         type=int,
         default=0,
@@ -488,11 +524,17 @@ def main() -> None:
         parser.error("--probe-frames must be non-negative")
     if not 0 < args.preview_fps <= 30:
         parser.error("--preview-fps must be in (0, 30]")
+    if not 0 < args.detector_score_threshold <= 1:
+        parser.error("--detector-score-threshold must be in (0, 1]")
+    if not 16 <= args.minimum_face_size_px <= 512:
+        parser.error("--minimum-face-size-px must be in [16, 512]")
 
     publisher = DeskMateFacePositionPublisher(
         args.source,
         local_backend=args.backend,
         preview_fps=args.preview_fps,
+        detector_score_threshold=args.detector_score_threshold,
+        minimum_face_size_px=args.minimum_face_size_px,
     )
     if args.probe_frames:
         result = publisher.run(max_frames=args.probe_frames)

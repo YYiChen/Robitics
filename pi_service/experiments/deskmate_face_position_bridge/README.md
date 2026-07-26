@@ -12,8 +12,8 @@
 ## 数据链路
 
 ```text
-手机 DroidCam 192.168.137.157
-  -> Windows DroidCam Video（设备索引 1，MSMF）
+手机 DroidCam http://100.93.97.117:4747/video
+  -> PC OpenCVCamera（直接 MJPEG）
   -> PC OpenCVCamera
   -> DeskMate YuNet/SFace
   -> PC 5059/api/face/latest
@@ -24,9 +24,15 @@
 Pi 的 `start_robot.sh` 只负责 5000 和正式控制服务，不会启动电脑端
 DeskMate 模型。本实验和桥接器必须分别在电脑上运行。
 
-`192.168.137.157:4747` 是手机和 DroidCam 客户端之间的连接地址。客户端占用时，
-其 `/video` 返回 `DroidCam is Busy`，不是可供 OpenCV 并发读取的 MJPEG。当前机器
-实测应读取本地 `DroidCam Video`：索引 `1`、后端 `msmf`。
+默认直接读取 `http://100.93.97.117:4747/video`。Windows DroidCam 客户端占用
+手机时，该地址会返回 `DroidCam is Busy` HTML，而不是 MJPEG；此时应关闭客户端，
+或明确改用本地虚拟摄像头 `--source 1 --backend msmf`。必须先确认虚拟摄像头不是
+全黑帧，不能把“设备成功打开”当成人脸画面可用。
+
+本实验不改 DeskMate submodule 的身份验证配置，而在入口层使用更适合远距离车控的
+YuNet 参数：检测阈值 `0.75`、最小人脸边长 `40 px`。可分别通过
+`--detector-score-threshold` 和 `--minimum-face-size-px` 覆盖。中心停车门禁仍由
+桥接器负责，默认 `offset_x_normalized ±0.20`。
 
 ## 首次准备
 
@@ -56,7 +62,7 @@ git -C .\subrepos\DeskMate-Advance lfs pull
 
 ```powershell
 cd C:\Users\32126\Desktop\Robitics
-py -3 .\pi_service\experiments\deskmate_face_position_bridge\deskmate_face_position_server.py --source 1 --backend msmf --probe-frames 10
+py -3 .\pi_service\experiments\deskmate_face_position_bridge\deskmate_face_position_server.py --probe-frames 10
 ```
 
 它只打印最后一帧 JSON 后退出，不向 Pi 发送控制请求。
@@ -67,7 +73,7 @@ py -3 .\pi_service\experiments\deskmate_face_position_bridge\deskmate_face_posit
 
 ```powershell
 cd C:\Users\32126\Desktop\Robitics
-py -3 .\pi_service\experiments\deskmate_face_position_bridge\deskmate_face_position_server.py --source 1 --backend msmf --port 5059
+py -3 .\pi_service\experiments\deskmate_face_position_bridge\deskmate_face_position_server.py --port 5059
 ```
 
 浏览器检查：

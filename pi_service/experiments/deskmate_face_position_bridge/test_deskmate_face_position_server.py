@@ -6,11 +6,14 @@ import numpy as np
 
 from deskmate_face_position_server import (
     DEFAULT_CENTER_DEADBAND_NORMALIZED,
+    DEFAULT_DETECTOR_SCORE_THRESHOLD,
     DESKMATE_FACE_CONFIG,
     DEFAULT_LOCAL_BACKEND,
+    DEFAULT_MINIMUM_FACE_SIZE_PX,
     DEFAULT_SOURCE,
     annotate_face_preview,
     camera_config,
+    face_identity_config,
     face_payload,
     select_primary_feature,
 )
@@ -143,13 +146,29 @@ class DeskMateFacePositionServerTests(unittest.TestCase):
         self.assertTrue(network.is_network_stream)
         self.assertEqual(network.backend, "auto")
 
-        local = camera_config(DEFAULT_SOURCE)
+        local = camera_config("1")
         self.assertEqual(local.device_index, 1)
         self.assertIsNone(local.stream_url)
         self.assertEqual(local.backend, DEFAULT_LOCAL_BACKEND)
 
         directshow = camera_config("1", local_backend="dshow")
         self.assertEqual(directshow.backend, "dshow")
+
+    def test_car_following_thresholds_override_only_detector_options(self) -> None:
+        config = face_identity_config()
+        self.assertEqual(
+            config.detector_options["score_threshold"],
+            DEFAULT_DETECTOR_SCORE_THRESHOLD,
+        )
+        self.assertEqual(
+            config.detector_options["minimum_face_size_px"],
+            DEFAULT_MINIMUM_FACE_SIZE_PX,
+        )
+        self.assertEqual(
+            DEFAULT_SOURCE,
+            "http://100.93.97.117:4747/video",
+        )
+        config.verify_assets()
 
 
 if __name__ == "__main__":
