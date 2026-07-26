@@ -56,6 +56,8 @@ TUNING_RULES = {
     "turn_90_max_steps": (int, 1, 12),
     "turn_180_max_steps": (int, 1, 24),
 }
+FACE_TURN_PWM = 110
+FACE_TURN_HEARTBEAT_SECONDS = .60
 
 
 class EndLineTurnAdaptorRouteTracker:
@@ -79,6 +81,7 @@ class EndLineTurnAdaptorRouteTracker:
         self._manual_degrees, self._manual_profile = None, None
         self._manual_max_steps, self._manual_steps_started = 0, 0
         self._red_alignment_streak = 0
+        self._face_turn_side, self._face_turn_deadline = None, 0.0
         # This deployment is deliberately keyboard-only: M arms turn commands
         # but must never make the vehicle start following the white line.
         self._manual_only = True
@@ -122,6 +125,7 @@ class EndLineTurnAdaptorRouteTracker:
             self._last_red_side, self._last_red_seen_frame = None, -10_000
             self._motion_phase, self._action_until, self._pending_turn_side = "FOLLOW", 0.0, None
             self._manual_max_steps, self._manual_steps_started, self._red_alignment_streak = 0, 0, 0
+            self._face_turn_side, self._face_turn_deadline = None, 0.0
         self._set_status(enabled=enabled, detail="按键转向已解锁，等待 Q/E/U/I" if enabled else "已暂停，电机已停止")
         return self.status_dict()
 
@@ -160,6 +164,38 @@ class EndLineTurnAdaptorRouteTracker:
         self._manual_max_steps, self._manual_steps_started, self._red_alignment_streak = steps, 1, 0
         self._motion_phase, self._action_until = "MANUAL_STEP", time.monotonic() + profile.step_seconds
         self._set_status(state="MANUAL_STEP", detail=f"{side} {degrees}° red-calibrated pulse 1/{steps}", manual_turn=f"{side}_{degrees}")
+        return self.status_dict()
+
+    def request_face_center_turn(self, command: str) -> dict:
+        """PC face-centering control with a Pi-local dead-man timeout.
+
+        START_LEFT/START_RIGHT select a pivot direction.  The PC must keep
+        sending HEARTBEAT while it is analysing frames; STOP is used only after
+        its own MediaPipe detector confirms the face is centred.  A missing PC
+        heartbeat never leaves the motor latched.
+        """
+        command = str(command).upper()
+        if command in {"START_LEFT", "START_RIGHT"}:
+            if not self.gate.enabled():
+                raise ValueError("请先按 M 开启自动电机门控，再启动人脸居中转向")
+            if self._motion_phase not in {"FOLLOW", "MANUAL_COMPLETE", "TURN_COMPLETE", "FACE_CENTER_TURN"}:
+                raise ValueError("当前已有其他转向动作，请等待完成或按 M 停止")
+            self._manual_only = True
+            self._stop_motor()
+            self._face_turn_side = "LEFT" if command.endswith("LEFT") else "RIGHT"
+            self._face_turn_deadline = time.monotonic() + FACE_TURN_HEARTBEAT_SECONDS
+            self._motion_phase = "FACE_CENTER_TURN"
+            self._set_status(state="FACE_CENTER_TURN", detail=f"PC 人脸居中：持续原地{self._face_turn_side}转，等待心跳", face_turn_active=True, face_search_side=self._face_turn_side)
+        elif command == "HEARTBEAT":
+            if self._motion_phase != "FACE_CENTER_TURN" or self._face_turn_side is None:
+                raise ValueError("当前没有进行中的人脸居中转向")
+            self._face_turn_deadline = time.monotonic() + FACE_TURN_HEARTBEAT_SECONDS
+        elif command == "STOP":
+            self._stop_motor()
+            self._motion_phase, self._face_turn_side, self._face_turn_deadline = "MANUAL_COMPLETE", None, 0.0
+            self._set_status(state="FACE_CENTERED_STOP", detail="PC 已确认人脸居中，原地转向停止", face_turn_active=False, face_search_side=None)
+        else:
+            raise ValueError("人脸转向只支持 START_LEFT、START_RIGHT、HEARTBEAT、STOP")
         return self.status_dict()
 
     def _tuning_values(self) -> dict:
@@ -317,8 +353,20 @@ class EndLineTurnAdaptorRouteTracker:
                 state, motor, commanded, detail = decision.state.value, "PAUSED", None, decision.reason
                 if self.gate.enabled():
                     recent_red = self._last_red_side is not None and frame_index - self._last_red_seen_frame <= self._line_config.red_direction_memory_frames
+                    face_turn_active = self._motion_phase == "FACE_CENTER_TURN"
+                    if face_turn_active and now >= self._face_turn_deadline:
+                        self._stop_motor()
+                        self._motion_phase, self._face_turn_side = "MANUAL_COMPLETE", None
+                        state, motor, detail = "FACE_TURN_HEARTBEAT_TIMEOUT", "STOP_FACE_HEARTBEAT_TIMEOUT", "PC 人脸心跳超时，安全停车"
+                        self._set_status(state=state, detail=detail, face_turn_active=False, face_search_side=None)
+                    elif face_turn_active:
+                        commanded = (FACE_TURN_PWM, -FACE_TURN_PWM) if self._face_turn_side == "LEFT" else (-FACE_TURN_PWM, FACE_TURN_PWM)
+                        self.controller.set_direct_drive(*commanded); self._motor_active = True
+                        state, motor, detail = f"FACE_CENTER_{self._face_turn_side}", f"FACE_CENTER_PIVOT R={commanded[0]} L={commanded[1]}", "PC heartbeat active; stop only when PC confirms centred"
                     manual_active = self._motion_phase.startswith("MANUAL")
-                    if manual_active:
+                    if face_turn_active:
+                        pass
+                    elif manual_active:
                         if red.detected and red.angle_degrees is not None and red.angle_degrees >= self._red_alignment_min_angle:
                             self._red_alignment_streak += 1
                         else:

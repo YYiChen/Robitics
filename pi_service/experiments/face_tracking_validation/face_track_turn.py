@@ -86,14 +86,14 @@ class PiMotorClient:
         self._log("pi_m_gate", {"action": "toggle_failed", "response": result})
         return False
 
-    def send_turn(self, direction: str) -> bool:
-        """Send LEFT_90 or RIGHT_90.  Returns True if Pi accepted it."""
+    def send_face_turn(self, command: str) -> bool:
+        """Send a continuous face-centering command; Pi owns the dead-man stop."""
         start_ns = time.monotonic_ns()
-        result = self._post("/api/autonomous/manual-turn", {"command": direction})
+        result = self._post("/api/autonomous/face-turn", {"command": command})
         elapsed_ms = round((time.monotonic_ns() - start_ns) / 1_000_000, 1)
         accepted = result is not None and result.get("ok") is True
         self._log("pi_turn_command", {
-            "direction": direction, "accepted": accepted,
+            "command": command, "accepted": accepted,
             "rtt_ms": elapsed_ms, "response": result,
         })
         return accepted
@@ -106,7 +106,7 @@ def main() -> None:
     parser.add_argument("--pi-source", default="http://10.157.23.223:4747/video")
     parser.add_argument("--pi-url", default="http://100.80.46.54:5000")
     parser.add_argument("--deadband-px", type=int, default=60)
-    parser.add_argument("--cooldown-seconds", type=float, default=0.8)
+    parser.add_argument("--heartbeat-seconds", type=float, default=0.18)
     parser.add_argument("--no-motor", action="store_true")
     parser.add_argument("--confidence", type=float, default=0.5)
     args = parser.parse_args()
@@ -121,7 +121,7 @@ def main() -> None:
     if pi:
         print(f"  Pi API:      {args.pi_url}")
         print(f"  Deadband:    {args.deadband_px} px")
-        print(f"  Cooldown:    {args.cooldown_seconds} s")
+        print(f"  Heartbeat:   {args.heartbeat_seconds} s")
     else:
         print("  Motor:       DISABLED (--no-motor)")
     print(f"  Log:         {log_path}")
@@ -152,14 +152,14 @@ def main() -> None:
 
     frame_idx = 0
     missing_streak = 0
-    last_turn_at = 0.0
+    last_heartbeat_at = 0.0
     pi_armed = False
     fps_time = time.monotonic()
     centering_direction: str | None = None
 
     print("\nStarting loop.")
-    print("  J = center-left (keep turning left until face centered)")
-    print("  L = center-right (keep turning right until face centered)")
+    print("  J = center-left (continuous in-place pivot until face centered)")
+    print("  L = center-right (continuous in-place pivot until face centered)")
     print("  ESC = quit\n")
 
     while True:
@@ -214,40 +214,45 @@ def main() -> None:
         # ── Centering logic (J/L key latches direction until face centered) ──
         key = cv2.waitKey(1) & 0xFF
         if key == ord("j"):
-            centering_direction = "LEFT_90"
+            centering_direction = "LEFT"
+            last_heartbeat_at = 0.0
             print(f"  [frame {frame_idx}] J → CENTER LEFT")
         elif key == ord("l"):
-            centering_direction = "RIGHT_90"
+            centering_direction = "RIGHT"
+            last_heartbeat_at = 0.0
             print(f"  [frame {frame_idx}] L → CENTER RIGHT")
         elif key == 27:
             break
 
         if centering_direction is not None and pi:
             face_centered = face.detected and face.offset_x is not None and abs(face.offset_x) <= args.deadband_px
-            cooldown_ok = now - last_turn_at > args.cooldown_seconds
+            heartbeat_due = now - last_heartbeat_at > args.heartbeat_seconds
 
             # Diagnostic: print state every 30 frames
             if frame_idx % 30 == 0:
                 print(f"  [frame {frame_idx}] dir={centering_direction} "
                       f"face={face.detected} offX={face.offset_x} "
-                      f"centered={face_centered} cooldown={cooldown_ok} "
-                      f"since_last={now - last_turn_at:.1f}s armed={pi_armed}")
+                      f"centered={face_centered} heartbeat_due={heartbeat_due} "
+                      f"since_last={now - last_heartbeat_at:.1f}s armed={pi_armed}")
 
             if face_centered:
+                if pi_armed:
+                    pi.send_face_turn("STOP")
                 centering_direction = None
                 print(f"  [frame {frame_idx}] CENTERED (offX={face.offset_x:.0f})")
-            elif cooldown_ok:
+            elif heartbeat_due:
                 if not pi_armed:
                     pi_armed = pi.toggle_m()
                     print(f"  [frame {frame_idx}] M gate toggle: armed={pi_armed}")
                 if pi_armed:
-                    ok = pi.send_turn(centering_direction)
-                    last_turn_at = now
+                    command = f"START_{centering_direction}" if last_heartbeat_at == 0.0 else "HEARTBEAT"
+                    ok = pi.send_face_turn(command)
+                    last_heartbeat_at = now
                     status = "OK" if ok else "REJECTED"
-                    print(f"  [frame {frame_idx}] {centering_direction} pulse → {status} (offX={face.offset_x})")
+                    print(f"  [frame {frame_idx}] {command} → {status} (offX={face.offset_x})")
 
         # Status overlay
-        cv2.putText(frame, "J=center-left  L=center-right  ESC=quit", (12, frame.shape[0] - 8),
+        cv2.putText(frame, "J/L=continuous pivot until centred  ESC=quit", (12, frame.shape[0] - 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
         if centering_direction:
             color = (0, 255, 0) if centering_direction == "LEFT_90" else (255, 0, 255)
@@ -257,6 +262,8 @@ def main() -> None:
 
         cv2.imshow("Face -> Pi Turn (J/L center, ESC quit)", frame)
 
+    if pi and pi_armed:
+        pi.send_face_turn("STOP")
     cap.release()
     cv2.destroyAllWindows()
     detector.close()

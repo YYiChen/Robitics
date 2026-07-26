@@ -64,3 +64,19 @@ class EndLineAdaptorTuningTests(unittest.TestCase):
             self.assertEqual(tracker._manual_degrees, 90)
             self.assertEqual(tracker._manual_profile, TurnProfile(137, 1.7))
             self.assertEqual((tracker._manual_max_steps, tracker._manual_steps_started), (4, 1))
+
+    def test_face_turn_requires_m_and_uses_pi_deadman_deadline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tracker = EndLineTurnAdaptorRouteTracker(None, None, None, _Gate(False), tuning_path=Path(directory) / "tuning.json")
+            with self.assertRaises(ValueError):
+                tracker.request_face_center_turn("START_LEFT")
+            tracker.gate.value = True
+            status = tracker.request_face_center_turn("START_LEFT")
+            self.assertEqual(status["state"], "FACE_CENTER_TURN")
+            self.assertEqual(tracker._face_turn_side, "LEFT")
+            first_deadline = tracker._face_turn_deadline
+            tracker.request_face_center_turn("HEARTBEAT")
+            self.assertGreaterEqual(tracker._face_turn_deadline, first_deadline)
+            status = tracker.request_face_center_turn("STOP")
+            self.assertEqual(status["state"], "FACE_CENTERED_STOP")
+            self.assertIsNone(tracker._face_turn_side)

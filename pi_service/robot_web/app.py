@@ -91,6 +91,14 @@ def create_app(controller: RobotController, camera: CameraStreamer | WebRTCStrea
             return jsonify(ok=True, autonomous=route_tracker.request_manual_turn((request.get_json(silent=True) or {}).get("command", "")))
         except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
+    @app.post("/api/autonomous/face-turn")
+    def autonomous_face_turn():
+        if not isinstance(route_tracker, EndLineTurnAdaptorRouteTracker):
+            return jsonify(ok=False, error="当前路线模式不支持电脑人脸居中转向"), 409
+        try:
+            return jsonify(ok=True, autonomous=route_tracker.request_face_center_turn((request.get_json(silent=True) or {}).get("command", "")))
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
     @app.post("/api/autonomous/follow-to-end")
     def autonomous_follow_to_end():
         if not isinstance(route_tracker, EndLineTurnAdaptorRouteTracker):
