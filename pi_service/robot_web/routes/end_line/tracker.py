@@ -576,7 +576,7 @@ class EndLineTurnAdaptorRouteTracker:
         with self._tuning_lock:
             self._process_fps, self._straight_pwm = process_fps, straight_pwm
             self._fast_config, self._line_config = fast_config, line_config
-            self._red_detector, self._planner = RedEndBandDetector(line_config), EndLineStopPlanner(line_config)
+            self._planner = EndLineStopPlanner(line_config)
             self._turn_90, self._turn_180 = turn_90, turn_180
             self._turn_interstep_pause_seconds = current["turn_interstep_pause_seconds"]
             self._red_alignment_min_angle = current["red_alignment_min_angle"]
