@@ -4,13 +4,20 @@ import unittest
 
 import numpy as np
 
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
 from deskmate_face_position_server import (
     DEFAULT_CENTER_DEADBAND_NORMALIZED,
     DEFAULT_DETECTOR_SCORE_THRESHOLD,
     DESKMATE_FACE_CONFIG,
     DEFAULT_LOCAL_BACKEND,
     DEFAULT_MINIMUM_FACE_SIZE_PX,
+    DEFAULT_SERVER_PORT,
     DEFAULT_SOURCE,
+    _command_runs_this_server,
+    _configured_port,
     annotate_face_preview,
     camera_config,
     face_identity_config,
@@ -43,6 +50,31 @@ def feature(
 
 
 class DeskMateFacePositionServerTests(unittest.TestCase):
+    def test_single_instance_match_is_limited_to_same_script_and_port(self) -> None:
+        script = (
+            "pi_service/experiments/deskmate_face_position_bridge/"
+            "deskmate_face_position_server.py"
+        )
+        command = ["python.exe", script, "--port", "5060"]
+        self.assertEqual(_configured_port(command), 5060)
+        self.assertTrue(_command_runs_this_server(command, str(PROJECT_ROOT)))
+        self.assertFalse(
+            _command_runs_this_server(
+                ["python.exe", "somewhere/face_position_server.py"],
+                str(PROJECT_ROOT),
+            )
+        )
+
+    def test_single_instance_port_parser_supports_default_and_equals_form(self) -> None:
+        self.assertEqual(
+            _configured_port(["python.exe", "server.py"]),
+            DEFAULT_SERVER_PORT,
+        )
+        self.assertEqual(
+            _configured_port(["python.exe", "server.py", "--port=5061"]),
+            5061,
+        )
+
     def test_submodule_assets_verify_and_official_models_load(self) -> None:
         config = FaceIdentityConfig.from_json(DESKMATE_FACE_CONFIG)
         detector_hash, embedder_hash = config.verify_assets()

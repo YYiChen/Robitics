@@ -24,6 +24,11 @@
 Pi 的 `start_robot.sh` 只负责 5000 和正式控制服务，不会启动电脑端
 DeskMate 模型。本实验和桥接器必须分别在电脑上运行。
 
+5059 服务默认采用单实例启动。再次执行相同命令时，新进程只会终止命令行指向
+本目录同一个 `deskmate_face_position_server.py`、且端口相同的旧进程；不会终止
+其他 Python、5000 主服务或不同端口的实验。调试时可用
+`--no-replace-existing` 禁止自动替换。
+
 默认直接读取 `http://100.93.97.117:4747/video`。Windows DroidCam 客户端占用
 手机时，该地址会返回 `DroidCam is Busy` HTML，而不是 MJPEG；此时应关闭客户端，
 或明确改用本地虚拟摄像头 `--source 1 --backend msmf`。必须先确认虚拟摄像头不是

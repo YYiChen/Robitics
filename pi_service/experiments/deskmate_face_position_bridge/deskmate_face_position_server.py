@@ -12,6 +12,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import sys
 import threading
@@ -60,6 +61,94 @@ DEFAULT_MINIMUM_FACE_SIZE_PX = 40
 DEFAULT_PREVIEW_FPS = 10.0
 DEFAULT_PREVIEW_JPEG_QUALITY = 78
 DEFAULT_CENTER_DEADBAND_NORMALIZED = 0.20
+DEFAULT_SERVER_PORT = 5059
+
+
+def _configured_port(cmdline: list[str]) -> int:
+    """Return this server command's selected port without running argparse."""
+
+    for index, argument in enumerate(cmdline):
+        if argument == "--port" and index + 1 < len(cmdline):
+            try:
+                return int(cmdline[index + 1])
+            except ValueError:
+                return DEFAULT_SERVER_PORT
+        if argument.startswith("--port="):
+            try:
+                return int(argument.partition("=")[2])
+            except ValueError:
+                return DEFAULT_SERVER_PORT
+    return DEFAULT_SERVER_PORT
+
+
+def _command_runs_this_server(cmdline: list[str], cwd: str | None) -> bool:
+    """Match only another process executing this exact checked-out script."""
+
+    expected = Path(__file__).resolve()
+    base = Path(cwd).resolve() if cwd else None
+    for argument in cmdline[1:]:
+        if not argument.lower().endswith(expected.name.lower()):
+            continue
+        candidate = Path(argument)
+        if not candidate.is_absolute():
+            if base is None:
+                continue
+            candidate = base / candidate
+        try:
+            if candidate.resolve() == expected:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def replace_existing_server_instances(
+    port: int,
+    *,
+    wait_seconds: float = 3.0,
+) -> list[int]:
+    """Stop only stale copies of this script configured for the same port."""
+
+    try:
+        import psutil
+    except ImportError as exc:
+        raise RuntimeError(
+            "Automatic single-instance replacement requires psutil. "
+            "Install it with `py -3 -m pip install psutil`, or start with "
+            "`--no-replace-existing`."
+        ) from exc
+
+    current_pid = os.getpid()
+    matches = []
+    for process in psutil.process_iter(["pid", "cmdline"]):
+        if process.pid == current_pid:
+            continue
+        try:
+            cmdline = process.cmdline()
+            cwd = process.cwd()
+        except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+            continue
+        if (
+            cmdline
+            and _configured_port(cmdline) == port
+            and _command_runs_this_server(cmdline, cwd)
+        ):
+            matches.append(process)
+
+    for process in matches:
+        try:
+            process.terminate()
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            continue
+    _gone, alive = psutil.wait_procs(matches, timeout=max(0.1, wait_seconds))
+    for process in alive:
+        try:
+            process.kill()
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            continue
+    if alive:
+        psutil.wait_procs(alive, timeout=max(0.1, wait_seconds))
+    return [process.pid for process in matches]
 
 
 def select_primary_feature(
@@ -494,7 +583,14 @@ def main() -> None:
         help="OpenCV backend for a numeric local camera source",
     )
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=5059)
+    parser.add_argument("--port", type=int, default=DEFAULT_SERVER_PORT)
+    parser.add_argument(
+        "--no-replace-existing",
+        action="store_true",
+        help=(
+            "do not stop an older copy of this exact server using the same port"
+        ),
+    )
     parser.add_argument(
         "--preview-fps",
         type=float,
@@ -540,6 +636,14 @@ def main() -> None:
         result = publisher.run(max_frames=args.probe_frames)
         print(json.dumps(result, ensure_ascii=False))
         raise SystemExit(0 if not result.get("error") else 2)
+
+    if not args.no_replace_existing:
+        replaced_pids = replace_existing_server_instances(args.port)
+        if replaced_pids:
+            print(
+                "Replaced previous DeskMate face server process(es): "
+                + ", ".join(str(pid) for pid in replaced_pids)
+            )
 
     publisher.start()
     server = ThreadingHTTPServer((args.host, args.port), make_handler(publisher))
