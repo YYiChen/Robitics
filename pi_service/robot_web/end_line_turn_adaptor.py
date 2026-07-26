@@ -56,7 +56,6 @@ TUNING_RULES = {
     "turn_90_max_steps": (int, 1, 12),
     "turn_180_max_steps": (int, 1, 24),
 }
-FACE_TURN_PWM = 110
 FACE_TURN_HEARTBEAT_SECONDS = .60
 
 
@@ -360,7 +359,10 @@ class EndLineTurnAdaptorRouteTracker:
                         state, motor, detail = "FACE_TURN_HEARTBEAT_TIMEOUT", "STOP_FACE_HEARTBEAT_TIMEOUT", "PC 人脸心跳超时，安全停车"
                         self._set_status(state=state, detail=detail, face_turn_active=False, face_search_side=None)
                     elif face_turn_active:
-                        commanded = (FACE_TURN_PWM, -FACE_TURN_PWM) if self._face_turn_side == "LEFT" else (-FACE_TURN_PWM, FACE_TURN_PWM)
+                        # Reuse the live Q/E 90-degree PWM setting.  The face
+                        # mode changes only *when* to stop, not wheel power.
+                        face_pwm = self._turn_90.pwm
+                        commanded = (face_pwm, -face_pwm) if self._face_turn_side == "LEFT" else (-face_pwm, face_pwm)
                         self.controller.set_direct_drive(*commanded); self._motor_active = True
                         state, motor, detail = f"FACE_CENTER_{self._face_turn_side}", f"FACE_CENTER_PIVOT R={commanded[0]} L={commanded[1]}", "PC heartbeat active; stop only when PC confirms centred"
                     manual_active = self._motion_phase.startswith("MANUAL")
