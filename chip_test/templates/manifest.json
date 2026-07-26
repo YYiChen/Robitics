@@ -1,0 +1,410 @@
+{
+  "schema_version": "1.0",
+  "asset_id": "chip-denomination-las-vegas-templates",
+  "version": "v1-20260723",
+  "state": "development",
+  "task": "fixed-design 1/5/10/20 chip denomination matching",
+  "design_scope": "user-provided LAS VEGAS POKER CLUB chip set only; not a generic casino-chip denomination map",
+  "source_policy": "project-captured raw front views remain private and are not distributed; only derived 128x128 binary masks and colour signatures are packaged",
+  "denominations": [
+    1,
+    5,
+    10,
+    20
+  ],
+  "template_size": [
+    128,
+    128
+  ],
+  "center_fraction": 0.4,
+  "rotation_step_degrees": 10,
+  "template_count": 18,
+  "counts": {
+    "1": 5,
+    "5": 5,
+    "10": 4,
+    "20": 4
+  },
+  "source_template_set_sha256": "cf83801f2344e38087d3b1f8d48749fa3edc8e73d6cd40663b8dfca06b7d1868",
+  "mask_set_sha256": "79339ae0c932ba268a2042c2643d77c3aab4bef55f84b226273ae5ea05cc0f42",
+  "templates": [
+    {
+      "template_id": "chip_10_53B705A2F14196B111CF93DEC2B2EFD6",
+      "denomination": 10,
+      "source_sha256": "57004038a38653518948864f99d3e061448e5439d243ff06425bc5bee75d9d93",
+      "mask_file": "masks/chip_10_53B705A2F14196B111CF93DEC2B2EFD6.png",
+      "mask_sha256": "b8614548fdf02e002e199d1aa2e2c7afe2b1b68e899c47bddbfd1d63fb8d5a65",
+      "color_signature": [
+        49.175381,
+        64.008743,
+        138.750397,
+        44.533878,
+        65.530304,
+        89.869316,
+        124.600548,
+        120.361687,
+        122.517204,
+        82.727905,
+        7.593232,
+        17.893774
+      ]
+    },
+    {
+      "template_id": "chip_10_672ACF2EBC6B55A933BA855710494314",
+      "denomination": 10,
+      "source_sha256": "ebc92a4e5b68562855edb725b469d3c3dbeb8dd2a092e6faf0edec89a5e0284d",
+      "mask_file": "masks/chip_10_672ACF2EBC6B55A933BA855710494314.png",
+      "mask_sha256": "aab5893395cd60984a4547c0715905ab6630f01c943c98bf0f7138e81dc179bb",
+      "color_signature": [
+        60.260921,
+        86.332542,
+        117.203529,
+        51.806362,
+        92.090141,
+        70.309578,
+        86.536606,
+        133.591309,
+        107.900833,
+        56.266731,
+        11.142287,
+        25.376278
+      ]
+    },
+    {
+      "template_id": "chip_10_B312E985D1B26028020290753CDAFAAC",
+      "denomination": 10,
+      "source_sha256": "a795cb050461e34b52d12ef25d545e473204f401e1163ffd87d1d147ee8a63f7",
+      "mask_file": "masks/chip_10_B312E985D1B26028020290753CDAFAAC.png",
+      "mask_sha256": "cc5d2aa404e560d4dba5c46019fbd9c23ad3f836f2e03dda7d5d3f69d5743555",
+      "color_signature": [
+        52.447227,
+        73.566414,
+        129.639069,
+        47.387444,
+        81.214073,
+        80.761833,
+        106.442909,
+        127.191063,
+        114.87529,
+        70.658943,
+        9.094747,
+        23.698542
+      ]
+    },
+    {
+      "template_id": "chip_10_D9BAAA2CAA90968DDEC645A29854F217",
+      "denomination": 10,
+      "source_sha256": "7f12482b5c9bac55ae596be83dd91fef5d9ade341aec0846fbbd5de4d1336e23",
+      "mask_file": "masks/chip_10_D9BAAA2CAA90968DDEC645A29854F217.png",
+      "mask_sha256": "ad191df570c32078118002e54d5ba3c5a25dbfc28cd8f83c88718eecc8704f31",
+      "color_signature": [
+        52.112007,
+        65.783829,
+        120.273926,
+        47.325901,
+        81.349556,
+        74.239616,
+        99.937767,
+        129.106308,
+        115.583061,
+        66.663528,
+        10.119439,
+        23.133245
+      ]
+    },
+    {
+      "template_id": "chip_1_13ADBA55B0D74CC37137EEE2CC21A0DB",
+      "denomination": 1,
+      "source_sha256": "bf9f74a8856c71cfe6613b00a3346c44f5b3b16438e4a734f2d58d83f4505de9",
+      "mask_file": "masks/chip_1_13ADBA55B0D74CC37137EEE2CC21A0DB.png",
+      "mask_sha256": "3499437231376103d6e59086ef022830d81655226cec36234b6c90eaf74b9b6f",
+      "color_signature": [
+        57.144955,
+        63.014423,
+        132.146652,
+        46.534477,
+        59.413013,
+        84.139229,
+        121.233017,
+        118.477112,
+        119.710754,
+        77.519775,
+        8.180105,
+        8.482099
+      ]
+    },
+    {
+      "template_id": "chip_1_3AE32BAB6971DAC5FB1B47E12D59C928",
+      "denomination": 1,
+      "source_sha256": "1ccde08df6f7c2ca832173b501c453b843fb0b43f20bee5bcef8f94c58dcd6c3",
+      "mask_file": "masks/chip_1_3AE32BAB6971DAC5FB1B47E12D59C928.png",
+      "mask_sha256": "ace540aaf6f57112050d4fab650ca818b258294ee66f3e5b266c89bbed4e1845",
+      "color_signature": [
+        52.631153,
+        37.211052,
+        150.486343,
+        42.888554,
+        35.899025,
+        98.392738,
+        145.980896,
+        117.597923,
+        125.855522,
+        95.575752,
+        9.123539,
+        3.217555
+      ]
+    },
+    {
+      "template_id": "chip_1_603A42A83AFB702445F21F77D0EF4E80",
+      "denomination": 1,
+      "source_sha256": "c084e70f453ee05c3eedea4f5c6aadd84128bd2fd67d92b3935e9d7dab82f1c2",
+      "mask_file": "masks/chip_1_603A42A83AFB702445F21F77D0EF4E80.png",
+      "mask_sha256": "f2d752855c29119e8fbb12dcfc7a0bb057f1dc26676946b5e20f99ceb62bae5b",
+      "color_signature": [
+        54.08836,
+        34.559956,
+        150.651016,
+        44.839581,
+        37.580784,
+        98.494934,
+        146.400314,
+        118.777527,
+        125.810852,
+        95.991417,
+        9.539745,
+        3.259792
+      ]
+    },
+    {
+      "template_id": "chip_1_BE24580263028F157536921373462F15",
+      "denomination": 1,
+      "source_sha256": "0bcebb9f0b7074b32ffe4fc97fa9afe5abf5444c0b2202278f8386deb3c79418",
+      "mask_file": "masks/chip_1_BE24580263028F157536921373462F15.png",
+      "mask_sha256": "b6a0d6746f848f001a20e28bc127bea73610b9d60d3521554609c82054be6410",
+      "color_signature": [
+        57.348583,
+        54.408157,
+        132.198685,
+        46.733601,
+        53.356976,
+        85.007469,
+        122.408997,
+        120.049393,
+        120.519066,
+        79.617432,
+        6.915303,
+        8.005373
+      ]
+    },
+    {
+      "template_id": "chip_1_E4ABA07F01E6C6C712DABA96B5CB0A66",
+      "denomination": 1,
+      "source_sha256": "8ea2b8ad50e133903fed679e413f6ca2fa7841b0ee7f888dbc94abe674158191",
+      "mask_file": "masks/chip_1_E4ABA07F01E6C6C712DABA96B5CB0A66.png",
+      "mask_sha256": "5d3df30eb7a3e1bf8661385613d6e5e4201c0c64f28c30a77f61f620ce50754b",
+      "color_signature": [
+        57.543972,
+        55.769325,
+        141.670074,
+        46.86837,
+        54.004333,
+        91.634773,
+        130.086685,
+        119.23938,
+        119.804131,
+        84.306633,
+        7.740001,
+        8.223349
+      ]
+    },
+    {
+      "template_id": "chip_20_0812ACF3694428A10BF666B84F5B2F46",
+      "denomination": 20,
+      "source_sha256": "2c124fd3020018f2cdf9bee5a5adf92594fa19724188a833bfb82121a95c24f9",
+      "mask_file": "masks/chip_20_0812ACF3694428A10BF666B84F5B2F46.png",
+      "mask_sha256": "2e9a9aa5865914307789f76866ed53e68d336e3fd1409705569f210199cb2e0f",
+      "color_signature": [
+        54.700127,
+        72.452812,
+        122.070358,
+        44.944241,
+        64.8694,
+        74.88192,
+        111.864044,
+        116.342102,
+        121.74836,
+        68.668823,
+        10.359825,
+        10.330903
+      ]
+    },
+    {
+      "template_id": "chip_20_D0D93FD4BAADA88A75C157ED0649800A",
+      "denomination": 20,
+      "source_sha256": "a05471ce8c2729851c938b6de58e19deb06e00ea9e176113d351e35166b7c1a8",
+      "mask_file": "masks/chip_20_D0D93FD4BAADA88A75C157ED0649800A.png",
+      "mask_sha256": "271edae4d65e7a141c9a8ec4c4c91fa38ed61eb59692d3847776ae4637dc5a6a",
+      "color_signature": [
+        50.546753,
+        75.03875,
+        107.247322,
+        42.379585,
+        65.920464,
+        64.628914,
+        100.614548,
+        114.577538,
+        127.099266,
+        61.04369,
+        12.059238,
+        11.684501
+      ]
+    },
+    {
+      "template_id": "chip_20_E18CEC49BDB3F4B7E7A12A6B615A1136",
+      "denomination": 20,
+      "source_sha256": "2f90f8fa2ac457ff614edfe7ae42c60fe334c87b010924bfa416e34226804b8b",
+      "mask_file": "masks/chip_20_E18CEC49BDB3F4B7E7A12A6B615A1136.png",
+      "mask_sha256": "4189a9298dc1c30552460d86b386e2dc8b206882781d2bbb23ef95ae64d4b232",
+      "color_signature": [
+        44.812355,
+        67.45105,
+        117.441628,
+        38.390232,
+        58.859978,
+        73.810616,
+        113.028931,
+        111.712074,
+        133.369247,
+        70.9105,
+        13.720659,
+        12.405539
+      ]
+    },
+    {
+      "template_id": "chip_20_FDAC838B6C1457AA3FBA6C68C4578C71",
+      "denomination": 20,
+      "source_sha256": "5f66ece8a80cac319d778420533b97c5f1d58a1a7de553ce02c57017e505d5ff",
+      "mask_file": "masks/chip_20_FDAC838B6C1457AA3FBA6C68C4578C71.png",
+      "mask_sha256": "aa67b454d61fc98512e2918f407a920f5e9513d6edb4f86b1aaf0e2732266a0d",
+      "color_signature": [
+        45.612125,
+        65.148315,
+        126.20063,
+        38.805458,
+        57.107559,
+        79.74144,
+        121.393112,
+        111.234253,
+        132.349762,
+        76.513977,
+        13.965466,
+        10.722404
+      ]
+    },
+    {
+      "template_id": "chip_5_1F4F5FCBE7956DA72A1A79654C1F2C7E",
+      "denomination": 5,
+      "source_sha256": "5c6a5d2081738af3dd9606a26e855561984934145622fdc9a5b88b64424cd448",
+      "mask_file": "masks/chip_5_1F4F5FCBE7956DA72A1A79654C1F2C7E.png",
+      "mask_sha256": "085fa8443a60a5c4b21c26df47e6057c24d5a37bdc736d4b91fd8fee939e6495",
+      "color_signature": [
+        11.45907,
+        71.092323,
+        127.635216,
+        14.438778,
+        59.411037,
+        78.95929,
+        113.133652,
+        131.896561,
+        147.083878,
+        70.511757,
+        13.893695,
+        17.111868
+      ]
+    },
+    {
+      "template_id": "chip_5_4E5BEE5FF85A4B562053270AC56B3CA8",
+      "denomination": 5,
+      "source_sha256": "8228ab1825ac5e581d4ed23d11a2767b3aba8678e0a3502a56f2db665209fca9",
+      "mask_file": "masks/chip_5_4E5BEE5FF85A4B562053270AC56B3CA8.png",
+      "mask_sha256": "d20300f6efa82e0b46a2be27b610ec4b05315ee49252764e4cb61e7032e8295e",
+      "color_signature": [
+        11.537669,
+        77.358543,
+        126.04879,
+        12.424019,
+        65.352272,
+        77.238327,
+        111.333519,
+        131.982071,
+        149.026886,
+        69.133133,
+        14.776518,
+        18.462198
+      ]
+    },
+    {
+      "template_id": "chip_5_790E35833F2C744CB8C48FBE74A0F521",
+      "denomination": 5,
+      "source_sha256": "56eaa88534b1996ccc47f8ace336be6e0f79722a2de9081d34819dc917f744a1",
+      "mask_file": "masks/chip_5_790E35833F2C744CB8C48FBE74A0F521.png",
+      "mask_sha256": "e3751bceda2aa4f111db016676d6af8fa720a17a89c3c69bbbfe9a3473070c42",
+      "color_signature": [
+        12.280487,
+        53.061195,
+        125.366127,
+        14.851886,
+        48.789173,
+        76.613342,
+        116.561073,
+        129.455872,
+        142.346359,
+        71.930428,
+        10.75004,
+        14.426914
+      ]
+    },
+    {
+      "template_id": "chip_5_BBA8EAEAC23A564AE168D91B22682C4B",
+      "denomination": 5,
+      "source_sha256": "34e4f6b4e977b50cbb5877676f9825be10200aee4304d2a2f8b0beb39d2fdb39",
+      "mask_file": "masks/chip_5_BBA8EAEAC23A564AE168D91B22682C4B.png",
+      "mask_sha256": "ea38096d99358e7b1db71b02a4a02b8bf84af0ef6830431718dfbbec7cba05c0",
+      "color_signature": [
+        54.260883,
+        73.557617,
+        80.782906,
+        73.716454,
+        67.865379,
+        40.598183,
+        67.252121,
+        137.095505,
+        135.390427,
+        35.764645,
+        15.868852,
+        8.701921
+      ]
+    },
+    {
+      "template_id": "chip_5_C869E7AC2F355BD5447C09E2B3E8EBFF",
+      "denomination": 5,
+      "source_sha256": "764a1347022ab8166b1931b92edf63ff25368e0e3894035bd34ac33b17cfeeb3",
+      "mask_file": "masks/chip_5_C869E7AC2F355BD5447C09E2B3E8EBFF.png",
+      "mask_sha256": "2de870d7c43d91139852af2e37fb964ef3f5ec8c2bd46852e3eae7a1833ea9c3",
+      "color_signature": [
+        67.437408,
+        57.226955,
+        99.266724,
+        74.092697,
+        56.881916,
+        55.840752,
+        86.490059,
+        136.325119,
+        131.524612,
+        51.308563,
+        17.221725,
+        9.533293
+      ]
+    }
+  ]
+}

@@ -105,8 +105,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="PC face-offset → Pi in-place pivot")
     parser.add_argument("--pi-source", default="http://100.80.46.54:5000/video_feed")
     parser.add_argument("--pi-url", default="http://100.80.46.54:5000")
-    parser.add_argument("--deadband-px", type=int, default=80)
-    parser.add_argument("--cooldown-seconds", type=float, default=3.0)
+    parser.add_argument("--deadband-px", type=int, default=60)
+    parser.add_argument("--cooldown-seconds", type=float, default=1.5)
     parser.add_argument("--no-motor", action="store_true")
     parser.add_argument("--confidence", type=float, default=0.5)
     args = parser.parse_args()
@@ -220,11 +220,14 @@ def main() -> None:
                     ok = pi.send_turn(direction)
                     if ok:
                         last_turn_at = now
-                        print(f"  [frame {frame_idx}] → {direction} (offX={face.offset_x:.0f}, fps={fps:.0f})")
+                        print(f"  [frame {frame_idx}] -> {direction} (offX={face.offset_x:.0f}, fps={fps:.0f})")
                     else:
-                        print(f"  [frame {frame_idx}] → {direction} FAILED (offX={face.offset_x:.0f})")
-                        cv2.putText(frame, f"TURN FAILED", (12, 56),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        # Pi rejected (turn in progress). Back off to avoid
+                        # flooding Pi with requests it cannot accept yet.
+                        last_turn_at = now  # prevent immediate retry
+                        print(f"  [frame {frame_idx}] -> {direction} REJECTED (offX={face.offset_x:.0f})")
+                        cv2.putText(frame, f"Pi busy, retry in {args.cooldown_seconds:.0f}s", (12, 56),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 165, 255), 2)
 
         cv2.imshow("Face → Pi Turn (ESC quit)", frame)
         if cv2.waitKey(1) & 0xFF == 27:
